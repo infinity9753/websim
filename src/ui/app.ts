@@ -6,7 +6,7 @@ import { BrowserFS, langOf, loadState, saveState } from './vfs';
 import { Transcript } from './transcript';
 import { Editors } from './editor';
 import { WaveView } from './wave';
-import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel } from './panels';
+import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
 
@@ -41,6 +41,7 @@ export class App {
   objects: ObjectsPanel;
   processes: ProcessesPanel;
   memory: MemoryPanel;
+  locals: LocalsPanel;
   state: AppState;
   main!: HTMLElement;
   runField!: HTMLInputElement;
@@ -66,6 +67,7 @@ export class App {
     this.objects = new ObjectsPanel(this.session);
     this.processes = new ProcessesPanel(this.session);
     this.memory = new MemoryPanel(this.session);
+    this.locals = new LocalsPanel(this.session);
     this.build();
     this.wire();
     this.start();
@@ -79,6 +81,7 @@ export class App {
     this.mid.add('objects', 'Objects', this.objects.el);
     this.mid.add('processes', 'Processes', this.processes.el, { activate: false });
     this.mid.add('memory', 'Memory', this.memory.el, { activate: false });
+    this.mid.add('locals', 'Locals', this.locals.el, { activate: false });
     this.mid.onActivate = (id) => { if (id === 'memory') this.memory.show(); };
     this.right.add('wave', 'Wave', this.wave.el);
     this.bottom.add('transcript', 'Transcript', this.transcript.el);
@@ -321,6 +324,7 @@ export class App {
   }
 
   private syncDebug() {
+    if (this.session.paused && this.mid.active !== 'locals' && this.mid.active !== 'memory') this.mid.activate('locals');
     const byFile = new Map<string, number[]>();
     for (const b of this.session.breakpoints) (byFile.get(b.file) ?? byFile.set(b.file, []).get(b.file)!).push(b.line);
     this.editors.setBreakpoints(byFile);

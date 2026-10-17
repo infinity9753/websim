@@ -73,6 +73,8 @@ export class RemoteSession {
   lastVsim: { top: string; lib?: string } | null = null;
   prompt = 'WebSim>';
   paused: { file: string; line: number; proc: string } | null = null;
+  locals: { name: string; value: Vec; enumNames?: string[]; where: string }[] = [];
+  stack: string[] = [];
   emitClear?: () => void;
   libs = {
     libs: new Map<string, { list: () => UnitInfo[] }>([['work', { list: () => [] }]]),
@@ -181,6 +183,8 @@ export class RemoteSession {
       }
       if (st.running !== undefined) this.running = st.running;
       if (st.paused !== undefined) this.paused = st.paused;
+      if (st.locals) this.locals = st.locals.map(l => ({ ...l, value: vec(l.value) }));
+      if (st.stack) this.stack = st.stack;
       if (st.breakpoints) this.breakpoints = st.breakpoints;
       if (st.prompt) this.prompt = st.prompt;
       if (st.history) this.history = st.history;

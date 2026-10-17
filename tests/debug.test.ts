@@ -101,3 +101,23 @@ describe('breakpoints and stepping (#5, #6)', () => {
     expect(s.design!.kernel.finished).toBe(true);
   });
 });
+
+describe('locals and call stack (#15)', () => {
+  it('reports task locals and the inlined call chain when paused', async () => {
+    const { s } = mk();
+    await s.exec('vlog tb.v; vsim tb; bp tb.v 7; run -all');
+    expect(s.paused?.line).toBe(7);
+    const locals = s.locals();
+    expect(locals.map(l => l.name)).toContain('v');
+    expect(Number(locals.find(l => l.name === 'v')!.value.a)).toBe(0);
+    const st = s.callStack();
+    expect(st[0]).toMatch(/add \(tb\.v:14\)  @ tb\.v:7/);
+    expect(st[1]).toMatch(/\/tb\/#INITIAL#11/);
+  });
+
+  it('shows VHDL process variables', async () => {
+    const { s } = mk();
+    await s.exec('vcom p.vhd; vsim p; bp p.vhd 9; run -all; run -all');
+    expect(s.locals().find(l => l.name === 'v')!.value.toNumber()).toBe(2); // second pass through the process
+  });
+});

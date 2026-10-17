@@ -151,6 +151,9 @@ tr.sel .tree-toggle { color: inherit; }
 .st-ok { color: var(--ic-green); font-weight: 700; }
 .st-err { color: var(--err); font-weight: 700; }
 .st-none { color: var(--text-dim); }
+.callstack { font-family: var(--mono); font-size: 11px; border-bottom: 1px solid var(--border-soft); max-height: 30%; overflow: auto; }
+.callstack .frame { padding: 2px 8px; color: var(--text-dim); white-space: nowrap; }
+.callstack .frame.top { color: var(--text); font-weight: 600; background: rgba(255, 210, 59, .18); }
 .empty { color: var(--text-dim); padding: 14px; text-align: center; }
 .empty .btn { margin-top: 8px; }
 .kind { color: var(--text-dim); }

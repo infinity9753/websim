@@ -404,6 +404,28 @@ export class Session {
     }
   }
 
+  /** Variables visible at the paused statement (process / block / task locals), innermost first. */
+  locals(): { name: string; value: L.Vec; enumNames?: string[]; where: string }[] {
+    const p = this.design?.kernel.pausedAt;
+    if (!p?.scope) return [];
+    const out: { name: string; value: L.Vec; enumNames?: string[]; where: string }[] = [];
+    const seen = new Set<string>();
+    for (let s = p.scope as Scope | null; s && s.kind !== 'instance' && s.kind !== 'generate'; s = s.lex) {
+      for (const [name, sym] of s.syms) {
+        if (sym.k !== 'sig' || seen.has(name) || name.startsWith('__')) continue;
+        seen.add(name);
+        out.push({ name, value: sym.sig.value, enumNames: sym.sig.enumNames, where: s.kind === 'func' ? s.name : 'process' });
+      }
+    }
+    return out;
+  }
+
+  callStack(): string[] {
+    const p = this.design?.kernel.pausedAt;
+    if (!p) return [];
+    return [`${p.proc.scope}/${p.proc.name}`, ...(p.stack ?? [])].reverse().map((f, i) => (i === 0 ? `${f}  @ ${p.file}:${p.line}` : f));
+  }
+
   /** Nearest executable line at or after `line` (within 10 lines), or null. */
   executableLine(file: string, line: number): number | null {
     const lines = this.design?.execLines;

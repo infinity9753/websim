@@ -154,13 +154,13 @@ export class Kernel {
   breakpoints = new Map<string, { cond?: () => boolean }>();
   stepMode: { kind: 'into' } | { kind: 'over'; proc: Process; depth: number } | null = null;
   /** Location where execution is currently paused (for the UI). */
-  pausedAt: { file: string; line: number; proc: ProcInfo } | null = null;
+  pausedAt: { file: string; line: number; proc: ProcInfo; scope?: unknown; stack?: string[] } | null = null;
   /** Statements executed in the current process activation (zero-delay loop guard). */
   ops = 0;
   get dbgOn() { return this.stepMode !== null || this.breakpoints.size > 0; }
 
   /** Called before every statement when debugging is active; yields 'stop' to pause there. */
-  *hook(file: string, line: number, depth: number): Generator<Wait, void, void> {
+  *hook(file: string, line: number, depth: number, scope?: unknown, stack?: string[]): Generator<Wait, void, void> {
     const p = this.current;
     let hit = false;
     const sm = this.stepMode;
@@ -171,7 +171,7 @@ export class Kernel {
     }
     if (!hit || !p) return;
     this.stepMode = null;
-    this.pausedAt = { file, line, proc: p.info };
+    this.pausedAt = { file, line, proc: p.info, scope, stack };
     this.lastStopInfo = `${sm ? 'Stepped to' : 'Break in Process'} ${p.info.name} at ${file} line ${line}`;
     (p as any).depthAtStop = depth;
     yield { t: 'stop' };

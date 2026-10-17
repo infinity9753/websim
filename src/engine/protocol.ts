@@ -36,6 +36,8 @@ export interface PState {
   hist?: PHist[];
   running?: boolean;
   paused?: { file: string; line: number; proc: string } | null;
+  locals?: { name: string; value: PVec; enumNames?: string[]; where: string }[];
+  stack?: string[];
   breakpoints?: Breakpoint[];
   prompt?: string;
   history?: string[];

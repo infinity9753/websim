@@ -110,6 +110,8 @@ interface Ctx {
   proc?: ProcInfo;
   func?: CFunc;
   depth: number;
+  /** Inlined task/procedure call chain (for the call-stack view). */
+  stack?: string[];
 }
 
 type Tgt = { k: 'sig'; sig: Signal; off: number; w: number; drv?: Driver } | { k: 'mem'; mem: Memory; idx: number; off: number; w: number };
@@ -1756,9 +1758,10 @@ export class Elaborator {
     const file = s.loc.file, line = s.loc.line, depth = c.depth;
     this.execLines.add(`${file}:${line}`);
     const k = this.k;
+    const sc = c.scope, stack = c.stack;
     const sync = r.sync, gen = r.gen;
-    if (sync) return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth); sync(); } };
-    return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth); yield* gen!(); } };
+    if (sync) return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth, sc, stack); sync(); } };
+    return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth, sc, stack); yield* gen!(); } };
   }
 
   stInner(s: Stmt, c: Ctx): SC {
@@ -2476,7 +2479,7 @@ export class Elaborator {
       if (d.k === 'decl') this.elabDecl({ ...d, kind: 'variable' }, ts);
       else this.elabItems([d], ts);
     }
-    const tc: Ctx = { ...c, scope: ts, depth: c.depth + 1, func: undefined };
+    const tc: Ctx = { ...c, scope: ts, depth: c.depth + 1, func: undefined, stack: [...(c.stack ?? []), `${f.name} (${s.loc?.file ?? ''}:${s.loc?.line ?? ''})`] };
     const body = this.st(f.body, tc);
     const self = this;
     const pre = () => { for (const a of ins) a.sig.value = a.ev().withSign(a.sig.signed); };

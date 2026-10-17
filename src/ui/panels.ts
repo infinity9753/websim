@@ -430,3 +430,42 @@ export class MemoryPanel {
     });
   }
 }
+
+// ------------------------------------------------------------------ locals / call stack
+
+export class LocalsPanel {
+  el: HTMLElement;
+  private stackEl: HTMLElement;
+  private tbody: HTMLElement;
+
+  constructor(private session: Session) {
+    this.stackEl = h('div', { class: 'callstack' });
+    this.tbody = h('tbody');
+    this.el = h('div', {},
+      h('div', { class: 'subbar' }, h('span', { class: 'hint' }, 'Call stack')),
+      this.stackEl,
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Frame'))),
+        this.tbody)));
+    session.on('debug', () => this.render());
+    session.on('time', () => this.render());
+    session.on('sim', () => this.render());
+    this.render();
+  }
+
+  render() {
+    clear(this.stackEl); clear(this.tbody);
+    const s = this.session;
+    if (!s.paused) {
+      this.stackEl.appendChild(h('div', { class: 'empty' }, 'Not paused. Set a breakpoint (click the editor gutter) or use Step.'));
+      return;
+    }
+    s.stack.forEach((f, i) => this.stackEl.appendChild(h('div', { class: 'frame' + (i === 0 ? ' top' : '') }, f)));
+    if (!s.locals.length) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No local variables in this frame (module signals are in Objects).')));
+    for (const l of s.locals) {
+      const radix = s.defaultRadix === 'binary' && l.value.w > 16 ? 'hex' : s.defaultRadix;
+      const v = l.value.signed && l.value.w === 32 ? L.toDec(l.value, true) : L.format(l.value, radix, l.enumNames);
+      this.tbody.appendChild(h('tr', {}, h('td', {}, l.name), h('td', { class: 'mono' }, v), h('td', { class: 'kind' }, l.where)));
+    }
+  }
+}

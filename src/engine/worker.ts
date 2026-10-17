@@ -105,6 +105,8 @@ function flush() {
     st.hist = histDeltas();
     const p = k.pausedAt;
     st.paused = p ? { file: p.file, line: p.line, proc: p.proc.name } : null;
+    st.locals = p ? session.locals().map(l => ({ ...l, value: pv(l.value) })) : [];
+    st.stack = p ? session.callStack() : [];
   } else st.paused = null;
   // these are also edited on the UI side: only send them when they changed here
   const simEv = st.events.includes('sim');
