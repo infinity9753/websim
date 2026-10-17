@@ -157,7 +157,7 @@ export class LibraryPanel {
       if (!open) continue;
       for (const u of units) {
         const key = `${name}.${u.name}.${u.kind}`;
-        const simable = u.kind === 'module' || u.kind === 'entity';
+        const simable = u.kind === 'module' || u.kind === 'entity' || u.kind === 'configuration';
         const label = u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name;
         this.tbody.appendChild(h('tr', {
           class: this.sel === key ? 'sel' : '',
@@ -190,6 +190,7 @@ function kindLabel(k: string, lang: string) {
     case 'architecture': return 'Architecture';
     case 'package': return 'Package';
     case 'package_body': return 'Package body';
+    case 'configuration': return 'Configuration';
   }
   return lang;
 }

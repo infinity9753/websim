@@ -96,6 +96,11 @@ Messages:
 - Assertions: immediate `assert/assume/cover` with action blocks; concurrent `assert/assume/cover property` with clocking event, `disable iff`, `|->`, `|=>`, `##N`, `##[m:n]`, `##[m:$]`, `[*n]`, `[*m:n]`, `not`, named `sequence`/`property`, `default clocking`, `$past $rose $fell $stable $changed`. Failures print `** Error: Assertion error.` with time, attempt start time, scope and line.
 
 ### 4.2 VHDL (IEEE 1076-1993/2008 subset)
+- Configurations: `configuration c of e is for arch for u1 : comp use entity lib.e(a); end for; for others : comp use configuration lib.c2; end for; end for; end;` (also `all`, `use open`, nested block configurations); `vsim c` and `u : configuration work.c` instantiate them.
+- Block statements (`b : block [(guard)] ... begin ... end block;`) with the implicit `GUARD` signal and `<= guarded` assignments.
+- Physical types (`type d is range ... units nm; um = 1000 nm; end units;`), literals `5 um`, `'image` / `'value` in the base unit.
+- Attributes `'pos 'val 'succ 'pred 'leftof 'rightof` (with range checks) and `'value` for enumeration, integer, physical, time and real types.
+- VHDL-2008: matching `case?` (`'-'` don't-care), `?=`, `?/=`, `?<`..., external names `<< signal .tb.dut.s : t >>`, conditional variable assignment, `process(all)`, unary reduction operators.
 - `library`/`use` (ieee.std_logic_1164, numeric_std, std_logic_unsigned built in).
 - Entities with generics and ports; architectures; packages (constants, types, functions).
 - Types: `std_logic(_vector)`, `std_ulogic`, `bit(_vector)`, `boolean`, `integer`/`natural`/`positive` (with range), `unsigned`/`signed`, enumerations, constrained arrays (memories), `time`.

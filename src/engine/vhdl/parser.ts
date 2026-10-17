@@ -1,5 +1,5 @@
 // VHDL (1076-1993/2008 subset) recursive-descent parser producing the shared AST.
-import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName } from '../ast';
+import { CompileError, type ConfigBind, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName } from '../ast';
 import { lexVhdl, type VToken } from './lexer';
 import { Vec, fromBits, fromInt, mask } from '../logic';
 
@@ -53,7 +53,7 @@ class VhParser {
       if (this.accept('entity')) u = this.entity(loc);
       else if (this.accept('architecture')) u = this.architecture(loc);
       else if (this.accept('package')) u = this.pkg(loc);
-      else if (this.accept('configuration')) { this.skipConfiguration(); continue; }
+      else if (this.accept('configuration')) u = this.configuration(loc);
       else this.err(`near "${this.tok.v}": syntax error, expecting design unit`);
       u.items.unshift(...ctx);
       units.push(u);
@@ -76,16 +76,59 @@ class VhParser {
     return out;
   }
 
-  skipConfiguration() {
-    let depth = 0;
-    while (this.tok.t !== 'eof') {
-      if (this.is('for')) depth++;
-      if (this.is('end')) {
-        if (this.isAt(1, 'for')) { depth--; this.pos += 3; continue; }
-        if (depth <= 0) { this.endOf('configuration'); return; }
+  /** configuration cfg of ent is for arch { component configurations } end for; end; */
+  configuration(loc: Loc): Unit {
+    const name = this.ident();
+    this.expect('of');
+    const of = this.ident();
+    this.expect('is');
+    while (this.is('use') || this.is('attribute')) { if (this.is('use')) this.useClause(); else while (!this.accept(';')) this.pos++; }
+    this.expect('for');
+    const arch = this.ident();
+    const binds: ConfigBind[] = [];
+    this.blockConfig(binds);
+    this.endOf('configuration');
+    return { kind: 'configuration', lang: 'vhdl', name, of, arch, binds, file: this.file, line: loc.line, params: [], ports: [], items: [] };
+  }
+
+  /** Body of a block configuration up to and including its "end for;" (nested generate blocks are flattened). */
+  blockConfig(binds: ConfigBind[]) {
+    while (this.is('use')) this.useClause();
+    while (!this.is('end')) {
+      this.expect('for');
+      if (this.tok.t === 'id' && (this.isAt(1, ':') || this.isAt(1, ','))) {
+        // component configuration: for u1, u2 : comp use ...;
+        const insts: string[] = [];
+        do insts.push(this.tok.v), this.pos++; while (this.accept(','));
+        this.expect(':');
+        const comp = this.ident();
+        const b: ConfigBind = { insts, comp };
+        if (this.accept('use')) {
+          if (this.accept('entity')) {
+            let e = this.ident();
+            if (this.accept('.')) { b.lib = e; e = this.ident(); }
+            b.entity = e;
+            if (this.accept('(')) { b.arch = this.ident(); this.expect(')'); }
+          } else if (this.accept('configuration')) {
+            let cf = this.ident();
+            if (this.accept('.')) { b.lib = cf; cf = this.ident(); }
+            b.config = cf;
+          } else this.expect('open');
+          if (this.is('generic') || this.is('port')) this.err('Generic/port maps in configurations are not supported');
+          this.expect(';');
+        }
+        binds.push(b);
+        // optional nested block configuration of the bound entity's architecture
+        if (this.is('for')) { this.pos++; this.ident(); this.blockConfig(binds); }
+        this.expect('end'); this.expect('for'); this.expect(';');
+      } else {
+        // block configuration of a generate/block label: for gen(...) ... end for;
+        this.ident();
+        if (this.accept('(')) { let d = 1; while (d) { if (this.is('(')) d++; else if (this.is(')')) d--; this.pos++; } }
+        this.blockConfig(binds);
       }
-      this.pos++;
     }
+    this.expect('end'); this.expect('for'); this.expect(';');
   }
 
   entity(loc: Loc): Unit {
@@ -247,7 +290,23 @@ class VhParser {
           const l = this.expr();
           if (!this.accept('to')) this.expect('downto');
           const r = this.expr();
-          if (this.accept('units')) { while (!this.is('end')) this.pos++; this.endOf('units'); return; }
+          if (this.accept('units')) {
+            // physical type: base unit, then secondary units "name = n unit;"
+            const units: { name: string; n?: Expr; of?: string }[] = [{ name: this.ident() }];
+            this.expect(';');
+            while (!this.is('end')) {
+              const un = this.ident();
+              this.expect('=');
+              const n = this.tok.t === 'int' || this.tok.t === 'real' ? (this.pos++, { k: 'num', v: fromInt(this.toks[this.pos - 1].based ?? BigInt(Math.round(this.toks[this.pos - 1].n!)), 64, true), unsized: true } as Expr) : undefined;
+              units.push({ name: un, n, of: this.ident() });
+              this.expect(';');
+            }
+            this.expect('end'); this.expect('units');
+            if (this.tok.t === 'id') this.pos++;
+            this.expect(';');
+            items.push({ k: 'typedef', name, type: { base: 'integer', width: 64, signed: true, range: [l, r] }, units, loc });
+            return;
+          }
           this.expect(';');
           items.push({ k: 'typedef', name, type: { base: 'integer', width: 32, signed: true, range: [l, r] }, loc });
           return;
@@ -386,7 +445,7 @@ class VhParser {
     if (this.accept('process')) { items.push(this.process(label, loc)); return; }
     if (this.is('for') && label) { items.push(this.forGenerate(label, loc)); return; }
     if (this.is('if') && label) { items.push(this.ifGenerate(label, loc)); return; }
-    if (this.accept('block')) this.err('Block statements are not supported');
+    if (this.accept('block')) { items.push(this.block(label, loc)); return; }
     if (this.accept('assert')) {
       const cond = this.expr();
       const s = this.reportTail({ k: 'report', cond, loc });
@@ -401,8 +460,10 @@ class VhParser {
     // concurrent signal assignment (or procedure call)
     const target = this.name();
     if (this.accept('<=')) {
-      this.accept('guarded');
-      const body = this.condWaveforms(target, loc);
+      const g = this.accept('guarded');
+      if (g && !this.guarded) this.err('"guarded" assignment outside a guarded block', loc);
+      let body = this.condWaveforms(target, loc);
+      if (g) body = { k: 'if', c: { k: 'id', name: 'guard', loc }, t: body, loc };
       this.expect(';');
       items.push({ k: 'process', kind: 'vproc', sens: 'all', name: label, body, loc });
       return;
@@ -414,6 +475,32 @@ class VhParser {
     }
     this.err(`near "${this.tok.v}": syntax error, unexpected ${this.tok.v}`);
   }
+
+  /** label: block [(guard)] [is] decls begin concurrent end block; -> an always-true named generate */
+  block(label: string | undefined, loc: Loc): Item {
+    if (!label) this.err('A block statement needs a label', loc);
+    const items: Item[] = [];
+    let guard = false;
+    if (this.accept('(')) {
+      // guarded block: implicit signal GUARD follows the guard expression
+      const g = this.expr();
+      this.expect(')');
+      guard = true;
+      items.push({ k: 'decl', kind: 'signal', type: { base: 'named', name: 'boolean' }, names: [{ name: 'guard' }], loc });
+      items.push({ k: 'process', kind: 'vproc', sens: 'all', body: { k: 'vsigassign', lhs: { k: 'id', name: 'guard', loc }, waves: [{ value: g }], loc }, loc });
+    }
+    this.accept('is');
+    if (this.is('generic') || this.is('port')) this.err('Block generics/ports are not supported', loc);
+    while (!this.is('begin')) this.declaration(items);
+    this.expect('begin');
+    const saved = this.guarded;
+    this.guarded = guard || saved;
+    while (!this.is('end')) this.concurrent(items);
+    this.guarded = saved;
+    this.endOf('block');
+    return { k: 'genif', c: { k: 'id', name: 'true', loc }, then: items, name: label, loc };
+  }
+  guarded = false;
 
   /** waveform [when cond else waveform]* — returns a statement */
   condWaveforms(target: Expr, loc: Loc): Stmt {
@@ -509,7 +596,9 @@ class VhParser {
       if (this.accept('.')) { lib = module; module = this.ident(); }
       if (this.accept('(')) { arch = this.ident(); this.expect(')'); }
     } else if (this.accept('configuration')) {
-      this.err('Configuration instantiation is not supported');
+      isEntity = true;
+      module = this.ident();
+      if (this.accept('.')) { lib = module; module = this.ident(); }
     } else {
       this.accept('component');
       module = this.ident();
@@ -663,7 +752,7 @@ class VhParser {
       }
       case 'case': {
         this.pos++;
-        this.accept('?');
+        const matching = this.accept('?');
         const e = this.expr();
         this.expect('is');
         const items: { labels: Expr[] | null; body: Stmt }[] = [];
@@ -672,10 +761,10 @@ class VhParser {
           this.expect('=>');
           items.push({ labels, body: { k: 'block', stmts: this.seqList(['when', 'end']) } });
         }
-        this.expect('end'); this.expect('case');
+        this.expect('end'); this.expect('case'); this.accept('?');
         if (this.tok.t === 'id') this.pos++;
         this.expect(';');
-        return { k: 'case', kind: 'case', expr: e, items, loc };
+        return { k: 'case', kind: matching ? 'match' : 'case', expr: e, items, loc };
       }
       case 'for': {
         this.pos++;
@@ -793,10 +882,10 @@ class VhParser {
   relation(): Expr {
     const l = this.shiftExpr();
     const t = this.tok;
-    if (t.t === 'op' && ['=', '/=', '<', '<=', '>', '>=', '?=', '?/='].includes(t.v)) {
+    if (t.t === 'op' && ['=', '/=', '<', '<=', '>', '>=', '?=', '?/=', '?<', '?<=', '?>', '?>='].includes(t.v)) {
       this.pos++;
       const r = this.shiftExpr();
-      const op = t.v === '=' || t.v === '?=' ? '===' : t.v === '/=' || t.v === '?/=' ? '!==' : t.v;
+      const op = t.v === '=' ? '===' : t.v === '/=' ? '!==' : t.v;
       return { k: 'bin', op, l, r, loc: t.loc };
     }
     return l;
@@ -874,8 +963,10 @@ class VhParser {
           const val = t.t === 'int' ? Number(t.based!) : t.n!;
           return { k: 'time', fs: val * TIME_UNITS[nx.v], loc };
         }
-        if (t.t === 'real') return { k: 'real', v: t.n!, loc };
-        return { k: 'num', v: fromInt(t.based!, 32, true), unsized: true, loc };
+        const lit: Expr = t.t === 'real' ? { k: 'real', v: t.n!, loc } : { k: 'num', v: fromInt(t.based!, 32, true), unsized: true, loc };
+        // abstract literal followed by a unit name: physical literal (the unit is a constant of its type)
+        if (nx.t === 'id' && !RESERVED.has(nx.v)) { this.pos++; return { k: 'bin', op: '*', l: lit, r: { k: 'id', name: nx.v, loc: nx.loc }, loc }; }
+        return lit;
       }
       case 'char': {
         this.pos++;
@@ -893,6 +984,7 @@ class VhParser {
       }
       case 'op':
         if (t.v === '(') return this.aggregateOrParen();
+        if (t.v === '<<') return this.name();
         break;
       case 'id':
         if (t.v === 'null') { this.pos++; return { k: 'num', v: fromInt(0, 1), loc }; }
@@ -924,6 +1016,7 @@ class VhParser {
   /** name: id { .id | (args) | 'attr } */
   name(): Expr {
     const loc = this.loc();
+    if (this.is('<<')) return this.externalName();
     let n = this.ident();
     // selected names: lib.pkg.obj / std.env.stop
     while (this.is('.') && this.peek().t === 'id') { this.pos++; n += '.' + this.tok.v; this.pos++; }
@@ -983,6 +1076,26 @@ class VhParser {
       break;
     }
     return e;
+  }
+
+  /** VHDL-2008 external name: << signal .tb.dut.sig : std_logic >> (absolute or relative to the current scope). */
+  externalName(): Expr {
+    const loc = this.loc();
+    this.expect('<<');
+    if (!this.accept('signal') && !this.accept('constant')) this.expect('variable');
+    if (this.is('^') || this.is('@')) this.err('Only absolute (.a.b) and relative (a.b) external names are supported');
+    const parts: string[] = [];
+    this.accept('.');
+    for (;;) {
+      let p = this.ident();
+      if (this.accept('(')) { const ix = this.expr(); this.expect(')'); p += `(${ix.k === 'num' ? Number(ix.v.toBigInt()) : '?'})`; }
+      parts.push(p);
+      if (!this.accept('.')) break;
+    }
+    this.expect(':');
+    this.subtype();
+    this.expect('>>');
+    return { k: 'id', name: parts.join('.'), loc };
   }
 }
 

@@ -58,7 +58,7 @@ run -all
 ## Known limitations
 
 - SystemVerilog: interfaces (modports not enforced), basic classes (no parameterized classes, randomization, constraints, queues or dynamic arrays) and a subset of SVA (no `throughout/within/intersect`, `[->]`/`[=]` repetition or property arguments).
-- VHDL configurations and block statements are not supported.
+- VHDL configurations support component bindings (`use entity` / `use configuration` / `use open`) but not generic/port maps inside the configuration.
 - No code coverage; no WLF export.
 
 ## Project layout

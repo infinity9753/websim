@@ -44,7 +44,7 @@ export type Stmt =
   | { k: 'assign'; lhs: Expr; rhs: Expr; nb: boolean; delay?: Expr; evctl?: SensItem[]; vsig?: boolean; loc?: Loc }
   | { k: 'vsigassign'; lhs: Expr; waves: { value: Expr; after?: Expr }[]; transport?: boolean; reject?: Expr; loc?: Loc }  // VHDL signal assignment
   | { k: 'if'; c: Expr; t: Stmt; f?: Stmt; loc?: Loc }
-  | { k: 'case'; kind: 'case' | 'casez' | 'casex'; expr: Expr; items: { labels: Expr[] | null; body: Stmt }[]; loc?: Loc }
+  | { k: 'case'; kind: 'case' | 'casez' | 'casex' | 'match'; expr: Expr; items: { labels: Expr[] | null; body: Stmt }[]; loc?: Loc }
   | { k: 'for'; init?: Stmt; initType?: TypeSpec; cond?: Expr; step?: Stmt; body: Stmt; loc?: Loc }
   | { k: 'vfor'; v: string; from: Expr; to: Expr; down: boolean; body: Stmt; label?: string; loc?: Loc }
   | { k: 'while'; c: Expr; body: Stmt; label?: string; loc?: Loc }
@@ -112,12 +112,12 @@ export type Item =
   | FuncDecl
   | { k: 'genfor'; v: string; init: Expr; cond: Expr; stepExpr: Expr; name?: string; items: Item[]; vhdl?: { from: Expr; to: Expr; down: boolean }; loc?: Loc }
   | { k: 'genif'; c: Expr; then: Item[]; else?: Item[]; name?: string; loc?: Loc }
-  | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range?: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
+  | { k: 'typedef'; name: string; type?: TypeSpec; units?: { name: string; n?: Expr; of?: string }[]; array?: { range?: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
   | { k: 'use'; pkg: string; loc?: Loc }
   | { k: 'sva'; kind: 'assert' | 'assume' | 'cover'; prop: PropSpec; pass?: Stmt; fail?: Stmt; label?: string; loc?: Loc };  // concurrent assertion
 
 export interface Unit {
-  kind: 'module' | 'entity' | 'architecture' | 'package' | 'package_body';
+  kind: 'module' | 'entity' | 'architecture' | 'package' | 'package_body' | 'configuration';
   lang: 'verilog' | 'vhdl';
   name: string;          // module / entity / package name (lowercase for VHDL)
   of?: string;           // architecture: entity name
@@ -130,8 +130,13 @@ export interface Unit {
   typedefs?: Record<string, TypeSpec>;          // Verilog package: exported type names
   iface?: boolean;                              // SystemVerilog interface (kind 'module')
   udp?: { seq: boolean; init?: Expr; rows: string[] };  // Verilog user-defined primitive
+  arch?: string;                                // configuration: architecture of `of`
+  binds?: ConfigBind[];                         // configuration: component bindings
   source?: string;
 }
+
+/** VHDL configuration: "for u1, u2 : comp use entity lib.ent(arch);" (insts may be 'all' / 'others'). */
+export interface ConfigBind { insts: string[]; comp: string; entity?: string; lib?: string; arch?: string; config?: string }
 
 export class CompileError extends Error {
   constructor(msg: string, public loc?: Loc) { super(msg); }

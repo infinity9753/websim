@@ -1,9 +1,9 @@
 // Elaboration: builds the instance hierarchy and compiles processes into closures.
-import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem, type Strength } from './ast';
+import { CompileError, type ConfigBind, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem, type Strength } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
-import { expandFormat, fmtTime, type FmtArg } from './format';
+import { expandFormat, fmtTime, parseTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
 
 // ---------------------------------------------------------------- types
@@ -31,6 +31,7 @@ export interface RType {
   left?: number;          // VHDL integer range left bound
   right?: number;
   cls?: ClassInfo;        // SV class handle (32-bit object id, 0 = null)
+  phys?: { base: string; units: Map<string, bigint> };  // VHDL physical type
 }
 
 /** SV class: properties live in one memory per property, indexed by object id. */
@@ -72,6 +73,8 @@ export class Scope {
   overrides?: { named: Map<string, Expr>; positional: Expr[]; from: Scope };
   /** defparam values targeting instances below this scope, keyed by relative dotted path. */
   defparams = new Map<string, Vec>();
+  /** VHDL configuration bindings for component instances in this architecture. */
+  cfgBinds?: ConfigBind[];
   constructor(public name: string, public path: string, public lex: Scope | null, public up: Scope | null, public mod: ModInfo, public kind: 'instance' | 'generate' | 'block' | 'package' | 'func') {}
 
   lookup(n: string): Sym | undefined {
@@ -88,7 +91,7 @@ export class Scope {
 }
 
 export interface DesignResolver {
-  findDesign(name: string, lib?: string, arch?: string): { unit: Unit; arch?: Unit; libName: string } | undefined;
+  findDesign(name: string, lib?: string, arch?: string): { unit: Unit; arch?: Unit; libName: string; config?: Unit } | undefined;
   findPackage(name: string, lib?: string): { pkg: Unit; body?: Unit; libName: string } | undefined;
 }
 
@@ -327,7 +330,7 @@ export class Elaborator {
 
   // ---------------------------------------------------------- hierarchy
 
-  instantiate(found: { unit: Unit; arch?: Unit; libName: string }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null; sel?: Expr }[], loc: Loc | undefined, arr?: { n: number; k: number }, defs?: Map<string, Vec>): Scope {
+  instantiate(found: { unit: Unit; arch?: Unit; libName: string; config?: Unit }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null; sel?: Expr }[], loc: Loc | undefined, arr?: { n: number; k: number }, defs?: Map<string, Vec>): Scope {
     if (++this.instDepth > 64) err('Design hierarchy too deep (recursive instantiation?)', loc);
     const unit = found.unit;
     const arch = found.arch;
@@ -337,6 +340,7 @@ export class Elaborator {
     const mod: ModInfo = { lang, unit, arch: arch?.name, tsUnit: ts.unit, tsPrec: ts.prec, file: (arch ?? unit).file, libName: found.libName };
     const path = parent ? `${parent.path}/${instName}` : `/${instName}`;
     const scope = new Scope(instName, path, null, parent, mod, 'instance');
+    if ((found as { config?: Unit }).config) scope.cfgBinds = (found as { config?: Unit }).config!.binds;
     if (defs) for (const [k2, v] of defs) scope.defparams.set(k2, v);
     this.scopes.push(scope);
     if (parent) { parent.children.push(scope); parent.syms.set(instName, { k: 'scope', s: scope }); }
@@ -624,6 +628,16 @@ export class Elaborator {
               at.lo = Math.min(lo, hi); at.hi = Math.max(lo, hi);
             }
             scope.syms.set(it.name, { k: 'type', t: at });
+          } else if (it.units) {
+            // physical type: integer of the base unit; each unit name is a constant of the type
+            const units = new Map<string, bigint>();
+            for (const u of it.units) {
+              const f = u.of ? units.get(u.of) ?? err(`Unknown unit '${u.of}' in physical type '${it.name}'.`, it.loc) : 1n;
+              units.set(u.name, (u.n ? u.n.k === 'num' ? u.n.v.toBigInt() : 1n : 1n) * f);
+            }
+            const t: RType = { ...this.resolveType(it.type!, scope, it.loc), phys: { base: it.units[0].name, units } };
+            scope.syms.set(it.name, { k: 'type', t });
+            for (const [n, f] of units) scope.syms.set(n, { k: 'const', v: fromInt(f, 64, true), t });
           } else {
             const t = this.resolveType(it.type!, scope, it.loc);
             scope.syms.set(it.name, { k: 'type', t });
@@ -715,7 +729,22 @@ export class Elaborator {
 
   elabInst(it: Extract<Item, { k: 'inst' }>, scope: Scope) {
     const lib = it.lib && it.lib !== 'work' ? it.lib : undefined;
-    let found = this.lib.findDesign(it.module, lib, it.arch);
+    let found: ReturnType<DesignResolver['findDesign']>;
+    if (scope.mod.lang === 'vhdl' && !it.isEntity) {
+      // component instance: a configuration of the enclosing architecture may bind it
+      let inst: Scope | null = scope;
+      while (inst && inst.kind !== 'instance') inst = inst.up;
+      const binds = inst?.cfgBinds ?? [];
+      const comp = it.module.toLowerCase(), label = it.name.toLowerCase();
+      const b = binds.find(x => x.comp === comp && x.insts.includes(label)) ?? binds.find(x => x.comp === comp && (x.insts.includes('others') || x.insts.includes('all')));
+      if (b) {
+        if (!b.entity && !b.config) return; // use open: left unbound
+        const blib = b.lib && b.lib !== 'work' ? b.lib : undefined;
+        found = this.lib.findDesign(b.config ?? b.entity!, blib, b.arch);
+        if (!found) err(`(vsim-3033) Configuration binds '${it.name}' to '${b.config ?? b.entity}', which was not found.`, it.loc);
+      }
+    }
+    found ??= this.lib.findDesign(it.module, lib, it.arch);
     if (!found && scope.mod.lang === 'vhdl') found = this.lib.findDesign(it.module.toLowerCase(), lib, it.arch);
     if (!found) err(`(vsim-3033) Instantiation of '${it.module}' failed. The design unit was not found.`, it.loc);
     // defparams aimed at this instance (direct) or deeper (passed down)
@@ -1570,6 +1599,22 @@ export class Elaborator {
       case '>>>': return shiftOp(L.ashr);
       case '==': return cmpOp(L.eq);
       case '!=': return cmpOp(L.neq);
+      case '?=': case '?/=': {
+        // VHDL-2008 matching equality: '-' (and X) are don't-care, Z/U elsewhere give 'X'
+        const w = Math.max(A.w, B.w);
+        const af = A.mk(w, false), bf = B.mk(w, false);
+        const neg = op === '?/=';
+        return leaf(() => {
+          const x = af(), y = bf(), m = L.mask(w);
+          const dc = ((x.a & x.b) | (y.a & y.b)) & m;
+          if (((x.b | y.b) & ~dc & m) !== 0n) return L.X1;
+          return L.bool((((x.a ^ y.a) & ~dc & m) === 0n) !== neg);
+        }, 1, false);
+      }
+      case '?<': return cmpOp(L.lt);
+      case '?<=': return cmpOp(L.le);
+      case '?>': return cmpOp(L.gt);
+      case '?>=': return cmpOp(L.ge);
       case '===': return cmpOp(c.lang === 'verilog' ? L.caseEq4 : L.caseEq);
       case '!==': return cmpOp(c.lang === 'verilog' ? L.caseNeq4 : L.caseNeq);
       case '<': return cmpOp(L.lt);
@@ -1616,7 +1661,52 @@ export class Elaborator {
       if (a === 'stable') return leaf(() => L.bool(sig.lastStamp !== k.stamp), 1, false);
       return leaf(() => sig.prev, sig.w, sig.signed);
     }
-    if (a === 'image' || a === 'value') {
+    if (a === 'value') {
+      if (!e.arg) err(`'value requires an argument`, e.loc);
+      const tname = e.base.k === 'id' ? e.base.name.toLowerCase() : '';
+      const t = (this.lookupName(c.scope, tname) as any)?.t as RType | undefined;
+      if (!t) err(`'value: '${tname}' is not a type`, e.loc);
+      const arg = this.ex(e.arg, { ...c, strMode: true });
+      const af = selfEv(arg);
+      const text = () => (arg.str !== undefined && arg.cv ? arg.str : L.toAscii(af())).trim();
+      const bad = (s: string): never => { throw new CompileError(`'value: "${s}" is not a valid value of type ${tname}`, e.loc); };
+      if (t.kind === 'real') return realNode(() => { const s = text(); const x = Number(s); return Number.isFinite(x) ? x : bad(s); });
+      const names = t.enumNames;
+      const res = this.k.resolution;
+      return leaf(() => {
+        const s = text();
+        if (names) { const i = names.findIndex(n => n === s || n.toLowerCase() === s.toLowerCase()); return i >= 0 ? fromInt(i, t.w) : bad(s); }
+        if (t.isTime) { const f = parseTime(s, res); return f === null ? bad(s) : fromInt(BigInt(Math.round(f)), 64, true); }
+        if (t.phys) {
+          const m = /^(-?\d+)\s+(\w+)$/.exec(s);
+          const f = m ? t.phys.units.get(m[2].toLowerCase()) : undefined;
+          return f !== undefined ? fromInt(BigInt(m![1]) * f, t.w, true) : bad(s);
+        }
+        if (!/^-?\d+$/.test(s)) bad(s);
+        return fromInt(BigInt(s), t.w || 32, true);
+      }, t.w || 32, t.signed, { enumNames: names, isTime: t.isTime });
+    }
+    if (['pos', 'val', 'succ', 'pred', 'leftof', 'rightof'].includes(a)) {
+      if (!e.arg) err(`'${a} requires an argument`, e.loc);
+      const sym = e.base.k === 'id' ? this.lookupName(c.scope, e.base.name) : undefined;
+      const t = sym && 't' in sym ? (sym.t as RType | undefined) : undefined;
+      if (!t || !(t.enumNames || t.isInt)) err(`Attribute '${a} needs a discrete (enumeration or integer) type prefix`, e.loc);
+      const A = this.ex(e.arg, c);
+      const af = selfEv(A);
+      const isEnum = !!t.enumNames && t.kind === 'enum';
+      const lo = isEnum ? 0 : Math.min(t.left ?? -2147483648, t.right ?? 2147483647);
+      const hi = isEnum ? t.enumNames!.length - 1 : Math.max(t.left ?? -2147483648, t.right ?? 2147483647);
+      const desc = !isEnum && t.left !== undefined && t.right !== undefined && t.left > t.right;
+      const pos = () => { const v = af(); if (!v.known) throw new CompileError(`'${a}: argument is not a known value`, e.loc); return Number(isEnum ? v.a : v.toBigInt()); };
+      if (a === 'pos') return leaf(() => fromInt(pos(), 32, true), 32, true);
+      const step = a === 'succ' ? 1 : a === 'pred' ? -1 : (a === 'rightof') !== desc ? 1 : -1;
+      return leaf(() => {
+        const n = a === 'val' ? pos() : pos() + step;
+        if (n < lo || n > hi) throw new CompileError(`(vsim-3421) Value ${n} is out of range ${lo} to ${hi} in attribute '${a}.`, e.loc);
+        return fromInt(n, t.w, t.signed);
+      }, t.w, t.signed, { enumNames: t.enumNames });
+    }
+    if (a === 'image') {
       const arg = e.arg ? this.ex(e.arg, { ...c, strMode: false }) : null;
       if (!arg) err(`'${a} requires an argument`, e.loc);
       const tname = e.base.k === 'id' ? e.base.name.toLowerCase() : '';
@@ -1633,6 +1723,7 @@ export class Elaborator {
           if (arg.rf) s = vhdlReal(arg.rf());
           else if (names && v.known) s = names[Number(v.a)] ?? String(v.a);
           else if (isTime) s = v.known ? fmtTime(Number(v.toBigInt()), kk.resolution) : 'X';
+          else if (t?.phys) s = v.known ? `${v.withSign(true).toBigInt()} ${t.phys.base}` : 'X';
           else if (t?.scalar || arg.w === 1) s = `'${v.char(0).toUpperCase()}'`;
           else s = L.toDec(v, true);
           return resize(L.fromString(s), Math.max(W, s.length * 8));
@@ -3239,6 +3330,7 @@ export class Elaborator {
       if (l.kind === 'r') return L.isTrue(L.ge(v, l.lo())) && L.isTrue(L.le(v, l.hi()));
       const x = l.f();
       if (kind === 'case') return v.a === x.a && v.b === x.b;
+      if (kind === 'match') { const dc = x.a & x.b; return ((v.a ^ x.a) & ~dc & L.mask(w)) === 0n && (v.b & ~dc & L.mask(w)) === 0n; } // '-' in the choice
       return L.wildEq(v, x, kind);
     };
     const select = (): number => {

@@ -22,6 +22,7 @@ export class Library {
   archs = new Map<string, Unit[]>();      // entity -> architectures (latest last)
   packages = new Map<string, Unit>();
   bodies = new Map<string, Unit>();
+  configs = new Map<string, Unit>();
   constructor(public name: string) {}
 
   add(u: Unit) {
@@ -35,6 +36,7 @@ export class Library {
       }
       case 'package': this.packages.set(u.name, u); break;
       case 'package_body': this.bodies.set(u.name, u); break;
+      case 'configuration': this.configs.set(u.name, u); break;
     }
   }
 
@@ -44,14 +46,15 @@ export class Library {
     for (const [e, as] of this.archs) for (const a of as) out.push({ name: a.name, kind: 'architecture', lang: 'vhdl', file: a.file, of: e });
     for (const u of this.packages.values()) out.push({ name: u.name, kind: 'package', lang: 'vhdl', file: u.file });
     for (const u of this.bodies.values()) out.push({ name: u.name, kind: 'package_body', lang: 'vhdl', file: u.file });
+    for (const u of this.configs.values()) out.push({ name: u.name, kind: 'configuration', lang: 'vhdl', file: u.file, of: u.of });
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   remove(name: string) {
-    this.modules.delete(name); this.archs.delete(name); this.packages.delete(name); this.bodies.delete(name);
+    this.modules.delete(name); this.archs.delete(name); this.packages.delete(name); this.bodies.delete(name); this.configs.delete(name);
   }
 
-  clear() { this.modules.clear(); this.archs.clear(); this.packages.clear(); this.bodies.clear(); }
+  clear() { this.modules.clear(); this.archs.clear(); this.packages.clear(); this.bodies.clear(); this.configs.clear(); }
 }
 
 export interface CompileResult {
@@ -111,6 +114,15 @@ export class LibraryManager implements DesignResolver {
     for (const l of libs) {
       let u = l.modules.get(name);
       if (!u) for (const [n, m] of l.modules) if (n.toLowerCase() === name.toLowerCase()) { u = m; break; }
+      const cfg = !u ? l.configs.get(name.toLowerCase()) : undefined;
+      if (cfg) {
+        // configuration: its entity and architecture, plus the component bindings
+        const ent = l.modules.get(cfg.of!);
+        if (!ent) throw new CompileError(`(vsim-3173) Entity '${cfg.of}' of configuration '${cfg.name}' not found in library '${l.name}'.`);
+        const a = (l.archs.get(ent.name) ?? []).find(x => x.name === cfg.arch);
+        if (!a) throw new CompileError(`(vsim-3173) Architecture '${cfg.arch}' of configuration '${cfg.name}' not found.`);
+        return { unit: ent, arch: a, libName: l.name, config: cfg };
+      }
       if (!u) continue;
       if (u.kind === 'entity') {
         const as = l.archs.get(u.name) ?? [];

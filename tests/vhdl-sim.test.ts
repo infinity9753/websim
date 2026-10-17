@@ -600,3 +600,107 @@ end;`;
     expect(simulate({ 't.vhd': src }, 't').out[0]).toBe("** Note: '0'");
   });
 });
+
+describe('VHDL configurations, blocks, physical types, attributes, 2008 (#34)', () => {
+  const lib = `library ieee; use ieee.std_logic_1164.all;
+    entity inv is port (a : in std_logic; y : out std_logic); end;
+    architecture fast of inv is begin y <= not a; end;
+    architecture slow of inv is begin y <= not a after 5 ns; end;
+    entity top is end;
+    architecture rtl of top is
+      component inv port (a : in std_logic; y : out std_logic); end component;
+      signal a, y1, y2 : std_logic := '0';
+    begin
+      u1 : inv port map (a, y1);
+      u2 : inv port map (a, y2);
+      process begin
+        wait for 2 ns;
+        report "y1=" & std_logic'image(y1) & " y2=" & std_logic'image(y2);
+        wait for 10 ns;
+        report "y1=" & std_logic'image(y1) & " y2=" & std_logic'image(y2);
+        wait;
+      end process;
+    end;
+    configuration cfg_mixed of top is
+      for rtl
+        for u1 : inv use entity work.inv(fast); end for;
+        for others : inv use entity work.inv(slow); end for;
+      end for;
+    end configuration;`;
+  const reports = (out: string[]) => out.filter(l => l.startsWith('** Note:')).map(l => l.replace('** Note: ', ''));
+
+  it('binds component instances through a configuration', () => {
+    expect(reports(simulate({ 'c.vhd': lib }, 'cfg_mixed').out)).toEqual(["y1='1' y2='0'", "y1='1' y2='1'"]);
+    // without a configuration the latest architecture (slow) is used for both
+    expect(reports(simulate({ 'c.vhd': lib }, 'top').out)).toEqual(["y1='0' y2='0'", "y1='1' y2='1'"]);
+  });
+
+  it('block statements with guards, physical types and discrete attributes', () => {
+    const { out } = simulate({
+      't.vhd': `library ieee; use ieee.std_logic_1164.all;
+      entity t is end;
+      architecture a of t is
+        type distance is range 0 to 1000000000 units nm; um = 1000 nm; mm = 1000 um; end units;
+        type color is (red, green, blue);
+        signal en : std_logic := '0';
+        signal d, q : integer := 0;
+      begin
+        en <= '1' after 20 ns, '0' after 40 ns;
+        d <= 5 after 10 ns, 7 after 30 ns, 9 after 50 ns;
+        b1 : block (en = '1')
+          signal unused : integer := 0;
+        begin
+          q <= guarded d;
+        end block b1;
+        process
+          variable d : distance;
+          variable c : color := red;
+        begin
+          d := 2 mm + 5 um;
+          report distance'image(d) & " " & integer'image(d / 1 um);
+          report color'image(color'succ(c)) & " " & integer'image(color'pos(blue)) & " " & color'image(color'val(1)) & " " & color'image(color'rightof(green));
+          report integer'image(integer'pred(10)) & " " & integer'image(integer'value(" 42 ")) & " " & color'image(color'value("BLUE"));
+          wait for 15 ns; report "q=" & integer'image(q);
+          wait for 10 ns; report "q=" & integer'image(q);
+          wait for 10 ns; report "q=" & integer'image(q);
+          wait for 30 ns; report "q=" & integer'image(q);
+          wait;
+        end process;
+      end;`,
+    }, 't');
+    const r = out.filter(l => l.startsWith('** Note:')).map(l => l.replace('** Note: ', ''));
+    expect(r).toEqual(['2005000 nm 2005', 'green 2 green blue', '9 42 blue', 'q=0', 'q=5', 'q=7', 'q=7']);
+    expect(() => simulate({
+      't.vhd': `entity t is end; architecture a of t is type color is (red, green, blue); begin
+        process variable c : color := blue; begin c := color'succ(c); wait; end process; end;`,
+    }, 't')).toThrow(/out of range 0 to 2 in attribute 'succ/);
+  });
+
+  it('matching case, ?= and external names', () => {
+    const { out } = simulate({
+      't.vhd': `library ieee; use ieee.std_logic_1164.all;
+      entity sub is end;
+      architecture a of sub is signal secret : std_logic_vector(3 downto 0) := "1010"; begin end;
+      entity t is end;
+      architecture a of t is begin
+        u : entity work.sub;
+        process
+          variable v : std_logic_vector(3 downto 0);
+        begin
+          for i in 0 to 2 loop
+            v := "1100" when i = 0 else "0110" when i = 1 else "0001";
+            case? v is
+              when "1---" => report "starts with 1";
+              when "01-0" => report "01x0";
+              when others => report "other";
+            end case?;
+          end loop;
+          report std_logic'image("1010" ?= "1-1-") & " " & std_logic'image("1010" ?/= "1-1-") & " " & std_logic'image("1Z10" ?= "1110");
+          report integer'image(to_integer(unsigned(<< signal .t.u.secret : std_logic_vector(3 downto 0) >>)));
+          wait;
+        end process;
+      end;`,
+    }, 't');
+    expect(out.filter(l => l.startsWith('** Note:')).map(l => l.replace('** Note: ', ''))).toEqual(['starts with 1', '01x0', 'other', "'1' '0' 'X'", '10']);
+  });
+});
