@@ -1,7 +1,7 @@
 // Elaboration: builds the instance hierarchy and compiles processes into closures.
 import { CompileError, type ConfigBind, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem, type Strength } from './ast';
 import * as L from './logic';
-import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
+import { Vec, resize, fromInt, allX, allZ, slice, insert, vnum, smallVec } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
 import { expandFormat, fmtTime, parseTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
@@ -133,7 +133,13 @@ interface Node {
   enumNames?: string[];
   sig?: Signal;          // plain signal reference
   isMonTime?: boolean;   // $time-like: excluded from $monitor change detection
+  /**
+   * Fast 2-state path (only on nodes of at most 32 bits): like mk, but the value is a non-negative
+   * number masked to W (<= 32) bits, or -1 when any operand has X/Z (then mk is used instead).
+   */
+  nk?: NK;
 }
+type NK = (W: number, sx: boolean) => () => number;
 
 interface CFunc { args: Signal[]; argT: RType[]; ret: Signal | null; locals: Signal[]; body: () => void; reads: Set<Signal | Memory> }
 
@@ -192,12 +198,70 @@ function leaf(get: Ev, w: number, s: boolean, extra: Partial<Node> = {}): Node {
 
 /** Evaluate a node at exactly width W (truncate or extend). */
 function final(n: Node, W: number): Ev {
-  const inner = n.mk(Math.max(W, n.w), n.s);
-  if (n.w <= W) return inner;
-  return () => resize(inner(), W);
+  const Wm = Math.max(W, n.w);
+  const inner = n.mk(Wm, n.s);
+  const slow = n.w <= W ? inner : () => resize(inner(), W);
+  const k = W <= 32 ? nkOf(n) : undefined;
+  if (!k) return slow;
+  const f = k(Wm, n.s), s = n.s;
+  return Wm > W
+    ? () => { const x = f(); return x >= 0 ? smallVec(W, mskN(x, W), s) : slow(); }
+    : () => { const x = f(); return x >= 0 ? smallVec(W, x, s) : slow(); };
 }
 
 function selfEv(n: Node): Ev { return n.mk(n.w, n.s); }
+
+// ---- 2-state number fast path helpers
+const NUM_OPS: Record<string, (a: number, b: number) => number> = {
+  '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => Math.imul(a, b),
+  '&': (a, b) => a & b, '|': (a, b) => a | b, '^': (a, b) => a ^ b, '~^': (a, b) => ~(a ^ b),
+};
+const NUM_CMP: Record<string, (a: number, b: number) => boolean> = {
+  '==': (a, b) => a === b, '!=': (a, b) => a !== b, '===': (a, b) => a === b, '!==': (a, b) => a !== b,
+  '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b,
+};
+const allOnes = (x: number, w: number) => (x === (w >= 32 ? 0xffffffff : (1 << w) - 1) ? 1 : 0);
+const parity = (x: number) => { x ^= x >>> 16; x ^= x >>> 8; x ^= x >>> 4; x ^= x >>> 2; x ^= x >>> 1; return x & 1; };
+/** Reductions on numbers (the ~ variants negate afterwards). */
+const REDN: Record<string, (x: number, w: number) => number> = {
+  '&': allOnes, '~&': allOnes, '|': x => (x ? 1 : 0), '~|': x => (x ? 1 : 0), '^': parity, '~^': parity, '!': x => (x ? 0 : 1),
+};
+function mskN(x: number, W: number) { return W >= 32 ? x >>> 0 : x & ((1 << W) - 1); }
+/** Resize an unsigned w-bit number to W bits, sign-extending when sext and the top bit is set. */
+function fitN(x: number, w: number, W: number, sext: boolean) {
+  if (W <= w) return W === w ? x : mskN(x, W);
+  if (sext && (x >>> (w - 1)) & 1) return mskN(x | ~((1 << w) - 1), W);
+  return x;
+}
+function toSigned(x: number, w: number) { return w >= 32 ? x | 0 : (x << (32 - w)) >> (32 - w); }
+/** nk for a leaf of width w whose current number (-1 = unknown) comes from getN. */
+function leafNk(getN: () => number, w: number, s: boolean): NK {
+  return (W, sx) => {
+    if (W === w) return getN;
+    const se = sx && s;
+    return () => { const x = getN(); return x < 0 ? -1 : fitN(x, w, W, se); };
+  };
+}
+let fastPath = true;
+/** Tests compare results with and without the number fast path. */
+export function setFastPath(on: boolean) { fastPath = on; }
+
+/** The node's fast path, also derived for compile-time constants. */
+function nkOf(n: Node): NK | undefined {
+  if (!fastPath) return undefined;
+  if (n.nk) return n.nk;
+  const cv = n.cv;
+  if (!cv || n.w > 32 || n.rf || vnum(cv) < 0) return undefined;
+  return n.nk = (W, sx) => { const c = vnum(n.mk(W, sx)()); return () => c; };
+}
+/** Truth of a node (1, 0 or 'x'), using the fast path when it has one. */
+function truthFn(n: Node): () => 0 | 1 | 'x' {
+  const vf = selfEv(n);
+  const k = nkOf(n);
+  if (!k) return () => L.truth(vf());
+  const f = k(n.w, n.s);
+  return () => { const x = f(); return x > 0 ? 1 : x === 0 ? 0 : L.truth(vf()); };
+}
 
 // ---- real numbers: stored as 64-bit IEEE-754 patterns
 const f64 = new Float64Array(1);
@@ -1324,7 +1388,13 @@ export class Elaborator {
         const C = this.ex(e.c, c), T = this.ex(e.t, c), F = this.ex(e.f, c);
         const cf = selfEv(C);
         if (T.rf || F.rf) { const tf = numOf(T), ff = numOf(F); return realNode(() => (L.truth(cf()) === 1 ? tf() : ff())); }
+        const ck = nkOf(C), tk = nkOf(T), fk = nkOf(F);
+        const nk: NK | undefined = ck && tk && fk && Math.max(T.w, F.w) <= 32 ? (W, sx) => {
+          const cn = ck(C.w, C.s), tn = tk(W, sx), fn = fk(W, sx);
+          return () => { const x = cn(); return x > 0 ? tn() : x === 0 ? fn() : -1; };
+        } : undefined;
         return {
+          nk,
           w: Math.max(T.w, F.w), s: T.s && F.s, isTime: T.isTime || F.isTime, str: T.str !== undefined && F.str !== undefined ? '' : undefined,
           mk: (W, sx) => {
             const tf = T.mk(W, sx), ff = F.mk(W, sx);
@@ -1346,7 +1416,17 @@ export class Elaborator {
         const allStr = parts.every(p => p.str !== undefined);
         // strings built at run time ('image, to_string) may be longer than their nominal width
         const strish = parts.some(p => p.str !== undefined);
+        const pk = w <= 32 && !strish ? parts.map(p => nkOf(p)) : [];
+        const nk: NK | undefined = pk.length && pk.every(Boolean) ? (W) => {
+          const fs = pk.map((k, i) => k!(parts[i].w, parts[i].s)), ws = parts.map(p => 2 ** p.w);
+          return () => {
+            let acc = 0;
+            for (let i = 0; i < fs.length; i++) { const x = fs[i](); if (x < 0) return -1; acc = acc * ws[i] + x; }
+            return W === w ? acc : fitN(acc, w, W, false);
+          };
+        } : undefined;
         return {
+          nk,
           w, s: false, str: allStr ? parts.map(p => p.str).join('') : undefined,
           cv: parts.every(p => p.cv) ? L.concat(evs.map(f => f())) : undefined,
           mk: (W) => strish
@@ -1384,7 +1464,7 @@ export class Elaborator {
         const sig = sym.sig;
         c.reads?.add(sig);
         if (sig.isReal) return realNode(() => vecToReal(sig.value), { sig });
-        return leaf(() => sig.value, sig.w, sig.signed, { isTime: sym.t.isTime, enumNames: sig.enumNames, sig });
+        return leaf(() => sig.value, sig.w, sig.signed, { isTime: sym.t.isTime, enumNames: sig.enumNames, sig, nk: sig.w <= 32 ? leafNk(() => vnum(sig.value), sig.w, sig.signed) : undefined });
       }
       case 'mem': err(`Memory '${name}' must be indexed.`, loc);
       case 'func': return this.funcCall(sym, [], c, loc);
@@ -1436,19 +1516,27 @@ export class Elaborator {
       let get: () => Vec, off: (i: number) => number;
       if (b.k === 'sig') { const sig = b.sig; get = () => sig.value; off = (i) => sig.offsetOf(i); c.reads?.add(sig); }
       else { get = selfEv(b.node); off = offOf(b.msb, b.lsb); }
+      const baseN = this.baseNum(b);
       if (I.cv) {
         const o = off(Number(I.cv.toBigInt()));
         if (o < 0) return constNode(L.X1);
         const r = leaf(() => slice(get(), o, 1), 1, false);
         if (b.k === 'node' && b.node.cv) r.cv = slice(b.node.cv, o, 1);
+        if (baseN) r.nk = leafNk(() => { const x = baseN(); return x < 0 ? -1 : (x >>> o) & 1; }, 1, false);
         return r;
       }
-      return leaf(() => {
+      const r = leaf(() => {
         const i = iv();
         if (!i.known) return L.X1;
         const o = off(Number(i.toBigInt()));
         return o < 0 ? L.X1 : slice(get(), o, 1);
       }, 1, false);
+      const ik = !I.s ? nkOf(I) : undefined;
+      if (baseN && ik) {
+        const inum = ik(I.w, false);
+        r.nk = leafNk(() => { const i = inum(); if (i < 0) return -1; const x = baseN(), o = off(i); return x < 0 || o < 0 ? -1 : (x >>> o) & 1; }, 1, false);
+      }
+      return r;
     }
     // part selects
     let get: () => Vec, off: (i: number) => number, signedBase = false;
@@ -1475,6 +1563,8 @@ export class Elaborator {
       const lo = o1 < 0 || o2 < 0 ? (o1 < 0 ? o2 - (w - 1) : Math.min(o1, o2)) : Math.min(o1, o2);
       const r = leaf(() => slice(get(), lo, w), w, false);
       if (b.k === 'node' && b.node.cv) r.cv = slice(b.node.cv, lo, w);
+      const baseN = lo >= 0 && w <= 32 ? this.baseNum(b) : undefined;
+      if (baseN) r.nk = leafNk(() => { const x = baseN(); return x < 0 ? -1 : mskN(x >>> lo, w); }, w, false);
       return r;
     }
     // indexed part select
@@ -1492,6 +1582,13 @@ export class Elaborator {
       else return allX(w);
       return slice(get(), lo, w);
     }, w, false);
+  }
+
+  /** Number getter (-1 = unknown) for the base of a select, when it is at most 32 bits wide. */
+  private baseNum(b: ReturnType<Elaborator['selBase']>): (() => number) | undefined {
+    if (b.k === 'sig') { const sig = b.sig; return sig.w <= 32 && !sig.isReal ? () => vnum(sig.value) : undefined; }
+    if (b.k === 'node') { const k = b.node.w <= 32 ? nkOf(b.node) : undefined; return k ? k(b.node.w, b.node.s) : undefined; }
+    return undefined;
   }
 
   sliceWidthGuess(e: Extract<Expr, { k: 'range' }>, c: Ctx): number {
@@ -1527,9 +1624,17 @@ export class Elaborator {
     }
     const A = this.ex(e.e, c);
     const op = e.op;
+    const ak = nkOf(A);
     const red = (f: (v: Vec) => Vec, neg = false): Node => {
       const av = selfEv(A);
-      return leaf(neg ? () => L.not(f(av())) : () => f(av()), 1, false, { cv: A.cv ? (neg ? L.not(f(A.cv)) : f(A.cv)) : undefined });
+      const n = leaf(neg ? () => L.not(f(av())) : () => f(av()), 1, false, { cv: A.cv ? (neg ? L.not(f(A.cv)) : f(A.cv)) : undefined });
+      const rn = REDN[op];
+      if (ak && rn) { const g = ak(A.w, A.s), w = A.w; n.nk = leafNk(() => { const x = g(); if (x < 0) return -1; const r = rn(x, w); return neg ? r ^ 1 : r; }, 1, false); }
+      return n;
+    };
+    const un = (n: Node, f: (x: number) => number): Node => {
+      if (ak) n.nk = (W, sx) => { const g = ak(W, sx); return () => { const x = g(); return x < 0 ? -1 : mskN(f(x), W); }; };
+      return n;
     };
     if (A.rf && (op === '-' || op === '+' || op === 'abs' || op === '!')) {
       const a = A.rf;
@@ -1538,8 +1643,8 @@ export class Elaborator {
     }
     switch (op) {
       case '+': return A;
-      case '-': return { w: A.w, s: A.s, isTime: A.isTime, cv: A.cv ? L.neg(A.cv) : undefined, mk: (W, sx) => { const f = A.mk(W, sx); return () => L.neg(f()); } };
-      case '~': return { w: A.w, s: A.s, enumNames: A.w === 1 && A.enumNames ? A.enumNames : undefined, cv: A.cv ? L.not(A.cv) : undefined, mk: (W, sx) => { const f = A.mk(W, sx); return () => L.not(f()); } };
+      case '-': return un({ w: A.w, s: A.s, isTime: A.isTime, cv: A.cv ? L.neg(A.cv) : undefined, mk: (W, sx) => { const f = A.mk(W, sx); return () => L.neg(f()); } }, x => -x);
+      case '~': return un({ w: A.w, s: A.s, enumNames: A.w === 1 && A.enumNames ? A.enumNames : undefined, cv: A.cv ? L.not(A.cv) : undefined, mk: (W, sx) => { const f = A.mk(W, sx); return () => L.not(f()); } }, x => ~x);
       case '!': return red(L.lnot);
       case '&': return red(L.redAnd);
       case '|': return red(L.redOr);
@@ -1574,6 +1679,7 @@ export class Elaborator {
       if (cmp[op]) { const f = cmp[op]; return leaf(() => L.bool(f(a(), b())), 1, false); }
       err(`Operator '${op}' is not defined for real operands.`, e.loc);
     }
+    const ak = nkOf(A), bk = nkOf(B);
     const ctxOp = (f: (a: Vec, b: Vec) => Vec): Node => {
       const w = Math.max(A.w, B.w), s = A.s && B.s;
       const n: Node = {
@@ -1581,6 +1687,8 @@ export class Elaborator {
         mk: (W, sx) => { const af = A.mk(W, sx), bf = B.mk(W, sx); return () => f(af(), bf()); },
       };
       if (A.cv && B.cv) n.cv = n.mk(w, s)();
+      const g = NUM_OPS[op];
+      if (g && ak && bk && w <= 32) n.nk = (W, sx) => { const af = ak(W, sx), bf = bk(W, sx); return () => { const a = af(); if (a < 0) return -1; const b = bf(); return b < 0 ? -1 : mskN(g(a, b), W); }; };
       return n;
     };
     const cmpOp = (f: (a: Vec, b: Vec) => Vec): Node => {
@@ -1588,18 +1696,43 @@ export class Elaborator {
       const af = A.mk(w, s), bf = B.mk(w, s);
       const n = leaf(() => f(af(), bf()), 1, false);
       if (A.cv && B.cv) n.cv = f(af(), bf());
+      const g = NUM_CMP[op];
+      if (g && ak && bk && w <= 32) {
+        const an = ak(w, s), bn = bk(w, s);
+        n.nk = leafNk(s
+          ? () => { const a = an(); if (a < 0) return -1; const b = bn(); return b < 0 ? -1 : g(toSigned(a, w), toSigned(b, w)) ? 1 : 0; }
+          : () => { const a = an(); if (a < 0) return -1; const b = bn(); return b < 0 ? -1 : g(a, b) ? 1 : 0; }, 1, false);
+      }
       return n;
     };
     const shiftOp = (f: (a: Vec, b: Vec) => Vec): Node => {
       const bf = selfEv(B);
       const n: Node = { w: A.w, s: A.s, mk: (W, sx) => { const af = A.mk(W, sx); return () => f(af(), bf().withSign(false)); } };
       if (A.cv && B.cv) n.cv = n.mk(A.w, A.s)();
+      if (ak && bk && A.w <= 32 && (op === '<<' || op === '<<<' || op === '>>' || op === '>>>')) {
+        const bn = bk(B.w, false);
+        n.nk = (W, sx) => {
+          const af = ak(W, sx);
+          const arith = op === '>>>' && sx;
+          return () => {
+            const a = af(); if (a < 0) return -1;
+            const b = bn(); if (b < 0) return -1;
+            if (op === '<<' || op === '<<<') return b >= W ? 0 : mskN(a << b, W);
+            if (!arith) return b >= W ? 0 : a >>> b;
+            return mskN(toSigned(a, W) >> Math.min(b, 31), W);
+          };
+        };
+      }
       return n;
     };
     const logOp = (f: (a: Vec, b: Vec) => Vec): Node => {
       const af = selfEv(A), bf = selfEv(B);
       const n = leaf(() => f(af(), bf()), 1, false);
       if (A.cv && B.cv) n.cv = f(af(), bf());
+      if (ak && bk) {
+        const an = ak(A.w, A.s), bn = bk(B.w, B.s), and = op === '&&';
+        n.nk = leafNk(() => { const a = an(), b = bn(); return a < 0 || b < 0 ? -1 : and ? (a && b ? 1 : 0) : (a || b ? 1 : 0); }, 1, false);
+      }
       return n;
     };
     switch (op) {
@@ -2529,6 +2662,7 @@ export class Elaborator {
     const scale = (x: number) => Math.round(Math.round((x * unit) / prec) * prec);
     if (n.real !== undefined) { const d = scale(n.real); return () => d; }
     if (n.rf) { const f = n.rf; return () => { const x = f(); return Number.isFinite(x) ? scale(x) : 0; }; }
+    if (n.cv) { const v = n.cv; const d = v.known ? scale(Number(v.toBigInt())) : 0; return () => d; }
     const f = selfEv(n);
     return () => { const v = f(); return v.known ? scale(Number(v.toBigInt())) : 0; };
   }
@@ -2850,8 +2984,7 @@ export class Elaborator {
         for (const p of parts) {
           if (p.sig !== s) continue;
           if (p.edge === 'any') return true;
-          const o = p.sig.prev.bit(0), nv = p.sig.value.bit(0);
-          if (p.edge === 'pos' ? isPos(o, nv) : isNeg(o, nv)) return true;
+          if (edgeHit(p.sig.prev, p.sig.value, p.edge === 'pos')) return true;
         }
         return false;
       };
@@ -2924,20 +3057,21 @@ export class Elaborator {
       case 'assign': return this.assignStmt(s, c);
       case 'vsigassign': return this.vsigStmt(s, c);
       case 'if': {
-        let C = selfEv(this.ex(s.c, c));
+        const CN = this.ex(s.c, c);
+        let truth = truthFn(CN);
         if (this.cov && s.loc) {
           const b: CovBranch = { file: s.loc.file, line: s.loc.line, kind: 'if', arms: [{ label: 'true', n: 0 }, { label: s.f ? 'else' : 'false (implicit else)', n: 0 }] };
           this.cov.branches.push(b);
-          const c0 = C;
-          C = () => { const v = c0(); b.arms[L.truth(v) === 1 ? 0 : 1].n++; return v; };
+          const c0 = truth;
+          truth = () => { const v = c0(); b.arms[v === 1 ? 0 : 1].n++; return v; };
         }
         const T = this.st(s.t, c), F = s.f ? this.st(s.f, c) : null;
         if (T.sync && (!F || F.sync)) {
           const t = T.sync, f = F?.sync;
-          return { sync: f ? () => { if (L.truth(C()) === 1) t(); else f(); } : () => { if (L.truth(C()) === 1) t(); } };
+          return { sync: f ? () => { if (truth() === 1) t(); else f(); } : () => { if (truth() === 1) t(); } };
         }
         const tg = asGen(T), fg = F ? asGen(F) : null;
-        return { gen: function* () { if (L.truth(C()) === 1) yield* tg(); else if (fg) yield* fg(); } };
+        return { gen: function* () { if (truth() === 1) yield* tg(); else if (fg) yield* fg(); } };
       }
       case 'case': return this.caseStmt(s, c);
       case 'for': {
@@ -3533,7 +3667,7 @@ export class Elaborator {
       const { edge, sig } = parts[0];
       const s = sig!;
       if (edge === 'any') { const w: Wait = { t: 'sens', sigs: [s] }; return () => w; }
-      const test = edge === 'pos' ? () => isPos(s.prev.bit(0), s.value.bit(0)) : () => isNeg(s.prev.bit(0), s.value.bit(0));
+      const test = edge === 'pos' ? () => edgeHit(s.prev, s.value, true) : () => edgeHit(s.prev, s.value, false);
       const w: Wait = { t: 'sens', sigs: [s], test };
       return () => w;
     }
@@ -3546,7 +3680,7 @@ export class Elaborator {
           const ov = olds[i];
           if (!(nv.a === ov.a && nv.b === ov.b)) {
             if (p.edge === 'any') hit = true;
-            else if (p.edge === 'pos' ? isPos(ov.bit(0), nv.bit(0)) : isNeg(ov.bit(0), nv.bit(0))) hit = true;
+            else if (edgeHit(ov, nv, p.edge === 'pos')) hit = true;
             olds[i] = nv;
           }
         });
@@ -3920,6 +4054,12 @@ function asGen(s: SC): () => Gen {
   return function* () { f(); };
 }
 
+/** posedge/negedge on bit 0 between two values (numbers when both are 2-state). */
+function edgeHit(prev: Vec, cur: Vec, pos: boolean): boolean {
+  const o = vnum(prev), n = vnum(cur);
+  if (o >= 0 && n >= 0) return pos ? (o & 1) === 0 && (n & 1) === 1 : (o & 1) === 1 && (n & 1) === 0;
+  return pos ? isPos(prev.bit(0), cur.bit(0)) : isNeg(prev.bit(0), cur.bit(0));
+}
 function isPos(o: string, n: string) { return (o === '0' && n !== '0') || ((o === 'x' || o === 'z') && n === '1'); }
 function isNeg(o: string, n: string) { return (o === '1' && n !== '1') || ((o === 'x' || o === 'z') && n === '0'); }
 

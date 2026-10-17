@@ -1,5 +1,5 @@
 // Discrete-event simulation kernel: time wheel, delta cycles, regions.
-import { Vec, resolve, resize, mask } from './logic';
+import { Vec, resolve, resize, mask, vnum } from './logic';
 
 export type Waker = (sig: Signal | Memory) => void;
 
@@ -71,6 +71,7 @@ export class Signal {
 
 /** Compact history entry: known values up to 52 bits become plain numbers. */
 export function packVal(v: Vec): Vec | number {
+  if (v._n >= 0) return v._n;
   return v.w <= 52 && v.b === 0n && v.u === 0n && v.k === 0n ? Number(v.a) : v;
 }
 
@@ -154,7 +155,8 @@ export class Process {
   }
 }
 
-interface TimedEvent { fn: () => void; nba: boolean }
+/** Events of one future time step: active-region callbacks and NBA-region callbacks. */
+interface TimedBucket { a: (() => void)[]; n: (() => void)[] | null }
 
 /** Binary min-heap of numbers. */
 class TimeHeap {
@@ -206,7 +208,7 @@ export class Kernel {
   postponed: (() => void)[] = [];
   monitors: (() => void)[] = [];
   heap = new TimeHeap();
-  timed = new Map<number, TimedEvent[]>();
+  timed = new Map<number, TimedBucket>();
   finished = false;
   stopRequested = false;
   breakRequested = false;
@@ -271,9 +273,9 @@ export class Kernel {
 
   // ---------- scheduling ----------
   schedule(at: number, fn: () => void, nba = false) {
-    let list = this.timed.get(at);
-    if (!list) { list = []; this.timed.set(at, list); this.heap.push(at); }
-    list.push({ fn, nba });
+    let b = this.timed.get(at);
+    if (!b) { b = { a: [], n: null }; this.timed.set(at, b); this.heap.push(at); }
+    if (nba) (b.n ??= []).push(fn); else b.a.push(fn);
   }
   activate(fn: () => void) { this.active.push(fn); }
 
@@ -287,7 +289,8 @@ export class Kernel {
 
   commit(sig: Signal, v: Vec) {
     const old = sig.value;
-    if (old.a === v.a && old.b === v.b && old.u === v.u && old.k === v.k) return;
+    const vn = v._n;
+    if (vn >= 0 ? vn === vnum(old) : old.a === v.a && old.b === v.b && old.u === v.u && old.k === v.k) return;
     sig.prev = old;
     sig.value = v;
     if (sig.isVar) return;
@@ -490,9 +493,11 @@ export class Kernel {
       this.now = next;
       this.deltaCount = 0;
       this.stamp++;
-      const evs = this.timed.get(next)!;
+      const b = this.timed.get(next)!;
       this.timed.delete(next);
-      for (const e of evs) { if (e.nba) this.nba.push(e.fn); else this.active.push(e.fn); }
+      // settle() normally leaves the active and NBA queues empty: then adopt the bucket's arrays
+      if (this.activeHead >= this.active.length) { this.active = b.a; this.activeHead = 0; } else this.active.push(...b.a);
+      if (b.n) { if (this.nba.length) this.nba.push(...b.n); else this.nba = b.n; }
     }
   }
 

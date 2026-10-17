@@ -16,6 +16,8 @@ export function mask(w: number): bigint {
 }
 
 export class Vec {
+  /** Cached vnum(): -2 = not computed yet. */
+  _n = -2;
   constructor(public readonly w: number, public readonly a: bigint, public readonly b: bigint, public readonly signed = false, public readonly u = 0n, public readonly k = 0n) {}
 
   /** std_logic character of bit i: one of 0 1 x z U W L H (lowercase x/z for strong unknowns). */
@@ -45,7 +47,7 @@ export class Vec {
 
   equals(o: Vec): boolean { return this.w === o.w && this.a === o.a && this.b === o.b && this.u === o.u && this.k === o.k; }
 
-  withSign(s: boolean): Vec { return s === this.signed ? this : new Vec(this.w, this.a, this.b, s, this.u, this.k); }
+  withSign(s: boolean): Vec { if (s === this.signed) return this; const v = new Vec(this.w, this.a, this.b, s, this.u, this.k); v._n = this._n; return v; }
 
   /** Value as JS number (two's complement if signed). NaN when unknown. */
   toNumber(): number {
@@ -60,6 +62,30 @@ export class Vec {
 
   toString(): string { return toBin(this); }
 }
+
+/** Value as a JS number for 2-state values of at most 32 bits; -1 otherwise (X/Z/U/W/L/H or wider). */
+export function vnum(v: Vec): number {
+  let n = v._n;
+  if (n === -2) { n = v.w <= 32 && v.b === 0n && v.u === 0n && v.k === 0n ? Number(v.a) : -1; v._n = n; }
+  return n;
+}
+
+/** A known value of at most 32 bits from a non-negative number already masked to w bits. */
+export function smallVec(w: number, n: number, signed = false): Vec {
+  if (w <= 8) {
+    // narrow values are shared (Vec is immutable): no allocation for clocks, flags, bytes
+    const tab = (signed ? SMALL_S : SMALL_U)[w] ??= new Array(1 << w);
+    const c = tab[n];
+    if (c) return c;
+    const v = new Vec(w, BigInt(n), 0n, signed);
+    v._n = n;
+    return tab[n] = v;
+  }
+  const v = new Vec(w, BigInt(n), 0n, signed);
+  v._n = n;
+  return v;
+}
+const SMALL_U: Vec[][] = [], SMALL_S: Vec[][] = [];
 
 export const X1 = new Vec(1, 1n, 1n);
 export const Z1 = new Vec(1, 0n, 1n);
