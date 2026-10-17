@@ -323,3 +323,15 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .syn-type { fill: #e6edf7; font-weight: 600; }
 .syn-pin { fill: #8fa0b8; font-size: 8px; }
 .synthesis .btn { padding: 2px 8px; font-size: 12px; }
+/* place & route floorplan (#48) */
+.pnr-svg { display: block; }
+.pnr-tile { fill: #121922; stroke: #1e2a38; }
+.pnr-io { fill: #17141f; stroke: #2a2238; }
+.pnr-used { stroke: none; }
+.pnr-used:hover { stroke: #ffd23f; stroke-width: 2; }
+.pnr-lc { fill: #3f8cff; }
+.pnr-io.pnr-used, .pnr-used.pnr-io { fill: #3fe06a; }
+.pnr-ram { fill: #c06bff; }
+.pnr-special { fill: #ff8a3f; }
+.pnr-net { fill: none; stroke: #ffd23f; stroke-opacity: 0.35; stroke-width: 1; pointer-events: none; }
+.pnr-net.global { stroke: #ff5f5f; stroke-opacity: 0.2; }

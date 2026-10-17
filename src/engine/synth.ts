@@ -100,3 +100,70 @@ export async function synthesize(o: SynthOptions, progress?: (done: number, tota
   const stat = text(`${out}.stat`) ?? '';
   return { ok: true, log, netlist: text(`${out}.v`), json: text(`${out}.json`), stat, cells: parseStat(stat) };
 }
+
+// ---------------------------------------------------------------- FPGA place & route (nextpnr-ice40)
+
+export const ICE40_DEVICES: Record<string, { pkg: string; w: number; h: number }> = {
+  lp384: { pkg: 'qn32', w: 7, h: 9 },
+  lp1k: { pkg: 'cm81', w: 13, h: 17 },
+  hx1k: { pkg: 'tq144', w: 13, h: 17 },
+  lp8k: { pkg: 'cm81', w: 33, h: 33 },
+  hx8k: { pkg: 'ct256', w: 33, h: 33 },
+  u4k: { pkg: 'sg48', w: 25, h: 21 },
+  up5k: { pkg: 'sg48', w: 25, h: 31 },
+};
+
+export interface PnrOptions { device: string; pkg?: string; pcf?: string; freq?: number; seed?: number; json: string }
+export interface PnrResult {
+  ok: boolean; log: string;
+  asc?: string; bin?: Uint8Array; placed?: string;
+  util: [string, number, number][];          // cell type, used, available
+  fmax: [string, number, number | null][];   // clock, achieved MHz, constraint MHz
+}
+
+type Pnr = { runNextpnrIce40: Runner; runIcepack: Runner };
+let pnrTools: Promise<Pnr> | null = null;
+
+/** nextpnr-ice40 and icepack (about 235 MB with all ice40 chip databases), loaded on first use. */
+function nextpnr(): Promise<Pnr> {
+  pnrTools ??= import('@yowasp/nextpnr-ice40').then(m => m as unknown as Pnr);
+  return pnrTools;
+}
+
+export async function placeAndRoute(o: PnrOptions, progress?: (done: number, total: number) => void): Promise<PnrResult> {
+  const dev = ICE40_DEVICES[o.device];
+  if (!dev) throw new Error(`pnr: unknown device "${o.device}" (${Object.keys(ICE40_DEVICES).join(', ')})`);
+  const tools = await nextpnr();
+  const dec = new TextDecoder();
+  let log = '';
+  const sink = (b: Uint8Array | null) => { if (b) log += dec.decode(b, { stream: true }).replace(/\x1b\[[0-9;]*m/g, ''); };
+  const args = [`--${o.device}`, '--package', o.pkg ?? dev.pkg, '--json', 'in.json', '--asc', 'out.asc', '--report', 'report.json', '--write', 'placed.json', '--timing-allow-fail'];
+  const files: Tree = { 'in.json': o.json };
+  if (o.pcf !== undefined) { args.push('--pcf', 'in.pcf', '--pcf-allow-unconstrained'); files['in.pcf'] = o.pcf; }
+  if (o.freq) args.push('--freq', String(o.freq));
+  if (o.seed !== undefined) args.push('--seed', String(o.seed));
+  let out: Record<string, unknown>;
+  try {
+    out = await tools.runNextpnrIce40(args, files, {
+      stdout: sink, stderr: sink,
+      fetchProgress: progress ? (e: { totalLength: number; doneLength: number }) => progress(e.doneLength, e.totalLength) : undefined,
+    });
+  } catch (e) {
+    if (!(e as { files?: unknown }).files) throw e;
+    return { ok: false, log, util: [], fmax: [] };
+  }
+  const text = (n: string) => { const v = out[n]; return v === undefined ? undefined : typeof v === 'string' ? v : dec.decode(v as Uint8Array); };
+  const asc = text('out.asc');
+  let bin: Uint8Array | undefined;
+  if (asc) {
+    const p = await tools.runIcepack(['out.asc', 'out.bin'], { 'out.asc': asc }, {});
+    const b = p['out.bin'];
+    bin = typeof b === 'string' ? new TextEncoder().encode(b) : (b as Uint8Array);
+  }
+  const rep = JSON.parse(text('report.json') ?? '{}') as { utilization?: Record<string, { used: number; available: number }>; fmax?: Record<string, { achieved: number; constraint?: number }> };
+  return {
+    ok: true, log, asc, bin, placed: text('placed.json'),
+    util: Object.entries(rep.utilization ?? {}).map(([k, v]) => [k, v.used, v.available]),
+    fmax: Object.entries(rep.fmax ?? {}).map(([k, v]) => [k, v.achieved, v.constraint ?? null]),
+  };
+}

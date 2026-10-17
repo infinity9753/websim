@@ -218,6 +218,22 @@ vsim work.tb_counter; run -all
 
 VHDL 은 아직 합성할 수 없습니다(Yosys 의 Verilog 프런트엔드만 포함).
 
+### FPGA 배치 배선 (nextpnr, iCE40)
+
+[nextpnr](https://github.com/YosysHQ/nextpnr) 의 Lattice iCE40 버전과 `icepack`(YoWASP WebAssembly 빌드, ISC 라이선스)으로 합성 결과를 실제 FPGA 에 배치·배선하고 비트스트림을 만듭니다. 처음 한 번 약 235MB 를 추가로 내려받습니다.
+
+1. **컴파일 ▸ 배치 배선 (nextpnr)…** 로 배치 배선 창을 엽니다(또는 트랜스크립트에서 `pnr`).
+2. 디바이스(`lp384`, `lp1k`, `hx1k`, `lp8k`, `hx8k`, `u4k`, `up5k`), 필요하면 패키지, 핀 제약 파일(`.pcf`), 목표 클록 주파수(MHz)를 고르고 버튼을 누릅니다. `synth -target ice40 -flatten` 이 먼저 실행됩니다.
+3. 핀 제약 파일을 고르지 않으면 프로젝트의 `<top>.pcf` 또는 `constraints/<top>.pcf` 를 자동으로 쓰고, 없으면 핀을 자유롭게 배치합니다. **새 PCF** 는 최상위 포트 목록으로 `set_io <포트> <핀>` 템플릿을 만듭니다.
+4. 자원 사용률 표(로직 셀, IO, RAM, 글로벌 버퍼 …)와 최대 동작 주파수(목표 주파수 대비 PASS/FAIL), 그리고 플로어플랜(사용된 타일: 파란색 로직, 초록색 IO, 보라색 RAM, 주황색 특수 블록; 노란 선은 타일 간 연결)이 표시됩니다. 타일에 마우스를 올리면 배치된 셀이 보입니다.
+5. 결과는 `pnr/` 폴더에 `<top>.asc`(텍스트 비트스트림), `<top>.placed.json`, `<top>.log` 로 저장되며, **비트스트림** 버튼으로 FPGA 프로그래밍용 `.bin` 을 내려받습니다(예: `iceprog counter.bin`).
+
+```tcl
+pnr -device hx8k -package ct256 -pcf counter.pcf -freq 50
+```
+
+타이밍을 맞추지 못하면 `pnr` 은 실패(FAIL)를 표시하고 오류를 반환하지만 결과 파일은 그대로 저장됩니다. 현재는 iCE40 만 지원합니다(ECP5/Gowin 배치 배선과 ASIC 레이아웃은 포함하지 않음).
+
 ## 7. 프로젝트, 폴더, 검색
 
 - **프로젝트**: 파일 ▸ 새 프로젝트… / 프로젝트 열기 / 프로젝트 이름 바꾸기… / 프로젝트 삭제. 프로젝트마다 파일, 컴파일된 라이브러리, 열린 편집기, 브레이크포인트가 따로 저장됩니다(테마와 창 배치는 공통).
@@ -285,6 +301,7 @@ VHDL 은 아직 합성할 수 없습니다(Yosys 의 Verilog 프런트엔드만 
 | 명령 | 설명 |
 |---|---|
 | `synth [-top m] [-target generic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
+| `pnr [-top m] [-device up5k\|hx1k\|hx8k\|...] [-package p] [-pcf file] [-freq MHz] [-seed n]` | iCE40 용으로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
 
 ### 기타
 

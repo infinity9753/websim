@@ -122,7 +122,11 @@ function flush() {
   if (simEv || ev.includes('scope')) st.scope = session.scope?.path ?? null;
   if (simEv || ev.includes('wave')) st.waves = session.waves.map(w => ({ id: w.id, path: w.path, name: w.name, sigId: w.sig?.id ?? 0, radix: w.radix, ...waveAttrs(w) }));
   if (simEv || ev.includes('debug')) st.breakpoints = session.breakpoints;
-  if (ev.includes('synth')) st.synth = session.lastSynth;
+  if (ev.includes('synth')) {
+    st.synth = session.lastSynth;
+    const p = session.lastPnr;
+    st.pnr = p && { run: p.run, top: p.top, device: p.device, base: p.base, ok: p.ok, util: p.util, fmax: p.fmax };
+  }
   if (simEv || ev.includes('list')) st.lists = session.lists.map(l => ({ path: l.path, name: l.name, sigId: l.sig.id, radix: l.radix }));
   st.defaultRadix = session.defaultRadix;
   post({ type: 'state', state: st });
@@ -145,6 +149,7 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   rebuild: (list: never) => session.rebuild(list),
   vcdText: (all: boolean) => session.vcdText(all),
   coverageLines: () => session.coverageLines(),
+  pnrBitstream: () => session.lastPnr?.bin ?? null,
   listMemories: () => session.listMemories(),
   memWords: (path: string, from: number, count: number) => { const r = session.memWords(path, from, count); return r && { ...r, words: r.words.map(pv) }; },
   memDeposit: (path: string, addr: number, value: string) => session.memDeposit(path, addr, value),

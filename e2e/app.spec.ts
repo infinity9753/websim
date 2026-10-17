@@ -103,12 +103,31 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('Synthesize (Yosys)…').click();
   await page.locator('.synthesis button[title="Synthesize with Yosys"]').click();
-  await expect(page.locator('.synth-status')).toContainText('cells', { timeout: 90_000 });
-  await expect(page.locator('.synth-cells tbody tr').first()).toBeVisible();
+  await expect(page.locator('.synthesis:not(.pnr) .synth-status')).toContainText('cells', { timeout: 90_000 });
+  await expect(page.locator('.synthesis:not(.pnr) .synth-cells tbody tr').first()).toBeVisible();
   expect(await page.locator('.syn-node').count()).toBeGreaterThan(5);
   await page.getByText('Simulate netlist').click();
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter.v');
   await cmd(page, 'vsim work.tb_counter');
   await cmd(page, 'run -all');
   await expect(page.locator('.tr-out')).toContainText('$finish');
+});
+
+test('places and routes the example on iCE40 and draws the floorplan', async ({ page }) => {
+  test.setTimeout(240_000);
+  await fresh(page);
+  await cmd(page, 'quit -sim');
+  await page.getByText('Compile', { exact: true }).first().click();
+  await page.getByText('Place & Route (nextpnr)…').click();
+  await page.locator('.pnr select[aria-label="Device"]').selectOption('hx1k');
+  await page.locator('.pnr button[title="Synthesize, place and route"]').click();
+  await expect(page.locator('.pnr .synth-status')).toContainText('logic cells', { timeout: 200_000 });
+  await expect(page.locator('.pnr .synth-status')).toContainText('HX1K');
+  await expect(page.locator('.pnr .synth-cells tbody tr').first()).toContainText('ICESTORM_LC');
+  expect(await page.locator('.pnr-used.pnr-lc').count()).toBeGreaterThan(0);
+  expect(await page.locator('.pnr-used.pnr-io').count()).toBeGreaterThan(0);
+  await expect(page.locator('.tr-out')).toContainText('Wrote pnr/');
+  const dl = page.waitForEvent('download');
+  await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
+  expect((await dl).suggestedFilename()).toMatch(/\.bin$/);
 });

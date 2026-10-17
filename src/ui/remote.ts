@@ -76,6 +76,7 @@ export class RemoteSession {
   waves: MWave[] = [];
   lists: MList[] = [];
   lastSynth: PState['synth'] = null;
+  lastPnr: PState['pnr'] = null;
   running = false;
   defaultRadix: Radix = 'binary';
   history: string[] = [];
@@ -129,6 +130,7 @@ export class RemoteSession {
   breakRun() { this.send({ type: 'break' }); }
   setScope(s: MScope) { this.scope = s; this.emitLocal('scope'); void this.call('setScope', s.path); }
   addWavePaths(paths: string[]) { void this.call('addWavePaths', paths); }
+  pnrBitstream() { return this.call<Uint8Array | null>('pnrBitstream'); }
   coverageLines() { return this.call<{ file: string; lines: [number, number][]; branches: [number, string[]][] }[] | null>('coverageLines'); }
   toggleBreakpoint(file: string, line: number) { void this.call('toggleBreakpoint', file, line); }
   loadBreakpoints(list: { file: string; line: number; cond?: string }[]) { void this.call('loadBreakpoints', list); }
@@ -195,6 +197,7 @@ export class RemoteSession {
         });
       }
       if (st.synth !== undefined) this.lastSynth = st.synth;
+      if (st.pnr !== undefined) this.lastPnr = st.pnr;
       if (st.lists) this.lists = st.lists.flatMap(l => { const sig = this.sigs.get(l.sigId); return sig ? [{ path: l.path, name: l.name, sig, radix: l.radix }] : []; });
       if (st.running !== undefined) this.running = st.running;
       if (st.paused !== undefined) this.paused = st.paused;

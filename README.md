@@ -20,6 +20,7 @@ assets from any commercial simulator and is not affiliated with any vendor.
 ## Third-party components
 
 - Logic synthesis uses [Yosys](https://github.com/YosysHQ/yosys) through the [YoWASP](https://yowasp.org/) WebAssembly package `@yowasp/yosys` (ISC license). It is downloaded by the browser (about 77 MB) only when `synth` is first used.
+- FPGA place and route uses [nextpnr](https://github.com/YosysHQ/nextpnr) (iCE40) and `icepack` from [Project IceStorm](https://github.com/YosysHQ/icestorm) through the YoWASP package `@yowasp/nextpnr-ice40` (ISC license), downloaded (about 235 MB) only when `pnr` is first used.
 
 ## Quick start
 

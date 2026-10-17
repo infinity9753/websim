@@ -135,8 +135,9 @@ export function contextMenu(x: number, y: number, items: CtxItem[]) {
   setTimeout(() => document.addEventListener('mousedown', off, true), 0);
 }
 
-export function download(name: string, text: string) {
-  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name });
+export function download(name: string, data: string | Uint8Array) {
+  const blob = typeof data === 'string' ? new Blob([data], { type: 'text/plain' }) : new Blob([data as BlobPart], { type: 'application/octet-stream' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
