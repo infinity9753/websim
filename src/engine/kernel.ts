@@ -206,6 +206,8 @@ export class Kernel {
   inactive: (() => void)[] = [];
   nba: (() => void)[] = [];
   postponed: (() => void)[] = [];
+  /** After the active, inactive and NBA regions settle (cocotb ReadWrite); may write and cause more deltas. */
+  readWrite: (() => void)[] = [];
   monitors: (() => void)[] = [];
   heap = new TimeHeap();
   timed = new Map<number, TimedBucket>();
@@ -523,6 +525,7 @@ export class Kernel {
         for (const f of n) f();
         continue;
       }
+      if (this.readWrite.length) { const r = this.readWrite; this.readWrite = []; for (const f of r) f(); continue; }
       break;
     }
     this.runPostponed();
@@ -538,7 +541,7 @@ export class Kernel {
     if (this.monitorOn) for (const m of this.monitors) m();
   }
 
-  get pending(): boolean { return this.heap.size > 0 || this.active.length > this.activeHead || this.nba.length > 0; }
+  get pending(): boolean { return this.heap.size > 0 || this.active.length > this.activeHead || this.nba.length > 0 || this.readWrite.length > 0; }
   get nextTime(): number | undefined { return this.heap.size ? this.heap.peek() : undefined; }
 
   random(): number {

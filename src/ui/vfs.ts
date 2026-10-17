@@ -151,10 +151,11 @@ export class BrowserFS implements VFS {
   clear() { this.files.clear(); this.order = []; this.folders.clear(); this.save(); }
 }
 
-export function langOf(name: string): 'verilog' | 'vhdl' | 'do' | 'text' {
+export function langOf(name: string): 'verilog' | 'vhdl' | 'do' | 'python' | 'text' {
   if (/\.(v|sv|vh|svh|vlg)$/i.test(name)) return 'verilog';
   if (/\.(vhd|vhdl)$/i.test(name)) return 'vhdl';
   if (/\.(do|tcl)$/i.test(name)) return 'do';
+  if (/\.py$/i.test(name)) return 'python';
   return 'text';
 }
 

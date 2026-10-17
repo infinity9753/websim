@@ -13,7 +13,8 @@ describe('bundled examples', () => {
       expect(s.design).not.toBeNull();
       expect(s.waves.length).toBeGreaterThan(0);
       expect(s.now).toBeGreaterThan(0);
+      if (ex.id === 'cocotb') expect(lines.map(l => l.m)).toContain('** cocotb: TESTS=3 PASS=3 FAIL=0 SKIP=0');
       if ((globalThis as any).process?.env?.SHOW) console.log(lines.map(l => l.m).join('\n'));
-    });
+    }, 60_000);
   }
 });

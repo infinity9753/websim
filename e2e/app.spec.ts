@@ -131,3 +131,30 @@ test('places and routes the example on iCE40 and draws the floorplan', async ({ 
   await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
   expect((await dl).suggestedFilename()).toMatch(/\.bin$/);
 });
+
+test('runs the Python (cocotb) tests of an example in the browser', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = await fresh(page);
+  await page.getByText('File', { exact: true }).first().click();
+  await page.locator('.menu-item', { hasText: 'Load Example' }).first().click();
+  await page.locator('.menu-item', { hasText: 'Python (cocotb) tests of the Verilog counter' }).last().click();
+  await expect(page.locator('.tr-out')).toContainText('cocotb: TESTS=3 PASS=3 FAIL=0 SKIP=0', { timeout: 90_000 });
+  await expect(page.locator('.tr-out')).toContainText('q = 9 after 9 cycles');
+  await page.locator('.pane-tab', { hasText: 'Wave' }).click();
+  await expect(page.locator('.wave-names .wave-row').first()).toBeVisible();
+  // the test file opens in the editor
+  await page.locator('.pane-tab', { hasText: 'Project' }).click();
+  await page.locator('.pane-left .pane-page.active tr', { hasText: 'test_counter.py' }).dblclick();
+  await expect(page.locator('.cm-content:visible')).toContainText('@cocotb.test()');
+  // the Start Simulation dialog can attach the tests too
+  await cmd(page, 'quit -sim');
+  await page.locator('button[title="Start simulation…"]').click();
+  const dlg = page.locator('.modal');
+  await dlg.locator('tr', { hasText: 'counter' }).first().click();
+  await dlg.locator('label', { hasText: 'cocotb tests' }).locator('select').selectOption('test_counter');
+  await dlg.locator('.btn.primary').click();
+  await expect(page.locator('.tr-out')).toContainText('vsim work.counter -cocotb test_counter');
+  await cmd(page, 'run -all');
+  await expect(page.locator('.tr-out .tr-line', { hasText: 'TESTS=3 PASS=3' })).toHaveCount(2);
+  expect(errors).toEqual([]);
+});

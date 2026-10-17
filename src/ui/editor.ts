@@ -7,6 +7,7 @@ import { StreamLanguage } from '@codemirror/language';
 import { verilog } from '@codemirror/legacy-modes/mode/verilog';
 import { vhdl } from '@codemirror/legacy-modes/mode/vhdl';
 import { tcl } from '@codemirror/legacy-modes/mode/tcl';
+import { python } from '@codemirror/legacy-modes/mode/python';
 import { h, modal } from './dom';
 import { langOf, type BrowserFS } from './vfs';
 import type { Pane } from './pane';
@@ -15,6 +16,7 @@ import { t } from './i18n';
 const verilogLang = StreamLanguage.define(verilog);
 const vhdlLang = StreamLanguage.define(vhdl);
 const tclLang = StreamLanguage.define(tcl);
+const pythonLang = StreamLanguage.define(python);
 
 const setErrorLine = StateEffect.define<number | null>();
 const errorLineField = StateField.define<DecorationSet>({
@@ -122,7 +124,7 @@ export class Editors {
 
   langExt(name: string): Extension {
     const l = langOf(name);
-    return l === 'verilog' ? verilogLang : l === 'vhdl' ? vhdlLang : l === 'do' ? tclLang : [];
+    return l === 'verilog' ? verilogLang : l === 'vhdl' ? vhdlLang : l === 'do' ? tclLang : l === 'python' ? pythonLang : [];
   }
 
   open(name: string, line?: number) {

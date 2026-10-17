@@ -513,7 +513,8 @@ export class App {
       ? `\`timescale 1ns/1ps\nmodule ${base} (\n  input  wire clk,\n  input  wire rst,\n  output reg  q\n);\n  always @(posedge clk)\n    if (rst) q <= 1'b0;\n    else     q <= ~q;\nendmodule\n`
       : l === 'vhdl'
         ? `library ieee;\nuse ieee.std_logic_1164.all;\nuse ieee.numeric_std.all;\n\nentity ${base} is\n  port (\n    clk : in  std_logic;\n    rst : in  std_logic;\n    q   : out std_logic\n  );\nend entity;\n\narchitecture rtl of ${base} is\n  signal r : std_logic := '0';\nbegin\n  process (clk)\n  begin\n    if rising_edge(clk) then\n      if rst = '1' then r <= '0'; else r <= not r; end if;\n    end if;\n  end process;\n  q <= r;\nend architecture;\n`
-        : l === 'do' ? `vlib work\nvlog *.v\n# vsim work.top\n# add wave -r /*\n# run -all\n` : '';
+        : l === 'do' ? `vlib work\nvlog *.v\n# vsim work.top\n# add wave -r /*\n# run -all\n`
+          : l === 'python' ? `# cocotb test: vsim work.<top> -cocotb ${base}, then run -all\nimport cocotb\nfrom cocotb.clock import Clock\nfrom cocotb.triggers import ClockCycles, ReadOnly\n\n\n@cocotb.test()\nasync def smoke(dut):\n    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())\n    dut.rst.value = 1\n    await ClockCycles(dut.clk, 2)\n    dut.rst.value = 0\n    await ClockCycles(dut.clk, 5)\n    await ReadOnly()\n    dut._log.info("q = %s", dut.q.value)\n` : '';
     this.fs.write(n, tpl);
     this.project.sel = n;
     this.editors.open(n);
@@ -698,10 +699,13 @@ export class App {
     const res = h('select', { class: 'field' }, ['default', '1fs', '1ps', '10ps', '100ps', '1ns'].map(r => h('option', { value: r }, r)));
     const gen = h('input', { class: 'field', placeholder: t('e.g. WIDTH=8 DEPTH=16'), spellcheck: 'false' });
     const cov = h('input', { type: 'checkbox' });
+    const pyMods = this.fs.list().filter(f => /\.py$/i.test(f));
+    const py = h('select', { class: 'field' }, h('option', { value: '' }, t('(none)')), pyMods.map(f => h('option', { value: f.replace(/\.py$/i, ''), selected: f.replace(/\.py$/i, '') === this.session.lastVsim?.cocotb }, f)));
     const body = h('div', {}, list,
       h('label', { class: 'form-row' }, h('span', {}, t('Resolution')), res),
       h('label', { class: 'form-row' }, h('span', {}, t('Generics')), gen),
-      h('label', { class: 'form-row' }, h('span', {}, t('Coverage')), h('span', {}, cov, ' ', t('Enable code coverage (statement, branch, toggle)'))));
+      h('label', { class: 'form-row' }, h('span', {}, t('Coverage')), h('span', {}, cov, ' ', t('Enable code coverage (statement, branch, toggle)'))),
+      pyMods.length ? h('label', { class: 'form-row', title: t('Run the @cocotb.test() functions of this Python module against the design (Pyodide, about 13 MB on first use)') }, h('span', {}, t('cocotb tests')), py) : '');
     const r = await modal(t('Start Simulation'), body, [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }]);
     if (r !== 'ok' || !chosen) return;
     const parts = ['vsim'];
@@ -709,6 +713,7 @@ export class App {
     if (cov.checked) parts.push('-coverage');
     for (const g of gen.value.split(/\s+/).filter(Boolean)) parts.push(`-g${g}`);
     parts.push(`${chosen.lib}.${chosen.name}`);
+    if (py.value) parts.push('-cocotb', py.value);
     await this.cmd(parts.join(' '));
   }
 

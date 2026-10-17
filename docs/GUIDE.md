@@ -200,6 +200,24 @@ VHDL 은 9값 `std_logic`(U X 0 1 Z W L H -)과 해결 함수를 그대로 따�
 - **VCD 내보내기**: `vcd export wave.vcd` (파형 창 신호) / `vcd export -all all.vcd`. 설계 안의 `$dumpfile`/`$dumpvars` 도 지원합니다.
 - **VCD 가져오기**: 파일 ▸ VCD 파형 열기…, 프로젝트의 `.vcd` 더블 클릭, 또는 `vcd load wave.vcd` (`vsim -view wave.vcd`). 다른 시뮬레이터에서 만든 VCD 를 읽기 전용 데이터셋으로 열어 계층·오브젝트·파형·리스트에서 볼 수 있습니다. `quit -sim` 으로 닫습니다.
 
+### Python 테스트벤치 (cocotb 호환)
+
+[cocotb](https://www.cocotb.org/) 방식의 Python 테스트를 브라우저 안에서 실행합니다. Python 은 [Pyodide](https://pyodide.org/)(WebAssembly CPython, MPL-2.0, 첫 사용 시 약 13MB)로 시뮬레이션 워커에서 돌고, cocotb 의 공개 API 와 호환되는 WebSim 자체 구현(VPI 대신 커널에 직접 연결)이 제공됩니다. 예제는 **파일 ▸ 예제 불러오기 ▸ Python (cocotb) tests of the Verilog counter** 에 있습니다.
+
+```tcl
+vlog counter.v
+vsim work.counter -cocotb test_counter          ;# test_counter.py 의 @cocotb.test() 를 순서대로 실행
+vsim work.counter -cocotb tests/test_counter -testcase counts,wraps
+run -all                                        ;# 테스트가 모두 끝나면 결과 표를 출력하고 시뮬레이션 종료
+```
+
+- 테스트 모듈은 프로젝트의 `.py` 파일입니다(폴더 가능, 같은 프로젝트의 다른 `.py` 를 import 가능). 시작 대화상자의 **cocotb 테스트** 에서도 고를 수 있습니다.
+- 지원: `@cocotb.test(timeout_time=, timeout_unit=, expect_fail=, expect_error=, skip=)`, `cocotb.start_soon/start`, `Task`(await, `kill/cancel`, 결과값), `Clock(sig, period, unit).start()`(커널 안에서 토글), 트리거 `Timer`, `RisingEdge`, `FallingEdge`, `Edge/ValueChange`, `ClockCycles`, `ReadOnly`, `ReadWrite`, `NextTimeStep`, `First`, `Combine`, `Event`, `Lock`, `with_timeout`, `cocotb.queue.Queue`.
+- 핸들: `dut.sig.value` 읽기(`LogicArray`/`Logic`, VHDL integer 는 `int`) 와 쓰기(정수, 비트 문자열, `LogicArray`, `Force/Release/Deposit/Freeze`), `setimmediatevalue`, 계층 접근 `dut.u1.q`, generate 블록 `dut.g[1].x`, 메모리 `dut.mem[3].value`, `dut._log.info(...)`. 1.x 스타일(`units=`, `BinaryValue`, `.integer`, `.binstr`)도 받습니다.
+- 쓰기는 코루틴이 다음 `await` 에서 양보할 때 반영되고, `ReadOnly` 단계에서의 쓰기는 오류입니다. `ReadWrite` 는 활성·NBA 영역이 안정된 뒤 실행됩니다.
+- 실패한 `assert` 는 테스트 파일의 줄과 함께 트레이스백으로 표시되고, 결과는 `** cocotb: TESTS=n PASS=p FAIL=f SKIP=s` 로 요약됩니다. 실패가 있으면 `run` 명령이 오류를 반환합니다. 테스트가 기다리는 동안 이벤트가 끝나거나 `$finish` 가 실행되면 진행 중인 테스트는 실패합니다.
+- 실제 cocotb 패키지, pytest 기반 러너(`cocotb_tools.runner`), 파라미터화(`cocotb.parametrize`)와 UVM 은 포함하지 않습니다.
+
 ### 논리 합성 (Yosys)
 
 오픈소스 합성기 [Yosys](https://github.com/YosysHQ/yosys)(YoWASP WebAssembly 빌드, ISC 라이선스)를 브라우저 안에서 실행합니다. 처음 한 번 약 77MB 를 내려받으며 이후에는 브라우저 캐시를 씁니다.
@@ -261,6 +279,7 @@ pnr -device hx8k -package ct256 -pcf counter.pcf -freq 50
 |---|---|
 | `vsim [-t res] [-gName=Val] [-coverage] [-nodebug] [+nospecify] [lib.]top` | 설계 로드. `top` 은 모듈, 엔티티, `entity(arch)`, 구성(configuration) |
 | `vsim -view <file.vcd>` | VCD 를 읽기 전용으로 열기 |
+| `vsim top -cocotb <module> [-testcase a,b]` | 프로젝트의 Python 모듈에 있는 cocotb 테스트를 설계에 붙여 실행(`run -all`) |
 | `run [<time> [unit]]` / `run -all` / `run -continue` | 시뮬레이션 진행 (단위 생략 시 분해능 단위) |
 | `restart [-f]` | 0 시각으로 재시작 (파형 창 설정 유지) |
 | `quit -sim` | 설계 언로드 |

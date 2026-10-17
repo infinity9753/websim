@@ -83,7 +83,7 @@ export class RemoteSession {
   breakpoints: Breakpoint[] = [];
   fileStatus = new Map<string, 'ok' | 'error'>();
   compiledSources: { file: string; lang: 'verilog' | 'vhdl'; lib: string }[] = [];
-  lastVsim: { top: string; lib?: string } | null = null;
+  lastVsim: { top: string; lib?: string; cocotb?: string } | null = null;
   prompt = 'WebSim>';
   paused: { file: string; line: number; proc: string } | null = null;
   locals: { name: string; value: Vec; enumNames?: string[]; where: string }[] = [];

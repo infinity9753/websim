@@ -104,7 +104,7 @@ function flush() {
     sent = new Map();
     lastSentVal.clear(); forcedSent.clear();
     st.design = snapDesign();
-    st.lastVsim = session.lastVsim ? { top: session.lastVsim.top, lib: session.lastVsim.lib } : null;
+    st.lastVsim = session.lastVsim ? { top: session.lastVsim.top, lib: session.lastVsim.lib, cocotb: session.lastVsim.cocotb } : null;
     if (!ev.includes('sim')) st.events.push('sim');
   }
   if (d) {

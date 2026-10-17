@@ -287,9 +287,69 @@ run -all
 wave zoom full
 `;
 
+const cocotbPy = `# cocotb testbench (Python) for counter.v — runs in the browser with Pyodide.
+# Start it with "vsim work.counter -cocotb test_counter", then "run -all".
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
+
+
+async def reset(dut, cycles=2):
+    dut.rst.value = 1
+    dut.en.value = 0
+    await ClockCycles(dut.clk, cycles)
+    await FallingEdge(dut.clk)
+    dut.rst.value = 0
+
+
+@cocotb.test()
+async def counts_when_enabled(dut):
+    """q increments on every rising clock edge while en is high"""
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    await reset(dut)
+    dut.en.value = 1
+    for expected in range(1, 10):
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        assert dut.q.value == expected, f"q = {dut.q.value}, expected {expected}"
+    dut._log.info("q = %d after 9 cycles", dut.q.value.to_unsigned())
+
+
+@cocotb.test()
+async def holds_when_disabled(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    await reset(dut)
+    await ClockCycles(dut.clk, 3)
+    await ReadOnly()
+    assert dut.q.value == 0
+
+
+@cocotb.test()
+async def terminal_count(dut):
+    """tc is high exactly when q is all ones, and q wraps around to 0"""
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    await reset(dut)
+    dut.en.value = 1
+    for _ in range(16):
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        assert dut.tc.value == (dut.q.value == 15)
+    assert dut.q.value == 0
+`;
+
+const runCocotb = `# Python (cocotb) tests of the counter: the tests drive the clock and inputs
+vlib work
+vlog counter.v
+vsim work.counter -cocotb test_counter
+add wave /counter/*
+run -all
+wave zoom full
+`;
+
 export const EXAMPLES: Example[] = [
   { id: 'counter', title: 'Verilog counter + testbench', files: { 'counter.v': counterV, 'tb_counter.v': tbCounterV, 'run_counter.do': runCounter }, top: 'tb_counter', doFile: 'run_counter.do' },
   { id: 'updown', title: 'VHDL up/down counter + testbench', files: { 'updown.vhd': counterVhd, 'tb_updown.vhd': tbVhd, 'run_updown.do': runVhd }, top: 'tb_updown', doFile: 'run_updown.do' },
   { id: 'traffic', title: 'SystemVerilog FSM (traffic light)', files: { 'traffic.sv': fsmSv, 'run_traffic.do': runFsm }, top: 'tb_traffic', doFile: 'run_traffic.do' },
+  { id: 'cocotb', title: 'Python (cocotb) tests of the Verilog counter', files: { 'counter.v': counterV, 'test_counter.py': cocotbPy, 'run_cocotb.do': runCocotb }, top: 'counter', doFile: 'run_cocotb.do' },
   { id: 'alu', title: 'Mixed language: VHDL ALU + Verilog TB', files: { 'alu.vhd': aluVhd, 'tb_alu.v': aluTbV, 'run_alu.do': runAlu }, top: 'tb_alu', doFile: 'run_alu.do' },
 ];

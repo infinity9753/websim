@@ -12,6 +12,7 @@ import { listRows, listText } from './list';
 import { aggregate, coverageReport } from './coverage';
 import { synthesize, designFiles, placeAndRoute, ICE40_DEVICES, SYNTH_TARGETS, type SynthTarget } from './synth';
 import { fmtReal, vecToReal } from './elab';
+import { CocotbRun } from './cocotb';
 import type { Vec } from './logic';
 
 export interface VFS {
@@ -73,7 +74,9 @@ export class Session {
   history: string[] = [];
   running = false;
   promptN = 1;
-  lastVsim: { top: string; lib?: string; generics: Map<string, string>; res?: number } | null = null;
+  lastVsim: { top: string; lib?: string; generics: Map<string, string>; res?: number; cocotb?: string; testcases?: string[] } | null = null;
+  /** Python (cocotb) tests attached to the loaded design (vsim -cocotb). */
+  cocotb: CocotbRun | null = null;
   compiledSources: CompiledSrc[] = [];
   fileStatus = new Map<string, 'ok' | 'error'>();
   private listeners = new Map<Ev, Set<() => void>>();
@@ -184,6 +187,7 @@ export class Session {
       '  vlog [-work lib] <files...>        compile Verilog / SystemVerilog',
       '  vcom [-work lib] <files...>        compile VHDL',
       '  vsim [-t res] [-gN=V] [lib.]top    load a design',
+      '  vsim top -cocotb mod [-testcase t] run the cocotb tests in mod.py (Python, Pyodide)',
       '  run [<time>] | -all | -continue    advance simulation',
       '  restart [-f]                       back to time 0',
       '  quit -sim                          unload design',
@@ -322,8 +326,12 @@ export class Session {
     const generics = new Map<string, string>();
     let lib: string | undefined;
     let top: string | undefined;
+    let cocotb: string | undefined;
+    let testcases: string[] | undefined;
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
+      if (a === '-cocotb') { cocotb = args[++i]; if (!cocotb) throw new Error('vsim: -cocotb expects a Python test module'); continue; }
+      if (a === '-testcase') { testcases = (args[++i] ?? '').split(',').filter(Boolean); continue; }
       if (a === '-t') { const r = parseTime('1' + args[++i].replace(/^\d+/, ''), 1); res = r ?? undefined; const n = parseInt(args[i], 10); if (!isNaN(n) && r) res = n * r; continue; }
       if (a.startsWith('-g') || a.startsWith('-G')) { const [k, v] = a.slice(2).split('='); generics.set(k, v); continue; }
       if (a === '-lib') { lib = args[++i]; continue; }
@@ -338,10 +346,10 @@ export class Session {
     const sameTop = this.lastVsim?.top === top;
     if (this.design) this.quitSim(true);
     if (!sameTop) { this.waves = []; this.lists = []; }
-    this.load({ top, lib, generics, res });
+    return this.load({ top, lib, generics, res, cocotb, testcases });
   }
 
-  private load(o: { top: string; lib?: string; generics: Map<string, string>; res?: number }) {
+  private load(o: NonNullable<Session['lastVsim']>): Promise<boolean> | void {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
     const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
     let d: Design;
@@ -368,6 +376,15 @@ export class Session {
     this.emit('wave');
     this.emit('list');
     this.emit('time');
+    if (o.cocotb) return this.attachCocotb(d, o.cocotb, o.testcases ?? []);
+  }
+
+  private async attachCocotb(d: Design, module: string, testcases: string[]) {
+    const c = new CocotbRun(d, { out: (m, k) => this.out(m, k), read: n => this.fs.read(n), list: () => this.fs.list(), resolution: d.kernel.resolution });
+    this.cocotb = c;
+    if (await c.attach(module, testcases)) return true;
+    if (this.cocotb === c) { c.detach(); this.cocotb = null; }
+    return false;
   }
 
   private simPrint(s: string) {
@@ -380,6 +397,8 @@ export class Session {
   quitSim(silent = false) {
     if (!this.design) return;
     this.design.kernel.breakRequested = true;
+    this.cocotb?.detach();
+    this.cocotb = null;
     this.design = null;
     this.scope = null;
     for (const t of this.forceTimers) t.cancelled = true;
@@ -396,7 +415,7 @@ export class Session {
     const saved = this.waves;
     this.quitSim(true);
     this.waves = saved;
-    this.load(this.lastVsim);
+    return this.load(this.lastVsim);
   }
 
   requireDesign(): Design {
@@ -447,6 +466,11 @@ export class Session {
       this.running = false;
       this.emit('running');
     }
+    // cocotb ends the simulation when the tests are done; running out of events or $finish ends the tests
+    if (this.cocotb && (r === 'finished' || r === 'error' || (r === 'idle' && all))) {
+      this.cocotb.simEnded(r === 'idle' ? 'ran out of events' : r === 'error' ? 'stopped with an error' : 'finished');
+      if (r === 'idle') { k.finished = true; r = 'finished'; }
+    }
     switch (r) {
       case 'idle':
         if (!all) k.now = until;
@@ -469,6 +493,7 @@ export class Session {
     this.emit('time');
     const q = this.whenQueue; this.whenQueue = []; this.whenContinue = false;
     for (const c of q) await this.exec(c);
+    if ((r === 'finished' || r === 'error') && this.cocotb && this.cocotb.failures !== 0) return false;
   }
 
   // ------------------------------------------------------------ breakpoints / stepping

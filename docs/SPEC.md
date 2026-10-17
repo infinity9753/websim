@@ -61,6 +61,7 @@ A *project* groups source files, their compile order, and the default library.
 | `vlog [-work L] <files...>` | Compile Verilog files. |
 | `vcom [-work L] [-2008] <files...>` | Compile VHDL files. |
 | `vsim [-t <res>] [-g<name>=<v>] [lib.]top` | Elaborate and load. |
+| `vsim top -cocotb <module> [-testcase a,b]` | cocotb-compatible Python testbench: Pyodide (loaded on first use) imports `<module>.py` from the project and runs its `@cocotb.test()` coroutines from time 0, in order. Writes made by a coroutine are applied when it yields; triggers map to kernel regions (`Timer` → timed queue, edges → signal listeners, `ReadWrite` → a region after active/NBA settle, `ReadOnly` → postponed). The regression ends the simulation and prints a result table; `run` fails if a test failed. The cocotb API layer is WebSim's own implementation of the public cocotb API, not the cocotb package. |
 | `run [<n> [<unit>]] \| -all \| -continue` | Advance simulation. Default run length 100 ns. |
 | `restart [-f]` | Back to time 0, keep waves. |
 | `quit -sim` | Unload simulation. |

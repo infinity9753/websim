@@ -51,7 +51,7 @@ export interface PState {
   prompt?: string;
   history?: string[];
   defaultRadix?: Radix;
-  lastVsim?: { top: string; lib?: string } | null;
+  lastVsim?: { top: string; lib?: string; cocotb?: string } | null;
 }
 
 export type ToWorker =
