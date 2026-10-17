@@ -224,6 +224,7 @@ export class Session {
       else this.fileStatus.set(s.file, 'error');
     }
     this.emit('library');
+    this.emit('compiled');
   }
 
   // ------------------------------------------------------------ simulation

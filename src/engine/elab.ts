@@ -34,7 +34,7 @@ export type Sym =
   | { k: 'type'; t: RType }
   | { k: 'scope'; s: Scope };
 
-export interface ModInfo { lang: 'verilog' | 'vhdl'; unit: Unit; tsUnit: number; tsPrec: number; file: string; libName: string }
+export interface ModInfo { lang: 'verilog' | 'vhdl'; unit: Unit; arch?: string; tsUnit: number; tsPrec: number; file: string; libName: string }
 export interface ObjEntry { name: string; sig: Signal; dir: 'in' | 'out' | 'inout' | 'internal'; t: RType }
 
 export class Scope {
@@ -245,7 +245,7 @@ export class Elaborator {
     const lang = unit.lang;
     const ts = lang === 'verilog' ? unit.timescale ?? { unit: 1000, prec: 1000 } : { unit: 1, prec: 1 };
     if (lang === 'verilog') this.minPrec = Math.min(this.minPrec, ts.prec);
-    const mod: ModInfo = { lang, unit, tsUnit: ts.unit, tsPrec: ts.prec, file: (arch ?? unit).file, libName: found.libName };
+    const mod: ModInfo = { lang, unit, arch: arch?.name, tsUnit: ts.unit, tsPrec: ts.prec, file: (arch ?? unit).file, libName: found.libName };
     const path = parent ? `${parent.path}/${instName}` : `/${instName}`;
     const scope = new Scope(instName, path, null, parent, mod, 'instance');
     this.scopes.push(scope);

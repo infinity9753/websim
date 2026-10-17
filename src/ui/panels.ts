@@ -1,0 +1,358 @@
+// Project / Library / Structure / Objects / Processes panels.
+import { h, icon, clear, contextMenu } from './dom';
+import type { Session } from '../engine/commands';
+import type { Scope } from '../engine/elab';
+import * as L from '../engine/logic';
+import { langOf, type BrowserFS } from './vfs';
+import { DND_TYPE } from './wave';
+
+function bar(...items: (HTMLElement | string)[]) { return h('div', { class: 'subbar' }, ...items); }
+function tbtn(ic: string, title: string, f: () => void) { return h('button', { class: 'tb-btn', title, 'aria-label': title, onclick: f }, icon(ic)); }
+
+// ------------------------------------------------------------------ project
+
+export class ProjectPanel {
+  el: HTMLElement;
+  private tbody: HTMLElement;
+  sel: string | null = null;
+  onOpen?: (f: string) => void;
+  onCompile?: (files: string[]) => void;
+  onNew?: () => void;
+  onImport?: () => void;
+  onRename?: (f: string) => void;
+  onDelete?: (f: string) => void;
+  onExport?: (f: string) => void;
+  onRunDo?: (f: string) => void;
+
+  constructor(private fs: BrowserFS, private session: Session) {
+    this.tbody = h('tbody');
+    this.el = h('div', {},
+      bar(
+        tbtn('newfile', 'New file', () => this.onNew?.()),
+        tbtn('upload', 'Import files from disk', () => this.onImport?.()),
+        tbtn('download', 'Download selected file', () => this.sel && this.onExport?.(this.sel)),
+        tbtn('rename', 'Rename selected file', () => this.sel && this.onRename?.(this.sel)),
+        tbtn('trash', 'Remove selected file', () => this.sel && this.onDelete?.(this.sel)),
+        h('span', { class: 'tb-sep' }),
+        tbtn('up', 'Move up in compile order', () => { if (this.sel) { fs.move(this.sel, -1); this.render(); } }),
+        tbtn('down', 'Move down in compile order', () => { if (this.sel) { fs.move(this.sel, 1); this.render(); } }),
+        h('span', { class: 'tb-sep' }),
+        tbtn('compile', 'Compile selected', () => this.sel && this.onCompile?.([this.sel])),
+        tbtn('compileall', 'Compile all (in order)', () => this.onCompile?.(this.hdlFiles())),
+      ),
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', { title: 'Compile status' }, 'Status'), h('th', {}, 'Type'), h('th', { title: 'Compile order' }, 'Order'))),
+        this.tbody)));
+    fs.onChange(() => this.render());
+    session.on('compiled', () => this.render());
+    this.render();
+  }
+
+  hdlFiles() { return this.fs.list().filter(f => langOf(f) === 'verilog' || langOf(f) === 'vhdl'); }
+
+  render() {
+    clear(this.tbody);
+    const files = this.fs.list();
+    if (!files.length) {
+      this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No files. Use File ▸ New or Import.')));
+      return;
+    }
+    let order = 0;
+    for (const f of files) {
+      const lang = langOf(f);
+      const st = this.session.fileStatus.get(f);
+      const isHdl = lang === 'verilog' || lang === 'vhdl';
+      const row = h('tr', {
+        class: this.sel === f ? 'sel' : '',
+        onclick: () => { this.sel = f; this.render(); },
+        ondblclick: () => this.onOpen?.(f),
+        oncontextmenu: (e: MouseEvent) => {
+          e.preventDefault(); this.sel = f; this.render();
+          contextMenu(e.clientX, e.clientY, [
+            { label: 'Open', action: () => this.onOpen?.(f) },
+            ...(isHdl ? [{ label: 'Compile', action: () => this.onCompile?.([f]) }] : []),
+            ...(lang === 'do' ? [{ label: 'Execute script', action: () => this.onRunDo?.(f) }] : []),
+            { label: 'Compile all', action: () => this.onCompile?.(this.hdlFiles()) },
+            '-',
+            { label: 'Rename…', action: () => this.onRename?.(f) },
+            { label: 'Download', action: () => this.onExport?.(f) },
+            { label: 'Remove from project', action: () => this.onDelete?.(f) },
+          ]);
+        },
+      },
+        h('td', {}, f),
+        h('td', { class: st === 'ok' ? 'st-ok' : st === 'error' ? 'st-err' : 'st-none' }, isHdl ? (st === 'ok' ? '✓' : st === 'error' ? '✗' : '?') : ''),
+        h('td', { class: 'kind' }, lang === 'verilog' ? (/\.sv$/i.test(f) ? 'SystemVerilog' : 'Verilog') : lang === 'vhdl' ? 'VHDL' : lang === 'do' ? 'Macro' : 'Text'),
+        h('td', { class: 'kind' }, isHdl ? String(order++) : ''));
+      this.tbody.appendChild(row);
+    }
+  }
+}
+
+// ------------------------------------------------------------------ library
+
+export class LibraryPanel {
+  el: HTMLElement;
+  private tbody: HTMLElement;
+  private collapsed = new Set<string>();
+  sel: string | null = null;
+  onSimulate?: (lib: string, unit: string) => void;
+  onOpenFile?: (file: string) => void;
+
+  constructor(private session: Session) {
+    this.tbody = h('tbody');
+    this.el = h('div', {},
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Type'), h('th', {}, 'Path'))),
+        this.tbody)));
+    session.on('library', () => this.render());
+    this.render();
+  }
+
+  render() {
+    clear(this.tbody);
+    for (const [name, lib] of this.session.libs.libs) {
+      const open = !this.collapsed.has(name);
+      const units = lib.list();
+      this.tbody.appendChild(h('tr', { ondblclick: () => this.toggle(name) },
+        h('td', {}, h('span', { class: 'tree-toggle', onclick: () => this.toggle(name) }, units.length ? (open ? '▾' : '▸') : ''), icon('lib'), ' ', name),
+        h('td', { class: 'kind' }, 'Library'),
+        h('td', { class: 'kind' }, name === 'work' ? '$WORK' : name)));
+      if (!open) continue;
+      for (const u of units) {
+        const key = `${name}.${u.name}.${u.kind}`;
+        const simable = u.kind === 'module' || u.kind === 'entity';
+        const label = u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name;
+        this.tbody.appendChild(h('tr', {
+          class: this.sel === key ? 'sel' : '',
+          title: simable ? 'Double-click to simulate' : '',
+          onclick: () => { this.sel = key; this.render(); },
+          ondblclick: () => { if (simable) this.onSimulate?.(name, u.name); else if (u.kind === 'architecture') this.onSimulate?.(name, `${u.of}(${u.name})`); },
+          oncontextmenu: (e: MouseEvent) => {
+            e.preventDefault(); this.sel = key; this.render();
+            contextMenu(e.clientX, e.clientY, [
+              { label: 'Simulate', disabled: !simable && u.kind !== 'architecture', action: () => this.onSimulate?.(name, u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name) },
+              { label: 'Edit source', action: () => this.onOpenFile?.(u.file) },
+              { label: 'Delete', action: () => { void this.session.exec(`vdel -lib ${name} ${u.name}`); } },
+            ]);
+          },
+        },
+          h('td', { style: { paddingLeft: '26px' } }, label),
+          h('td', { class: 'kind' }, kindLabel(u.kind, u.lang)),
+          h('td', { class: 'kind' }, u.file)));
+      }
+    }
+  }
+
+  toggle(n: string) { if (this.collapsed.has(n)) this.collapsed.delete(n); else this.collapsed.add(n); this.render(); }
+}
+
+function kindLabel(k: string, lang: string) {
+  switch (k) {
+    case 'module': return 'Module';
+    case 'entity': return 'Entity';
+    case 'architecture': return 'Architecture';
+    case 'package': return 'Package';
+    case 'package_body': return 'Package body';
+  }
+  return lang;
+}
+
+// ------------------------------------------------------------------ structure (sim)
+
+export class StructurePanel {
+  el: HTMLElement;
+  private tbody: HTMLElement;
+  private collapsed = new Set<string>();
+
+  constructor(private session: Session) {
+    this.tbody = h('tbody');
+    this.el = h('div', {},
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Instance'), h('th', {}, 'Design unit'), h('th', {}, 'Type'))),
+        this.tbody)));
+    session.on('sim', () => this.render());
+    session.on('scope', () => this.render());
+    this.render();
+  }
+
+  render() {
+    clear(this.tbody);
+    const d = this.session.design;
+    if (!d) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No design loaded.'))); return; }
+    const rows: HTMLElement[] = [];
+    const visit = (s: Scope, depth: number) => {
+      const open = !this.collapsed.has(s.path);
+      const isInst = s.kind === 'instance';
+      const unit = s.mod.unit;
+      rows.push(h('tr', {
+        class: this.session.scope === s ? 'sel' : '',
+        onclick: () => this.session.setScope(s),
+        ondblclick: () => this.toggle(s.path),
+        oncontextmenu: (e: MouseEvent) => {
+          e.preventDefault(); this.session.setScope(s);
+          contextMenu(e.clientX, e.clientY, [
+            { label: 'Add signals of this region to wave', action: () => { void this.session.exec(`add wave ${s.path}/*`); } },
+            { label: 'Add recursively to wave', action: () => { void this.session.exec(`add wave -r ${s.path}/*`); } },
+          ]);
+        },
+      },
+        h('td', { style: { paddingLeft: 4 + depth * 14 + 'px' } },
+          h('span', { class: 'tree-toggle', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggle(s.path); } }, s.children.length ? (open ? '▾' : '▸') : ''),
+          isInst ? icon('chip') : '', ' ', s.name),
+        h('td', { class: 'kind' }, isInst ? `${unit.name}${s.mod.arch ? `(${s.mod.arch})` : ''}` : ''),
+        h('td', { class: 'kind' }, isInst ? (unit.lang === 'vhdl' ? 'Architecture' : 'Module') : 'Generate')));
+      if (open) for (const c of s.children) visit(c, depth + 1);
+    };
+    visit(d.root, 0);
+    this.tbody.append(...rows);
+  }
+
+  toggle(p: string) { if (this.collapsed.has(p)) this.collapsed.delete(p); else this.collapsed.add(p); this.render(); }
+}
+
+// ------------------------------------------------------------------ objects
+
+export class ObjectsPanel {
+  el: HTMLElement;
+  private tbody: HTMLElement;
+  private filter: HTMLInputElement;
+  private sel = new Set<string>();
+  private valueCells = new Map<string, HTMLElement>();
+  onForce?: (path: string) => void;
+
+  constructor(private session: Session) {
+    this.tbody = h('tbody');
+    this.filter = h('input', { type: 'search', class: 'tb-field', placeholder: 'Filter', style: { width: '110px' }, 'aria-label': 'Filter objects', oninput: () => this.render() });
+    this.el = h('div', {},
+      bar(
+        tbtn('addwave', 'Add selected to wave (or all if none selected)', () => this.addToWave()),
+        h('span', { class: 'grow' }),
+        this.filter),
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Kind'), h('th', {}, 'Mode'))),
+        this.tbody)));
+    session.on('sim', () => { this.sel.clear(); this.render(); });
+    session.on('scope', () => { this.sel.clear(); this.render(); });
+    session.on('time', () => this.updateValues());
+    this.render();
+  }
+
+  private pathOf(s: Scope, name: string) { return `${s.path}/${name}`; }
+
+  addToWave() {
+    const s = this.session.scope;
+    if (!s) return;
+    const paths = this.sel.size ? [...this.sel] : s.objects.map(o => this.pathOf(s, o.name));
+    this.session.addWavePaths(paths);
+  }
+
+  render() {
+    clear(this.tbody);
+    this.valueCells.clear();
+    const s = this.session.scope;
+    if (!s) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    const f = this.filter.value.trim().toLowerCase();
+    for (const o of s.objects) {
+      if (f && !o.name.toLowerCase().includes(f)) continue;
+      const path = this.pathOf(s, o.name);
+      const val = h('td', { class: 'mono' });
+      this.valueCells.set(path, val);
+      const row = h('tr', {
+        class: this.sel.has(path) ? 'sel' : '',
+        draggable: 'true',
+        title: path,
+        onclick: (e: MouseEvent) => {
+          if (e.ctrlKey || e.metaKey) { if (this.sel.has(path)) this.sel.delete(path); else this.sel.add(path); }
+          else this.sel = new Set([path]);
+          this.render();
+        },
+        ondblclick: () => this.session.addWavePaths([path]),
+        ondragstart: (e: DragEvent) => {
+          const paths = this.sel.has(path) ? [...this.sel] : [path];
+          e.dataTransfer!.setData(DND_TYPE, JSON.stringify(paths));
+          e.dataTransfer!.setData('text/plain', paths.join(' '));
+          e.dataTransfer!.effectAllowed = 'copy';
+        },
+        oncontextmenu: (e: MouseEvent) => {
+          e.preventDefault();
+          if (!this.sel.has(path)) { this.sel = new Set([path]); this.render(); }
+          contextMenu(e.clientX, e.clientY, [
+            { label: 'Add to Wave', action: () => this.session.addWavePaths([...this.sel]) },
+            { label: 'Force…', action: () => this.onForce?.(path) },
+            { label: 'NoForce', action: () => { void this.session.exec(`noforce ${path}`); }, disabled: !o.sig.forced },
+            { label: 'Examine', action: () => { void this.session.exec(`examine ${path}`); } },
+          ]);
+        },
+      },
+        h('td', {}, o.sig.forced ? h('span', { title: 'Forced' }, o.name, ' ⚑') : o.name),
+        val,
+        h('td', { class: 'kind' }, kindOf(s, o.sig)),
+        h('td', { class: 'kind' }, o.dir === 'in' ? 'In' : o.dir === 'out' ? 'Out' : o.dir === 'inout' ? 'InOut' : 'Internal'));
+      this.tbody.appendChild(row);
+    }
+    for (const m of s.memories) {
+      if (f && !m.name.toLowerCase().includes(f)) continue;
+      this.tbody.appendChild(h('tr', { title: `${s.path}/${m.name}` },
+        h('td', {}, m.name), h('td', { class: 'mono kind' }, `[${m.mem.lo}:${m.mem.hi}] × ${m.mem.w}b`), h('td', { class: 'kind' }, 'Memory'), h('td', { class: 'kind' }, 'Internal')));
+    }
+    if (!this.tbody.children.length) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No objects in this region.')));
+    this.updateValues();
+  }
+
+  updateValues() {
+    const s = this.session.scope;
+    if (!s) return;
+    for (const o of s.objects) {
+      const cell = this.valueCells.get(this.pathOf(s, o.name));
+      if (!cell) continue;
+      const radix = this.session.defaultRadix === 'binary' && o.sig.w > 16 ? 'hex' : this.session.defaultRadix;
+      const txt = L.format(o.sig.value, radix, o.sig.enumNames);
+      if (cell.textContent !== txt) cell.textContent = txt;
+    }
+  }
+}
+
+function kindOf(s: Scope, sig: import('../engine/kernel').Signal): string {
+  const base = sig.enumNames ? 'Enum' : s.mod.lang === 'vhdl' ? 'Signal' : sig.drivers?.length ? 'Net' : 'Reg';
+  return sig.w > 1 || sig.msb !== 0 ? `${base} [${sig.msb}:${sig.lsb}]` : base;
+}
+
+// ------------------------------------------------------------------ processes
+
+export class ProcessesPanel {
+  el: HTMLElement;
+  private tbody: HTMLElement;
+  private all: HTMLInputElement;
+
+  constructor(private session: Session) {
+    this.tbody = h('tbody');
+    this.all = h('input', { type: 'checkbox', onchange: () => this.render() });
+    this.el = h('div', {},
+      bar(h('label', { class: 'hint' }, this.all, ' Show all regions')),
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Region'), h('th', {}, 'State'), h('th', {}, 'Source'))),
+        this.tbody)));
+    session.on('sim', () => this.render());
+    session.on('scope', () => this.render());
+    session.on('time', () => this.render());
+    this.render();
+  }
+
+  render() {
+    clear(this.tbody);
+    const d = this.session.design;
+    if (!d) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    const scopes = this.all.checked ? d.allScopes : this.session.scope ? [this.session.scope] : [];
+    let n = 0;
+    for (const s of scopes) for (const p of s.procs) {
+      if (++n > 2000) break;
+      this.tbody.appendChild(h('tr', {},
+        h('td', {}, p.info.name),
+        h('td', { class: 'kind' }, p.info.scope),
+        h('td', { class: 'kind' }, p.done ? 'Done' : !p.gen ? 'Ready' : 'Wait'),
+        h('td', { class: 'kind' }, p.info.file ? `${p.info.file}:${p.info.line}` : '')));
+    }
+    if (!n) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No processes in this region.')));
+  }
+}
