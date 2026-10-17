@@ -2,3 +2,5 @@ node_modules
 dist
 *.log
 dist-bench
+test-results/
+playwright-report/

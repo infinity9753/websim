@@ -8,12 +8,14 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc",
-    "bench": "esbuild bench/lfsr.ts --bundle --platform=node --format=esm --outfile=dist-bench/lfsr.mjs --log-level=warning && node dist-bench/lfsr.mjs"
+    "bench": "esbuild bench/lfsr.ts --bundle --platform=node --format=esm --outfile=dist-bench/lfsr.mjs --log-level=warning && node dist-bench/lfsr.mjs",
+    "test:e2e": "vite build && playwright test"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "playwright": "^1.64.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",

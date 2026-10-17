@@ -21,6 +21,7 @@ assets from any commercial simulator and is not affiliated with any vendor.
 npm install
 npm run dev      # open the printed URL
 npm test         # engine test suite (Vitest)
+npm run test:e2e # UI end-to-end tests (Playwright; run "npx playwright install chromium" once)
 npm run build    # static site in dist/ (deployable anywhere, e.g. GitHub Pages)
 ```
 
