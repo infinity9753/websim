@@ -2,7 +2,7 @@
 import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
-import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, type Tx, type Wait, type KernelHost, type ProcInfo } from './kernel';
+import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
 import { expandFormat, fmtTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
 
@@ -275,7 +275,7 @@ export class Elaborator {
     for (const sig of sigs) {
       if (sig.drivers && sig.drivers.length) sig.value = resolveDrivers(sig);
       sig.prev = sig.value;
-      sig.times = [0]; sig.vals = [sig.value];
+      sig.times = [0]; sig.hv = [packVal(sig.value)];
     }
     this.k.signals = [...sigs];
     const prec = this.minPrec === Infinity ? 1e6 : this.minPrec;
@@ -2101,6 +2101,14 @@ export class Elaborator {
     c.proc = { name: pname, scope: scope.path, file: it.loc?.file, line };
     if (lang === 'vhdl') { c.driverMode = true; c.deferred = true; }
     const k = this.k;
+    const loop = this.loopSpec(it, scope, c);
+    if (loop) {
+      const lp = new Process(k, c.proc, () => { throw new Error('loop process'); });
+      lp.loop = loop;
+      scope.procs.push(lp);
+      k.addProcess(lp);
+      return;
+    }
     let start: () => Gen;
     const needReads = it.kind === 'always_comb' || it.kind === 'always_latch' || (it.kind === 'vproc' && it.sens === 'all');
     if (needReads) c.reads = new Set();
@@ -2141,6 +2149,67 @@ export class Elaborator {
     const p = new Process(k, c.proc, start!);
     scope.procs.push(p);
     k.addProcess(p);
+  }
+
+  /**
+   * Recognise processes of the form "wait on a fixed sensitivity, run body" and
+   * compile them as loop processes (callbacks instead of generators).
+   */
+  loopSpec(it: Extract<Item, { k: 'process' }>, scope: Scope, c: Ctx): LoopSpec | null {
+    const compileBody = (body: Stmt, reads?: Set<Signal | Memory>) => {
+      // fast: no debug hooks; slow: hooked (for breakpoints/stepping) or needed because the body can suspend
+      const dbg = this.opts.debug;
+      this.opts.debug = false;
+      const fast = this.st(body, { ...c, reads });
+      this.opts.debug = dbg;
+      const slow = dbg ? this.st(body, c) : fast;
+      return { fast: fast.sync ?? null, slow: asGen(slow.sync && !dbg ? fast : slow) };
+    };
+    if ((it.kind === 'always' || it.kind === 'always_ff') && it.body.k === 'delay' && it.body.body) {
+      // always #d stmt  (clock generators)
+      const b = compileBody(it.body.body);
+      const d = this.delayFn(it.body.d, c);
+      return { sigs: [], delay: d, fast: b.fast, slow: b.slow, runFirst: false };
+    }
+    if ((it.kind === 'always' || it.kind === 'always_ff') && it.body.k === 'event' && it.body.body) {
+      const ev = it.body;
+      if (ev.items === '*') {
+        const reads = new Set<Signal | Memory>();
+        const b = compileBody(ev.body!, reads);
+        return { sigs: [...reads], fast: b.fast, slow: b.slow, runFirst: false };
+      }
+      const parts: { sig: Signal; edge: SensItem['edge'] }[] = [];
+      for (const item of ev.items) {
+        const n = this.ex(item.expr, { ...c, reads: new Set() });
+        if (!n.sig) return null; // complex event expressions keep the generic path
+        parts.push({ sig: n.sig, edge: item.edge });
+      }
+      const b = compileBody(ev.body!);
+      const test = (s: Signal | Memory) => {
+        for (const p of parts) {
+          if (p.sig !== s) continue;
+          if (p.edge === 'any') return true;
+          const o = p.sig.prev.bit(0), nv = p.sig.value.bit(0);
+          if (p.edge === 'pos' ? isPos(o, nv) : isNeg(o, nv)) return true;
+        }
+        return false;
+      };
+      return { sigs: [...new Set(parts.map(p => p.sig))], test, fast: b.fast, slow: b.slow, runFirst: false };
+    }
+    const comb = it.kind === 'always_comb' || it.kind === 'always_latch' || (it.kind === 'vproc' && (it.sens === 'all' || (it.sens && it.sens.length)));
+    if (!comb) return null;
+    let reads: Set<Signal | Memory> | undefined;
+    if (it.kind !== 'vproc' || it.sens === 'all') reads = new Set();
+    const b = compileBody(it.body, reads);
+    let sigs: (Signal | Memory)[];
+    if (reads) sigs = [...reads];
+    else {
+      const sc = { ...this.ctx(scope, c.owner), reads: new Set<Signal | Memory>() };
+      for (const e of it.sens as Expr[]) this.ex(e, sc);
+      sigs = [...sc.reads];
+    }
+    if (this.hasTiming(it.body, scope)) err(`(vcom-1253) A process with a sensitivity list cannot contain wait statements.`, it.loc);
+    return { sigs, fast: b.fast, slow: b.slow, runFirst: true };
   }
 
   // ---------------------------------------------------------- statements

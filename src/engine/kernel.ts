@@ -15,7 +15,8 @@ export class Signal {
   forced: Vec | null = null;
   listeners: Set<Waker> | null = null;
   times: number[] = [];
-  vals: Vec[] = [];
+  /** Recorded values: small fully-known values are stored as plain integers (cheap for the GC). */
+  hv: (Vec | number)[] = [];
   enumNames?: string[];
   kind: 'in' | 'out' | 'inout' | 'internal' = 'internal';
   isReal = false;
@@ -45,17 +46,32 @@ export class Signal {
     return i <= this.lsb && i >= this.msb ? this.lsb - i : -1;
   }
 
+  /** Recorded value i as a vector. */
+  valAt(i: number): Vec {
+    const x = this.hv[i];
+    return typeof x === 'number' ? new Vec(this.w, BigInt(x), 0n, this.signed) : x;
+  }
+
+  /** All recorded values as vectors (convenience; allocates). */
+  get vals(): Vec[] { return this.hv.map((_, i) => this.valAt(i)); }
+  set vals(v: Vec[]) { this.hv = v.map(x => packVal(x)); }
+
   /** Value at a given time (from the recorded history). */
   valueAt(t: number): Vec {
     const ts = this.times;
-    if (ts.length === 0 || t < ts[0]) return this.vals.length ? this.vals[0] : this.value;
+    if (ts.length === 0 || t < ts[0]) return this.hv.length ? this.valAt(0) : this.value;
     let lo = 0, hi = ts.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (ts[mid] <= t) lo = mid; else hi = mid - 1;
     }
-    return this.vals[lo];
+    return this.valAt(lo);
   }
+}
+
+/** Compact history entry: known values up to 52 bits become plain numbers. */
+export function packVal(v: Vec): Vec | number {
+  return v.w <= 52 && v.b === 0n && v.u === 0n && v.k === 0n ? Number(v.a) : v;
 }
 
 export class Memory {
@@ -104,13 +120,38 @@ export class StopProcEx { }
 
 export interface ProcInfo { name: string; scope: string; file?: string; line?: number }
 
+/**
+ * A process that repeatedly waits on a fixed sensitivity and runs a body
+ * (always @(...), always_comb, VHDL processes with a sensitivity list).
+ * It runs as a plain callback on a persistent listener; when debugging is
+ * active (or the body can suspend) an activation runs as a generator.
+ */
+export interface LoopSpec {
+  sigs: (Signal | Memory)[];
+  /** Does the change of this signal trigger the process? (edges) */
+  test?: (s: Signal | Memory) => boolean;
+  fast: (() => void) | null;
+  slow: (() => Generator<Wait, void, void>) | null;
+  /** Run the body once at time 0 before the first wait (always_comb / VHDL). */
+  runFirst: boolean;
+  /** Periodic process (always #d stmt): wait this long instead of on signals. */
+  delay?: () => number;
+}
+
 export class Process {
   gen: Generator<Wait, void, void> | null = null;
   done = false;
   waitingOn: (Signal | Memory)[] | null = null;
   waker: Waker | null = null;
   timer: { cancelled: boolean } | null = null;
-  constructor(public k: Kernel, public info: ProcInfo, public start: () => Generator<Wait, void, void>) {}
+  loop?: LoopSpec;
+  started = false;
+  armed = false;
+  listening = false;
+  wake: () => void;
+  constructor(public k: Kernel, public info: ProcInfo, public start: () => Generator<Wait, void, void>) {
+    this.wake = () => k.resume(this);
+  }
 }
 
 interface TimedEvent { fn: () => void; nba: boolean }
@@ -255,20 +296,26 @@ export class Kernel {
     const ts = sig.times;
     if (!sig.logged) { /* value only */ }
     else if (ts.length && ts[ts.length - 1] === this.now) {
-      sig.vals[sig.vals.length - 1] = v;
+      const hv = sig.hv;
+      const pv = packVal(v);
+      hv[hv.length - 1] = pv;
       // collapse no-op glitch inside one time step
-      if (sig.vals.length > 1 && sig.vals[sig.vals.length - 2].equals(v)) { ts.pop(); sig.vals.pop(); }
+      if (hv.length > 1) {
+        const q = hv[hv.length - 2];
+        if (typeof pv === 'number' ? q === pv : typeof q !== 'number' && q.equals(v)) { ts.pop(); hv.pop(); }
+      }
     } else {
-      ts.push(this.now); sig.vals.push(v);
+      ts.push(this.now); sig.hv.push(packVal(v));
       if (ts.length > this.histCap) {
         // keep the most recent half; older waveform data is dropped
         const drop = ts.length - (this.histCap >> 1);
-        ts.splice(0, drop); sig.vals.splice(0, drop);
+        ts.splice(0, drop); sig.hv.splice(0, drop);
         sig.histEpoch++;
         this.histTrimmed++;
       }
     }
-    if (sig.listeners) for (const l of [...sig.listeners]) l(sig);
+    // deleting the current entry during Set iteration is safe; wakers never add listeners synchronously
+    if (sig.listeners) for (const l of sig.listeners) l(sig);
   }
 
   updateDriver(d: Driver, v: Vec) {
@@ -284,7 +331,7 @@ export class Kernel {
     const old = m.words[idx];
     if (old.a === v.a && old.b === v.b && old.u === v.u && old.k === v.k) return;
     m.words[idx] = v;
-    if (m.listeners) for (const l of [...m.listeners]) l(m);
+    if (m.listeners) for (const l of m.listeners) l(m);
   }
 
   /** Run `fn` once, the next time a sensitivity wait is satisfied (no process is suspended). */
@@ -325,35 +372,82 @@ export class Kernel {
 
   resume(p: Process) {
     if (p.done) return;
+    if (p.loop) { this.resumeLoop(p, p.loop); return; }
     if (!p.gen) p.gen = p.start();
+    this.step(p);
+  }
+
+  private resumeLoop(p: Process, l: LoopSpec) {
+    if (!p.gen) {
+      if (!p.started) { p.started = true; if (!l.runFirst) { this.arm(p, l); return; } }
+      if (l.fast && !this.dbgOn) {
+        this.current = p;
+        this.ops = 0;
+        try { l.fast(); } catch (e) { this.current = null; this.fail(p, e); return; }
+        this.current = null;
+        this.arm(p, l);
+        return;
+      }
+      p.gen = l.slow!();
+    }
+    if (this.step(p)) { p.gen = null; p.done = false; this.arm(p, l); }
+  }
+
+  private arm(p: Process, l: LoopSpec) {
+    if (l.delay) {
+      const d = l.delay();
+      if (d <= 0) this.inactive.push(p.wake); else this.schedule(this.now + d, p.wake);
+      return;
+    }
+    if (!l.sigs.length) { p.done = true; return; }
+    if (!p.listening) {
+      p.listening = true;
+      const waker: Waker = (s) => {
+        if (!p.armed || p.done) return;
+        if (l.test && !l.test(s)) return;
+        p.armed = false;
+        this.active.push(p.wake);
+      };
+      for (const s of l.sigs) this.listen(s, waker);
+    }
+    p.armed = true;
+  }
+
+  private fail(p: Process, e: unknown) {
+    p.done = true;
+    if (e instanceof FinishEx) { this.finished = true; return; }
+    if (e instanceof StopProcEx) return;
+    this.errorMsg = `${(e as Error)?.message ?? String(e)} (process ${p.info.scope}/${p.info.name})`;
+  }
+
+  /** Advance a process generator to its next wait; returns true when the generator finished. */
+  private step(p: Process): boolean {
     this.current = p;
     this.ops = 0;
     let r: IteratorResult<Wait, void>;
     try {
-      r = p.gen.next();
+      r = p.gen!.next();
     } catch (e) {
       this.current = null;
-      p.done = true;
-      if (e instanceof FinishEx) { this.finished = true; return; }
-      if (e instanceof StopProcEx) return;
-      this.errorMsg = `${(e as Error)?.message ?? String(e)} (process ${p.info.scope}/${p.info.name})`;
-      return;
+      p.gen = null;
+      this.fail(p, e);
+      return false;
     }
     this.current = null;
-    if (r.done) { p.done = true; return; }
+    if (r.done) { p.done = true; return true; }
     const w = r.value;
     switch (w.t) {
       case 'delay':
-        if (w.d <= 0) this.inactive.push(() => this.resume(p));
-        else this.schedule(this.now + w.d, () => this.resume(p));
-        return;
+        if (w.d <= 0) this.inactive.push(p.wake);
+        else this.schedule(this.now + w.d, p.wake);
+        return false;
       case 'sens': {
         const timer = w.timeout !== undefined ? { cancelled: false } : null;
         const waker: Waker = () => {
           if (w.test && !w.test()) return;
           for (const s of w.sigs) this.unlisten(s, waker);
           if (timer) timer.cancelled = true;
-          this.activate(() => this.resume(p));
+          this.active.push(p.wake);
         };
         for (const s of w.sigs) this.listen(s, waker);
         if (timer) {
@@ -363,16 +457,17 @@ export class Kernel {
             this.resume(p);
           });
         }
-        return;
+        return false;
       }
       case 'stop':
         this.stopRequested = true;
-        this.activate(() => this.resume(p));
-        return;
+        this.active.push(p.wake);
+        return false;
       case 'done':
         p.done = true;
-        return;
+        return false;
     }
+    return false;
   }
 
   // ---------- main loop ----------
@@ -380,6 +475,7 @@ export class Kernel {
   run(until: number, budgetMs = 50): RunResult {
     const t0 = Date.now();
     this.started = true;
+    let n = 0;
     for (;;) {
       if (this.finished) return 'finished';
       const r = this.settle();
@@ -389,7 +485,7 @@ export class Kernel {
       const next = this.heap.peek();
       if (next > until) { this.now = until; return 'paused'; }
       if (this.breakRequested) { this.breakRequested = false; return 'stopped'; }
-      if (Date.now() - t0 > budgetMs) return 'budget';
+      if ((++n & 255) === 0 && Date.now() - t0 > budgetMs) return 'budget';
       this.heap.pop();
       this.now = next;
       this.deltaCount = 0;

@@ -7,7 +7,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "bench": "esbuild bench/lfsr.ts --bundle --platform=node --format=esm --outfile=dist-bench/lfsr.mjs --log-level=warning && node dist-bench/lfsr.mjs"
   },
   "keywords": [],
   "author": "",

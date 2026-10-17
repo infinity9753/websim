@@ -139,3 +139,40 @@ describe('when (#16)', () => {
     expect(s.design!.kernel.finished).toBe(true);
   });
 });
+
+describe('debugging inside loop processes (#30)', () => {
+  it('stops at breakpoints in always @(posedge) and VHDL sensitivity-list processes', async () => {
+    const f: Record<string, string> = {
+      'c.v': `\`timescale 1ns/1ns
+module c; reg clk = 0; reg [3:0] q = 0;
+  always #5 clk = ~clk;
+  always @(posedge clk) begin
+    q <= q + 1;
+  end
+endmodule`,
+      'p.vhd': `library ieee; use ieee.std_logic_1164.all;
+entity p is end;
+architecture a of p is
+  signal clk : std_logic := '0'; signal n : integer := 0;
+begin
+  clk <= not clk after 5 ns;
+  process (clk) begin
+    if rising_edge(clk) then
+      n <= n + 1;
+    end if;
+  end process;
+end;`,
+    };
+    const s = new Session({ read: n => f[n], list: () => Object.keys(f) }, () => {});
+    await s.exec('vlog c.v; vsim c; bp c.v 5; run -all');
+    expect(s.paused?.line).toBe(5);
+    expect(s.now).toBe(5e6);
+    await s.exec('run -all');
+    expect(s.now).toBe(15e6);
+    await s.exec('bd all; run 100');
+    expect(s.paused).toBeNull();
+    await s.exec('vcom p.vhd; vsim p; bp p.vhd 9; run -all');
+    expect(s.paused?.line).toBe(9);
+    expect(s.now).toBe(5e6);
+  });
+});

@@ -70,15 +70,17 @@ function histDeltas(): PHist[] {
     if (epochs.get(s.id) !== s.histEpoch) { epochs.set(s.id, s.histEpoch); if (s.histEpoch) was = 0; }
     // always resend the last entry we sent: it may have been overwritten within the same time step
     const from = Math.max(0, Math.min(was - 1, n));
-    if (n === was && was > 0 && s.vals[n - 1] === lastSentVal.get(s.id) && !s.forced === !forcedSent.get(s.id)) continue;
-    out.push({ id: s.id, from, t: s.times.slice(from), v: s.vals.slice(from).map(pv), forced: !!s.forced, value: pv(s.value) });
+    if (n === was && was > 0 && s.hv[n - 1] === lastSentVal.get(s.id) && !s.forced === !forcedSent.get(s.id)) continue;
+    const v: PVec[] = [];
+    for (let i = from; i < n; i++) v.push(pv(s.valAt(i)));
+    out.push({ id: s.id, from, t: s.times.slice(from), v, forced: !!s.forced, value: pv(s.value) });
     sent.set(s.id, n);
-    lastSentVal.set(s.id, s.vals[n - 1]);
+    lastSentVal.set(s.id, s.hv[n - 1]);
     forcedSent.set(s.id, !!s.forced);
   }
   return out;
 }
-const lastSentVal = new Map<number, Vec>();
+const lastSentVal = new Map<number, Vec | number>();
 const epochs = new Map<number, number>();
 const forcedSent = new Map<number, boolean>();
 

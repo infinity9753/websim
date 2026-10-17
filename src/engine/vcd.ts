@@ -80,12 +80,12 @@ export function writeVcd(vars: VcdVar[], endTime: number, opts: { date?: string;
       if (i === 0 && t === 0) continue; // initial values go to $dumpvars
       let l = byTime.get(t);
       if (!l) { l = []; byTime.set(t, l); }
-      l.push(valueLine(s, s.vals[i], id));
+      l.push(valueLine(s, s.valAt(i), id));
     }
   }
   out.push('#0');
   out.push('$dumpvars');
-  for (const s of sigs) out.push(valueLine(s, s.vals.length ? s.vals[0] : s.value, ids.get(s)!));
+  for (const s of sigs) out.push(valueLine(s, s.hv.length ? s.valAt(0) : s.value, ids.get(s)!));
   out.push('$end');
   const times = [...byTime.keys()].sort((a, b) => a - b);
   for (const t of times) {
