@@ -6,6 +6,8 @@ import type { MsgKind, Breakpoint } from '../engine/commands';
 import type { UnitInfo } from '../engine/library';
 import type { FromWorker, PScope, PState, PVec, ToWorker } from '../engine/protocol';
 import { fmtTime } from '../engine/format';
+import { fmtReal, vecToReal } from '../engine/elab';
+import * as L from '../engine/logic';
 import { globRe } from '../engine/commands';
 import type { BrowserFS } from './vfs';
 
@@ -18,6 +20,7 @@ export class MSignal {
   vals: Vec[] = [];
   forced: Vec | null = null;
   drivers: unknown[] | null;
+  isReal = false;
   constructor(public id: number, public path: string, public name: string, public w: number, public msb: number, public lsb: number, public signed: boolean, public enumNames: string[] | undefined, driven: boolean) {
     this.value = new Vec(w, 0n, 0n);
     this.prev = this.value;
@@ -202,7 +205,7 @@ export class RemoteSession {
     this.sigs.clear();
     this.procs = [];
     if (!d) { this.design = null; this.scope = null; return; }
-    for (const s of d.signals) this.sigs.set(s.id, new MSignal(s.id, s.path, s.name, s.w, s.msb, s.lsb, s.signed, s.enumNames, s.driven));
+    for (const s of d.signals) { const m = new MSignal(s.id, s.path, s.name, s.w, s.msb, s.lsb, s.signed, s.enumNames, s.driven); m.isReal = !!s.isReal; this.sigs.set(s.id, m); }
     const all: MScope[] = [];
     const mk = (p: PScope, up: MScope | null): MScope => {
       const sc: MScope = {
@@ -264,4 +267,10 @@ export class RemoteSession {
     visit(base);
     return out;
   }
+}
+
+/** Display text for a signal value (reals as numbers, enums by name). */
+export function fmtSig(sig: MSignal, v: Vec, radix: Radix, enumNames?: string[]): string {
+  if (sig.isReal) return fmtReal(vecToReal(v));
+  return L.format(v, radix, enumNames);
 }

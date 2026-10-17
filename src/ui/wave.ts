@@ -1,6 +1,6 @@
 // Waveform viewer: signal names, values at cursor, and a canvas-rendered timeline.
 import { h, icon, contextMenu, clear } from './dom';
-import type { RemoteSession as Session, MWave as WaveEntry } from './remote';
+import { fmtSig, type RemoteSession as Session, type MWave as WaveEntry } from './remote';
 import * as L from '../engine/logic';
 import type { Radix } from '../engine/logic';
 import { fmtTime } from '../engine/format';
@@ -462,7 +462,7 @@ export class WaveView {
         ctx.stroke();
         const avail = xb - xa - 8;
         if (avail > 8) {
-          let text = L.format(v, w.radix === 'symbolic' && !sig.enumNames ? 'hex' : w.radix, w.radix === 'symbolic' || (sig.enumNames && w.radix !== 'binary' && w.radix !== 'hex') ? sig.enumNames : undefined);
+          let text = sig.isReal ? fmtSig(sig, v, w.radix) : L.format(v, w.radix === 'symbolic' && !sig.enumNames ? 'hex' : w.radix, w.radix === 'symbolic' || (sig.enumNames && w.radix !== 'binary' && w.radix !== 'hex') ? sig.enumNames : undefined);
           let tw = ctx.measureText(text).width;
           if (tw > avail) {
             const ch = Math.max(1, Math.floor(avail / (tw / text.length)) - 1);
@@ -490,7 +490,7 @@ export class WaveView {
       const w = r.w;
       const full = this.cursor === null ? w.sig.value : w.sig.valueAt(t);
       const s = r.bit !== undefined ? full.bit(this.bitOffset(w, r.bit)).toUpperCase().replace(/^([01])$/, '$1')
-        : L.format(full, w.radix === 'symbolic' && !w.sig.enumNames ? 'hex' : w.radix, w.radix !== 'binary' && w.radix !== 'hex' ? w.sig.enumNames : undefined);
+        : w.sig.isReal ? fmtSig(w.sig, full, w.radix) : L.format(full, w.radix === 'symbolic' && !w.sig.enumNames ? 'hex' : w.radix, w.radix !== 'binary' && w.radix !== 'hex' ? w.sig.enumNames : undefined);
       if (row.textContent !== s) row.textContent = s;
     });
   }

@@ -6,7 +6,7 @@ import type { Radix } from './logic';
 /** Structured-clone friendly 4-state value. */
 export interface PVec { w: number; a: bigint; b: bigint; s: boolean }
 
-export interface PSignal { id: number; path: string; name: string; w: number; msb: number; lsb: number; signed: boolean; enumNames?: string[]; driven: boolean }
+export interface PSignal { id: number; path: string; name: string; w: number; msb: number; lsb: number; signed: boolean; enumNames?: string[]; driven: boolean; isReal?: boolean }
 export interface PObject { name: string; sigId: number; dir: 'in' | 'out' | 'inout' | 'internal' }
 export interface PProc { idx: number; name: string; scope: string; file?: string; line?: number }
 export interface PScope {

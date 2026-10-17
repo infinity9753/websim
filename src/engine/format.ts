@@ -42,7 +42,7 @@ function stripZeros(s: string): string {
 }
 
 /** Format one value per Verilog spec char. */
-export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scopeName: string; timeFmt: (v: Vec) => string }): string {
+export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scopeName: string; timeFmt: (v: Vec) => string }, prec?: number): string {
   const zeroW = widthSpec === '0';
   const left = widthSpec.startsWith('-');
   const zeroPad = widthSpec.startsWith('0') && widthSpec.length > 1;
@@ -64,7 +64,15 @@ export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scop
     case 't': s = ctx.timeFmt(v); if (!zeroW && width < 0) return pad(s, 20, false, false); break;
     case 'e': case 'f': case 'g': {
       const n = a.real ?? v.toNumber();
-      s = spec === 'e' ? n.toExponential(6) : spec === 'f' ? n.toFixed(6) : String(n);
+      const p = prec ?? 6;
+      const ex = (x: string) => x.replace(/e([+-])(\d)$/, 'e$10$2');
+      if (spec.toLowerCase() === 'e') s = ex(n.toExponential(p));
+      else if (spec.toLowerCase() === 'f') s = n.toFixed(p);
+      else {
+        // %g: shortest of %e / %f with p significant digits, trailing zeros removed
+        const e = Math.floor(Math.log10(Math.abs(n) || 1));
+        s = e < -4 || e >= Math.max(1, p) ? ex(n.toExponential(Math.max(0, p - 1)).replace(/\.?0+e/, 'e')) : String(Number(n.toPrecision(Math.max(1, p))));
+      }
       break;
     }
     case 'u': case 'z': case 'v': s = toBin(v); break;
@@ -82,15 +90,16 @@ export function expandFormat(fmt: string, args: FmtArg[], ctx: { scopeName: stri
   for (let i = 0; i < fmt.length; i++) {
     const c = fmt[i];
     if (c !== '%') { out += c; continue; }
-    const m = /^(-?\d*)(?:\.\d+)?([a-zA-Z%])/.exec(fmt.slice(i + 1));
+    const m = /^(-?\d*)(?:\.(\d+))?([a-zA-Z%])/.exec(fmt.slice(i + 1));
     if (!m) { out += c; continue; }
     i += m[0].length;
-    const spec = m[2];
+    const spec = m[3];
+    const prec = m[2] !== undefined ? Number(m[2]) : undefined;
     if (spec === '%') { out += '%'; continue; }
     if (spec === 'm' || spec === 'M' || spec === 'l' || spec === 'L') { out += fmtValue(spec, { v: new Vec(1, 0n, 0n) }, m[1], ctx); continue; }
     const a = args[ai++];
     if (!a) { out += '<missing>'; continue; }
-    out += fmtValue(spec, a, m[1], ctx);
+    out += fmtValue(spec, a, m[1], ctx, prec);
   }
   return [out, ai];
 }

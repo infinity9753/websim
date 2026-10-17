@@ -89,6 +89,8 @@ interface Node {
   str?: string;
   isTime?: boolean;
   real?: number;
+  /** Floating-point evaluator: set for real-valued expressions. */
+  rf?: () => number;
   cv?: Vec;              // compile-time constant value
   enumNames?: string[];
   sig?: Signal;          // plain signal reference
@@ -156,6 +158,34 @@ function final(n: Node, W: number): Ev {
 }
 
 function selfEv(n: Node): Ev { return n.mk(n.w, n.s); }
+
+// ---- real numbers: stored as 64-bit IEEE-754 patterns
+const f64 = new Float64Array(1);
+const u64 = new BigUint64Array(f64.buffer);
+export function realToVec(x: number): Vec { f64[0] = x; return new Vec(64, u64[0], 0n); }
+export function vecToReal(v: Vec): number { if (v.b) return NaN; u64[0] = v.a & 0xffffffffffffffffn; return f64[0]; }
+
+/** A real-valued node; used in an integer context it converts by rounding. */
+function realNode(rf: () => number, extra: Partial<Node> = {}): Node {
+  return {
+    w: 64, s: true, rf,
+    mk: (W, sx) => () => { const x = rf(); return Number.isFinite(x) ? fromInt(BigInt(Math.round(x)), W, sx) : allX(W); },
+    ...extra,
+  };
+}
+
+/** Numeric value of any node as a JS number (reals as-is, vectors by their integer value). */
+function numOf(n: Node): () => number {
+  if (n.rf) return n.rf;
+  const f = selfEv(n);
+  return () => { const v = f(); return v.known ? Number(v.toBigInt()) : NaN; };
+}
+
+/** Evaluate `n` for a target of width W that may be real (IEEE bits) or integral. */
+function valueFor(n: Node, W: number, targetReal: boolean): Ev {
+  if (targetReal) { const f = numOf(n); return () => realToVec(f()); }
+  return final(n, W);
+}
 
 function clog2(n: bigint): number { let r = 0; let v = n - 1n; while (v > 0n) { r++; v >>= 1n; } return r; }
 
@@ -464,9 +494,14 @@ export class Elaborator {
             if (ov) scope.overrides.named.delete(it.name.toLowerCase());
             else if (scope.overrides.positional.length) ov = scope.overrides.positional.shift();
           }
-          const t = it.type && (it.type.range || it.type.base !== 'logic') ? this.resolveType(it.type, scope, it.loc) : undefined;
-          let v = ov ? this.constEval(ov, scope.overrides!.from) : this.constEval(it.value!, scope);
-          if (t && t.w) v = resize(v, t.w).withSign(t.signed);
+          let t = it.type && (it.type.range || it.type.base !== 'logic') ? this.resolveType(it.type, scope, it.loc) : undefined;
+          const src = ov ?? it.value!;
+          const from = ov ? scope.overrides!.from : scope;
+          const pc = this.ctx(from, 'const'); pc.constOnly = true;
+          const pn = this.ex(src, pc);
+          let v: Vec;
+          if (t?.kind === 'real' || (!t && pn.rf)) { t = VHDL_STD_TYPES.real; v = realToVec(numOf(pn)()); }
+          else { v = selfEv(pn)(); if (t && t.w) v = resize(v, t.w).withSign(t.signed); }
           scope.syms.set(it.name, { k: 'const', v, t });
           break;
         }
@@ -632,10 +667,12 @@ export class Elaborator {
         const c = this.ctx(scope, 'init');
         c.constOnly = false;
         const n = this.ex(t.kind === 'record' ? this.recordAgg(dn.init, t) : dn.init, c);
-        if (n.cv) init = resize(final(n, t.w || n.w)(), t.w || n.w);
+        if (t.kind === 'real' && (n.rf || n.cv)) init = realToVec(numOf(n)());
+        else if (n.rf && n.real !== undefined) init = fromInt(BigInt(Math.round(n.real)), t.w || 32, t.signed);
+        else if (n.cv) init = resize(final(n, t.w || n.w)(), t.w || n.w);
         else {
           // non-constant initializer (Verilog "reg x = y;"): evaluate at time 0
-          const ev = final(n, t.w || 1);
+          const ev = valueFor(n, t.w || 1, t.kind === 'real');
           this.pending.push(() => { /* compiled lazily */ });
           this.k.activate(() => { const s = scope.syms.get(dn.name); if (s?.k === 'sig') this.k.set(s.sig, ev()); });
         }
@@ -680,6 +717,7 @@ export class Elaborator {
     c.constOnly = true;
     c.strMode = t?.kind === 'string';
     const n = this.ex(e, c);
+    if (t?.kind === 'real') return { v: realToVec(numOf(n)()) };
     const v = t && t.w ? resize(final(n, t.w)(), t.w) : selfEv(n)();
     return { v, str: n.str ?? (t?.kind === 'string' ? L.toAscii(v) : undefined) };
   }
@@ -741,7 +779,7 @@ export class Elaborator {
         }
         return constNode(e.v);
       }
-      case 'real': return constNode(fromInt(Math.round(e.v), 64, true), { real: e.v });
+      case 'real': { const x = e.v; return realNode(() => x, { real: x }); }
       case 'time': return constNode(fromInt(Math.round(e.ps), 64, true), { isTime: true });
       case 'str': {
         if (c.lang === 'vhdl' && !c.strMode && e.s.length > 0 && /^[01uxzwlh-]+$/i.test(e.s)) return constNode(L.fromBits(e.s));
@@ -765,6 +803,7 @@ export class Elaborator {
       case 'tern': {
         const C = this.ex(e.c, c), T = this.ex(e.t, c), F = this.ex(e.f, c);
         const cf = selfEv(C);
+        if (T.rf || F.rf) { const tf = numOf(T), ff = numOf(F); return realNode(() => (L.truth(cf()) === 1 ? tf() : ff())); }
         return {
           w: Math.max(T.w, F.w), s: T.s && F.s, isTime: T.isTime || F.isTime, str: T.str !== undefined && F.str !== undefined ? '' : undefined,
           mk: (W, sx) => {
@@ -815,11 +854,15 @@ export class Elaborator {
       err(c.lang === 'vhdl' ? `(vcom-1136) Unknown identifier "${name}".` : `(vlog-2110) Undefined variable: '${name}'.`, loc);
     }
     switch (sym.k) {
-      case 'const': return constNode(sym.v, { isTime: sym.t?.isTime, enumNames: sym.t?.enumNames, str: sym.str });
+      case 'const': {
+        if (sym.t?.kind === 'real') { const x = vecToReal(sym.v); return realNode(() => x, { real: x }); }
+        return constNode(sym.v, { isTime: sym.t?.isTime, enumNames: sym.t?.enumNames, str: sym.str });
+      }
       case 'sig': {
         if (c.constOnly) err(`'${name}' is not a constant.`, loc);
         const sig = sym.sig;
         c.reads?.add(sig);
+        if (sig.isReal) return realNode(() => vecToReal(sig.value), { sig });
         return leaf(() => sig.value, sig.w, sig.signed, { isTime: sym.t.isTime, enumNames: sig.enumNames, sig });
       }
       case 'mem': err(`Memory '${name}' must be indexed.`, loc);
@@ -961,6 +1004,11 @@ export class Elaborator {
       const av = selfEv(A);
       return leaf(neg ? () => L.not(f(av())) : () => f(av()), 1, false, { cv: A.cv ? (neg ? L.not(f(A.cv)) : f(A.cv)) : undefined });
     };
+    if (A.rf && (op === '-' || op === '+' || op === 'abs' || op === '!')) {
+      const a = A.rf;
+      if (op === '!') return leaf(() => L.bool(a() === 0), 1, false);
+      return realNode(op === '-' ? () => -a() : op === 'abs' ? () => Math.abs(a()) : a, { real: A.real !== undefined ? (op === '-' ? -A.real : op === 'abs' ? Math.abs(A.real) : A.real) : undefined, isTime: A.isTime });
+    }
     switch (op) {
       case '+': return A;
       case '-': return { w: A.w, s: A.s, isTime: A.isTime, cv: A.cv ? L.neg(A.cv) : undefined, mk: (W, sx) => { const f = A.mk(W, sx); return () => L.neg(f()); } };
@@ -980,6 +1028,20 @@ export class Elaborator {
   binNode(e: Extract<Expr, { k: 'bin' }>, c: Ctx): Node {
     const A = this.ex(e.l, c), B = this.ex(e.r, c);
     const op = e.op;
+    if (A.rf || B.rf) {
+      const a = numOf(A), b = numOf(B);
+      const isTime = A.isTime || B.isTime;
+      const ar: Record<string, (x: number, y: number) => number> = { '+': (x, y) => x + y, '-': (x, y) => x - y, '*': (x, y) => x * y, '/': (x, y) => x / y, '**': (x, y) => x ** y, '%': (x, y) => x % y, mod: (x, y) => x - y * Math.floor(x / y) };
+      const cmp: Record<string, (x: number, y: number) => boolean> = { '==': (x, y) => x === y, '!=': (x, y) => x !== y, '===': (x, y) => x === y, '!==': (x, y) => x !== y, '<': (x, y) => x < y, '<=': (x, y) => x <= y, '>': (x, y) => x > y, '>=': (x, y) => x >= y, '&&': (x, y) => x !== 0 && y !== 0, '||': (x, y) => x !== 0 || y !== 0 };
+      if (ar[op]) {
+        const f = ar[op];
+        const n = realNode(() => f(a(), b()), { isTime });
+        if (A.real !== undefined && B.real !== undefined || (A.real !== undefined && B.cv) || (A.cv && B.real !== undefined)) n.real = f(a(), b());
+        return n;
+      }
+      if (cmp[op]) { const f = cmp[op]; return leaf(() => L.bool(f(a(), b())), 1, false); }
+      err(`Operator '${op}' is not defined for real operands.`, e.loc);
+    }
     const ctxOp = (f: (a: Vec, b: Vec) => Vec): Node => {
       const w = Math.max(A.w, B.w), s = A.s && B.s;
       const n: Node = {
@@ -987,13 +1049,6 @@ export class Elaborator {
         mk: (W, sx) => { const af = A.mk(W, sx), bf = B.mk(W, sx); return () => f(af(), bf()); },
       };
       if (A.cv && B.cv) n.cv = n.mk(w, s)();
-      if (A.real !== undefined || B.real !== undefined) {
-        const ar = A.real ?? (A.cv ? Number(A.cv.toBigInt()) : undefined), br = B.real ?? (B.cv ? Number(B.cv.toBigInt()) : undefined);
-        if (ar !== undefined && br !== undefined) {
-          const r = op === '+' ? ar + br : op === '-' ? ar - br : op === '*' ? ar * br : op === '/' ? ar / br : undefined;
-          if (r !== undefined) return constNode(fromInt(Math.round(r), 64, true), { real: r, isTime: n.isTime });
-        }
-      }
       return n;
     };
     const cmpOp = (f: (a: Vec, b: Vec) => Vec): Node => {
@@ -1092,7 +1147,8 @@ export class Elaborator {
         mk: (W) => () => {
           const v = af();
           let s: string;
-          if (names && v.known) s = names[Number(v.a)] ?? String(v.a);
+          if (arg.rf) s = vhdlReal(arg.rf());
+          else if (names && v.known) s = names[Number(v.a)] ?? String(v.a);
           else if (isTime) s = v.known ? fmtTime(Number(v.toBigInt()), res) : 'X';
           else if (t?.scalar || arg.w === 1) s = `'${v.bit(0) === 'x' ? 'X' : v.bit(0) === 'z' ? 'Z' : v.bit(0)}'`;
           else s = L.toDec(v, true);
@@ -1149,6 +1205,8 @@ export class Elaborator {
         if (e.args.length !== 1) err(`Type conversion to '${name}' takes one argument`, e.loc);
         const A = this.ex(e.args[0], c);
         const t = sym.t;
+        if (t.kind === 'real') return realNode(numOf(A));
+        if (t.isInt && A.rf) { const f = A.rf; return leaf(() => { const x = f(); return Number.isFinite(x) ? fromInt(BigInt(Math.round(x)), 32, true) : allX(32); }, 32, true); }
         const w = t.w || A.w;
         const af = final(A, w);
         if (t.isInt && !A.isTime) {
@@ -1231,7 +1289,7 @@ export class Elaborator {
     const argNodes = argExprs.map(a => this.ex(a, { ...c, strMode: false }));
     const cf = this.getCFunc(sym, argNodes, loc);
     if (c.reads) for (const r of cf.reads) c.reads.add(r);
-    const argEvs = argNodes.map((n, i) => final(n, cf.args[i].w));
+    const argEvs = argNodes.map((n, i) => valueFor(n, cf.args[i].w, cf.args[i].isReal));
     const ret = cf.ret;
     if (!ret) err(`Void function '${f.name}' used in expression.`, loc);
     const frame = [...cf.args, ...cf.locals, ret];
@@ -1249,6 +1307,7 @@ export class Elaborator {
       return r;
     };
     const rt: RType | undefined = (ret as any).rtype;
+    if (ret.isReal) return realNode(() => vecToReal(callFn()));
     return leaf(callFn, ret.w, ret.signed, { enumNames: ret.enumNames, isTime: rt?.isTime });
   }
 
@@ -1277,7 +1336,17 @@ export class Elaborator {
     switch (name) {
       case '$time': return leaf(() => fromInt(Math.round(k.now / tsUnit), 64), 64, false, { isMonTime: true });
       case '$stime': return leaf(() => fromInt(Math.round(k.now / tsUnit), 32), 32, false, { isMonTime: true });
-      case '$realtime': return leaf(() => fromInt(Math.round(k.now / tsUnit), 64), 64, false, { isMonTime: true });
+      case '$realtime': return realNode(() => k.now / tsUnit, { isMonTime: true });
+      case '$itor': { const f = numOf(A(0)); return realNode(f); }
+      case '$rtoi': { const f = numOf(A(0)); return leaf(() => fromInt(BigInt(Math.trunc(f() || 0)), 32, true), 32, true); }
+      case '$realtobits': { const f = numOf(A(0)); return leaf(() => realToVec(f()), 64, false); }
+      case '$bitstoreal': { const f = selfEv(A(0)); return realNode(() => vecToReal(resize(f(), 64))); }
+      case '$sqrt': case '$ln': case '$log10': case '$exp': case '$floor': case '$ceil': case '$sin': case '$cos': case '$tan': case '$atan': case '$abs': {
+        const f = numOf(A(0));
+        const m = { $sqrt: Math.sqrt, $ln: Math.log, $log10: Math.log10, $exp: Math.exp, $floor: Math.floor, $ceil: Math.ceil, $sin: Math.sin, $cos: Math.cos, $tan: Math.tan, $atan: Math.atan, $abs: Math.abs }[name]!;
+        return realNode(() => m(f()));
+      }
+      case '$pow': { const a = numOf(A(0)), b = numOf(A(1)); return realNode(() => a() ** b()); }
       case '$random': return leaf(() => fromInt(k.random(), 32, true), 32, true);
       case '$urandom': return leaf(() => fromInt(k.random() >>> 0, 32), 32, false);
       case '$urandom_range': {
@@ -1310,7 +1379,7 @@ export class Elaborator {
       case '$fopen': return constNode(fromInt(0x80000001, 32));
       case '$feof': return constNode(L.ONE);
       case '$test$plusargs': case '$value$plusargs': return constNode(L.ZERO);
-      case '$rtoi': case '$itor': case '$realtobits': case '$bitstoreal': return A(0);
+
     }
     err(`(vlog-2163) Unknown system function '${name}'.`, loc);
   }
@@ -1408,6 +1477,12 @@ export class Elaborator {
       case 'std.env.stop': case 'std.env.finish': case 'stop': case 'finish': return null;
     }
     return null;
+  }
+
+  isRealTarget(lhs: Expr, c: Ctx): boolean {
+    if (lhs.k !== 'id') return false;
+    const sym = this.lookupName(c.scope, lhs.name);
+    return sym?.k === 'sig' && sym.sig.isReal;
   }
 
   // ---------------------------------------------------------- records
@@ -1646,6 +1721,7 @@ export class Elaborator {
     }
     const scale = (x: number) => Math.round(Math.round((x * unit) / prec) * prec);
     if (n.real !== undefined) { const d = scale(n.real); return () => d; }
+    if (n.rf) { const f = n.rf; return () => { const x = f(); return Number.isFinite(x) ? scale(x) : 0; }; }
     const f = selfEv(n);
     return () => { const v = f(); return v.known ? scale(Number(v.toBigInt())) : 0; };
   }
@@ -1659,7 +1735,7 @@ export class Elaborator {
     const L_ = this.lv(lhs, lc);
     const rc = this.ctx(rscope, owner);
     rc.reads = new Set();
-    const R = final(this.ex(rhs, rc), L_.w);
+    const R = valueFor(this.ex(rhs, rc), L_.w, this.isRealTarget(lhs, lc));
     const k = this.k;
     const d = delay ? this.delayFn(delay, rc) : null;
     let pending = false;
@@ -1876,7 +1952,7 @@ export class Elaborator {
       case 'return': {
         if (!c.func) { return { sync: () => { throw new DisableEx('__task__'); } }; }
         const ret = c.func.ret;
-        if (s.e && ret) { const R = final(this.ex(s.e, c), ret.w); return { sync: () => { ret.value = R().withSign(ret.signed); throw RET; } }; }
+        if (s.e && ret) { const R = valueFor(this.ex(s.e, c), ret.w, ret.isReal); return { sync: () => { ret.value = R().withSign(ret.signed); throw RET; } }; }
         return { sync: () => { throw RET; } };
       }
       case 'disable': { const n = s.name; return { sync: () => { throw new DisableEx(n); } }; }
@@ -1986,7 +2062,7 @@ export class Elaborator {
     if (mem && !s.delay && !s.evctl) return this.memAssign(mem, s.rhs, c, nb ? 'nba' : 'now');
     const lc: Ctx = nb && c.lang === 'verilog' ? { ...c, driverMode: false } : { ...c, driverMode: false };
     const Lv = this.lv(s.lhs, lc);
-    const R = final(this.ex(this.recordAgg(s.rhs, this.typeOf(s.lhs, c)), c), Lv.w);
+    const R = valueFor(this.ex(this.recordAgg(s.rhs, this.typeOf(s.lhs, c)), c), Lv.w, this.isRealTarget(s.lhs, c));
     const self = this;
     if (s.evctl) {
       const wf = this.eventWait(s.evctl, c);
@@ -2068,7 +2144,8 @@ export class Elaborator {
     const k = this.k;
     const Lv = this.lv(s.lhs, c);
     const lt = this.typeOf(s.lhs, c);
-    const waves = s.waves.map(w => ({ R: final(this.ex(this.recordAgg(w.value, lt), c), Lv.w), D: w.after ? this.delayFn(w.after, c) : null }));
+    const tReal = lt?.kind === 'real';
+    const waves = s.waves.map(w => ({ R: valueFor(this.ex(this.recordAgg(w.value, lt), c), Lv.w, tReal), D: w.after ? this.delayFn(w.after, c) : null }));
     const self = this;
     const deferred = c.deferred;
     return {
@@ -2245,7 +2322,7 @@ export class Elaborator {
           const rest: FmtArg[] = [];
           for (let j = i + 1; j < nodes.length; j++) {
             const nj = nodes[j];
-            rest.push(nj ? { v: evs[j]!(), isStr: nj.str !== undefined, real: nj.real } : { v: L.zeros(1) });
+            rest.push(nj ? { v: evs[j]!(), isStr: nj.str !== undefined, real: nj.rf ? nj.rf() : nj.real } : { v: L.zeros(1) });
           }
           const [s, used] = expandFormat(n.str, rest, fctx);
           out += s;
@@ -2255,6 +2332,7 @@ export class Elaborator {
         const v = evs[i]!();
         if (n.str !== undefined) out += L.toAscii(v);
         else if (n.enumNames && v.known && c.lang === 'vhdl') out += n.enumNames[Number(v.a)];
+        else if (n.rf) out += fmtReal(n.rf());
         else out += expandFormat(`%${defRadix}`, [{ v, real: n.real }], fctx)[0];
         i++;
       }
@@ -2472,7 +2550,7 @@ export class Elaborator {
       const an = this.ex(actual, { ...c, strMode: t.kind === 'string' });
       if (t.w === 0) t = { ...t, w: an.w, msb: an.w - 1, lsb: 0 };
       const v = this.newSignal(ts, a.name, t, undefined, true);
-      if (a.dir !== 'output') ins.push({ sig: v, ev: final(an, v.w) });
+      if (a.dir !== 'output') ins.push({ sig: v, ev: valueFor(an, v.w, v.isReal) });
       if (a.dir !== 'input') outs.push({ sig: v, lv: this.lv(actual, { ...c, driverMode: c.lang === 'vhdl' ? false : false }) });
     });
     for (const d of f.decls) {
@@ -2498,7 +2576,7 @@ export class Elaborator {
     args = this.orderArgs(f, args, named, loc);
     const argNodes = args.map(a => this.ex(a, c));
     const cf = this.getCFunc(sym, argNodes, loc);
-    const argEvs = argNodes.map((n, i) => final(n, cf.args[i].w));
+    const argEvs = argNodes.map((n, i) => valueFor(n, cf.args[i].w, cf.args[i].isReal));
     // output args of VHDL procedures / SV functions
     const outs: { sig: Signal; lv: LNode }[] = [];
     f.args.forEach((a, i) => { if (a.dir !== 'input' && args[i]) outs.push({ sig: cf.args[i], lv: this.lv(args[i], c) }); });
@@ -2535,3 +2613,17 @@ function loopGuard(loc?: Loc): never {
 }
 
 export { ONE32 };
+
+/** Default text for a real value (as printed by $display without a format). */
+export function fmtReal(x: number): string {
+  if (!Number.isFinite(x)) return String(x);
+  if (Number.isInteger(x)) return String(x);
+  const t = x.toPrecision(6);
+  return t.includes('e') ? t : String(Number(t));
+}
+
+/** VHDL REAL'IMAGE style text, e.g. 1.500000e+00. */
+export function vhdlReal(x: number): string {
+  if (!Number.isFinite(x)) return String(x);
+  return x.toExponential(6).replace(/e([+-])(\d)$/, 'e$10$2');
+}

@@ -241,3 +241,58 @@ describe('fork/join (#10)', () => {
     expect(out).toEqual(['fast', 'end 105']);
   });
 });
+
+describe('real numbers (#17)', () => {
+  it('Verilog real arithmetic, conversions and formatting', () => {
+    const { out } = simulate({
+      't.v': `\`timescale 1ns/1ps
+module t;
+  real r = 1.5, s;
+  integer i;
+  parameter real K = 0.25;
+  parameter HALF = 2.5;
+  function real twice(input real x); twice = x * 2; endfunction
+  initial begin
+    r = r * 2;
+    $display("%f", r);
+    s = r / 4 + K;
+    $display("%0.3f %e", s, s);
+    i = r + 0.6;
+    $display("%0d", i);
+    i = $rtoi(3.99);
+    $display("%0d %f", i, $itor(7));
+    $display("%g", twice(1.25));
+    if (r > 2.9 && r < 3.1) $display("cmp ok");
+    #HALF $display("t=%0t rt=%f", $time, $realtime);
+    $display("%f", $sqrt(2.0) * $sqrt(2.0));
+    $display(r);
+  end
+endmodule`,
+    }, 't');
+    expect(out).toEqual(['3.000000', '1.000 1.000000e+00', '4', '3 7.000000', '2.5', 'cmp ok', 't=3000 rt=2.500000', '2.000000', '3']);
+  });
+
+  it('VHDL real signals, conversions and image', () => {
+    const src = `
+entity t is end;
+architecture a of t is
+  signal x : real := 0.5;
+  constant G : real := 2.0;
+begin
+  process
+    variable y : real;
+    variable n : integer;
+  begin
+    y := x * G + 1.25;
+    n := integer(y * 10.0);
+    report real'image(y) & " " & integer'image(n) & " " & real'image(real(n) / 4.0);
+    x <= 2.25;
+    wait for 1 ns;
+    report real'image(x);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out.filter(l => l.startsWith('**'))).toEqual(['** Note: 2.250000e+00 23 5.750000e+00', '** Note: 2.250000e+00']);
+  });
+});

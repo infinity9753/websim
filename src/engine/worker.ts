@@ -56,7 +56,7 @@ function snapDesign(): PDesign | null {
   return {
     top: d.top, loaded: d.loaded, resolution: d.kernel.resolution,
     root: snapScope(d.root, procIdx),
-    signals: [...sigs.values()].map(s => ({ id: s.id, path: s.path, name: s.name, w: s.w, msb: s.msb, lsb: s.lsb, signed: s.signed, enumNames: s.enumNames, driven: !!s.drivers?.length })),
+    signals: [...sigs.values()].map(s => ({ id: s.id, path: s.path, name: s.name, w: s.w, msb: s.msb, lsb: s.lsb, signed: s.signed, enumNames: s.enumNames, driven: !!s.drivers?.length, isReal: s.isReal })),
   };
 }
 

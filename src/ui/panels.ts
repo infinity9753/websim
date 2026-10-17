@@ -1,6 +1,6 @@
 // Project / Library / Structure / Objects / Processes panels.
 import { h, icon, clear, contextMenu } from './dom';
-import type { RemoteSession as Session, MScope as Scope, MSignal } from './remote';
+import { fmtSig, type RemoteSession as Session, type MScope as Scope, type MSignal } from './remote';
 import * as L from '../engine/logic';
 import { langOf, type BrowserFS } from './vfs';
 import { DND_TYPE } from './wave';
@@ -306,13 +306,14 @@ export class ObjectsPanel {
       const cell = this.valueCells.get(this.pathOf(s, o.name));
       if (!cell) continue;
       const radix = this.session.defaultRadix === 'binary' && o.sig.w > 16 ? 'hex' : this.session.defaultRadix;
-      const txt = L.format(o.sig.value, radix, o.sig.enumNames);
+      const txt = fmtSig(o.sig, o.sig.value, radix, o.sig.enumNames);
       if (cell.textContent !== txt) cell.textContent = txt;
     }
   }
 }
 
 function kindOf(s: Scope, sig: MSignal): string {
+  if (sig.isReal) return 'Real';
   const base = sig.enumNames ? 'Enum' : s.mod.lang === 'vhdl' ? 'Signal' : sig.drivers?.length ? 'Net' : 'Reg';
   return sig.w > 1 || sig.msb !== 0 ? `${base} [${sig.msb}:${sig.lsb}]` : base;
 }
