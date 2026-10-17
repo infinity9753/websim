@@ -303,3 +303,70 @@ end;`;
     expect(notes).toEqual(["** Note: '1' 5 F0 42", "** Note: F0 42 '0'", '** Note: 10 55']);
   });
 });
+
+describe('std.textio (#8)', () => {
+  it('writes lines to the transcript and to files, reads files back', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+use std.textio.all;
+use ieee.std_logic_textio.all;
+entity t is end;
+architecture a of t is
+  type st_t is (IDLE, BUSY);
+  signal q : std_logic_vector(7 downto 0) := x"A5";
+  procedure log(msg : string; v : integer) is
+    variable l : line;
+  begin
+    write(l, msg);
+    write(l, v, right, 5);
+    writeline(output, l);
+  end procedure;
+begin
+  process
+    variable l : line;
+    variable i, n, sum : integer := 0;
+    variable b : std_logic;
+    variable v4 : std_logic_vector(3 downto 0);
+    variable ok : boolean;
+    file fo : text open write_mode is "out.txt";
+    file fi : text open read_mode is "in.txt";
+  begin
+    wait for 3 ns;
+    write(l, string'("q="));
+    write(l, q);
+    write(l, string'(" hex="));
+    hwrite(l, q);
+    write(l, string'(" t="));
+    write(l, now);
+    write(l, string'(" st="));
+    write(l, st_t'(BUSY));
+    write(l, string'(" "));
+    write(l, true);
+    writeline(output, l);
+    log("val:", 42);
+    for k in 1 to 3 loop
+      write(l, k * 10);
+      writeline(fo, l);
+    end loop;
+    while not endfile(fi) loop
+      readline(fi, l);
+      read(l, n);
+      read(l, b);
+      hread(l, v4);
+      read(l, i, ok);
+      sum := sum + n + to_integer(unsigned(v4));
+      if ok then sum := sum + 1000; end if;
+    end loop;
+    write(l, sum);
+    writeline(output, l);
+    wait;
+  end process;
+end;`;
+    const files2: Record<string, string> = { 'in.txt': '5 1 A\n7 0 F 9\n' };
+    const { out } = simulate({ 't.vhd': src }, 't', 1e9, files2);
+    expect(out[0]).toBe('q=10100101 hex=A5 t=3 ns st=busy TRUE');
+    expect(out[1]).toBe('val:   42');
+    expect(out[2]).toBe(String(5 + 10 + 7 + 15 + 1000));
+    expect(files2['out.txt']).toBe('10\n20\n30\n');
+  });
+});

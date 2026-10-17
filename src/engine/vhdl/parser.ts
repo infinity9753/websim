@@ -293,7 +293,29 @@ class VhParser {
         if (f) items.push(f);
         return;
       }
-      case 'attribute': case 'alias': case 'file': case 'disconnect': case 'group':
+      case 'file': {
+        // file f : text [open read_mode|write_mode|append_mode] [is "name"];   (also VHDL-87: is in/out "name")
+        this.pos++;
+        const names = [this.ident()];
+        while (this.accept(',')) names.push(this.ident());
+        this.expect(':');
+        const type = this.subtype();
+        let mode: 'read' | 'write' | 'append' = 'read';
+        if (this.accept('open')) {
+          const m = this.ident();
+          mode = m.startsWith('write') ? 'write' : m.startsWith('append') ? 'append' : 'read';
+        }
+        let init: Expr | undefined;
+        if (this.accept('is')) {
+          if (this.accept('in')) mode = 'read';
+          else if (this.accept('out')) mode = 'write';
+          init = this.expr();
+        }
+        this.expect(';');
+        items.push({ k: 'decl', kind: 'variable', type, names: names.map(n => ({ name: n, init })), fileMode: mode, loc });
+        return;
+      }
+      case 'attribute': case 'alias': case 'disconnect': case 'group':
         while (!this.accept(';')) this.pos++;
         return;
       case 'use': items.push(...this.useClause()); return;

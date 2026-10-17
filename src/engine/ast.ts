@@ -85,7 +85,7 @@ export interface FuncDecl {
 }
 
 export type Item =
-  | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; loc?: Loc }
+  | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; fileMode?: 'read' | 'write' | 'append'; loc?: Loc }
   | ({ k: 'param' } & ParamDecl)
   | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; loc?: Loc }
   | { k: 'process'; kind: 'always' | 'initial' | 'always_comb' | 'always_ff' | 'always_latch' | 'vproc'; body: Stmt; sens?: Expr[] | 'all'; name?: string; loc?: Loc }

@@ -270,7 +270,7 @@ export class Session {
 
   private load(o: { top: string; lib?: string; generics: Map<string, string>; res?: number }) {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug });
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);

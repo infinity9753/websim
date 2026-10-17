@@ -4,6 +4,7 @@ import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, type Wait, type KernelHost, type ProcInfo } from './kernel';
 import { expandFormat, fmtTime, type FmtArg } from './format';
+import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
 
 // ---------------------------------------------------------------- types
 
@@ -21,6 +22,8 @@ export interface RType {
   isTime?: boolean;
   isBool?: boolean;
   isBit?: boolean;        // VHDL bit / SV bit: 2-state, default 0
+  isLine?: boolean;       // std.textio LINE
+  isFile?: boolean;       // std.textio TEXT file
   enumNames?: string[];
   elem?: RType;
   lo?: number;
@@ -172,6 +175,8 @@ const VHDL_STD_TYPES: Record<string, RType> = {
   bit_vector: { kind: 'vec', w: 0, msb: 0, lsb: 0, signed: false, isBit: true },
   unsigned: { kind: 'vec', w: 0, msb: 0, lsb: 0, signed: false },
   signed: { kind: 'vec', w: 0, msb: 0, lsb: 0, signed: true },
+  line: { kind: 'string', w: 0, msb: 0, lsb: 0, signed: false, isLine: true },
+  text: { kind: 'string', w: 0, msb: 0, lsb: 0, signed: false, isFile: true },
   severity_level: { kind: 'enum', w: 2, msb: 1, lsb: 0, signed: false, enumNames: ['note', 'warning', 'error', 'failure'] },
 };
 
@@ -197,6 +202,8 @@ export class Elaborator {
   pkgScopes = new Map<string, Scope>();
   minPrec = Infinity;
   instDepth = 0;
+  /** std.textio line buffers and open files, keyed by their variable. */
+  textState = new Map<Signal, TextState>();
   /** "file:line" of every statement that can hold a breakpoint. */
   execLines = new Set<string>();
 
@@ -208,6 +215,9 @@ export class Elaborator {
     this.stdScope.syms.set('true', { k: 'const', v: L.ONE, t: VHDL_STD_TYPES.boolean });
     this.stdScope.syms.set('false', { k: 'const', v: L.ZERO, t: VHDL_STD_TYPES.boolean });
     ['note', 'warning', 'error', 'failure'].forEach((n, i) => this.stdScope.syms.set(n, { k: 'const', v: fromInt(i, 2), t: VHDL_STD_TYPES.severity_level }));
+    // std.textio SIDE
+    this.stdScope.syms.set('right', { k: 'const', v: fromInt(0, 1) });
+    this.stdScope.syms.set('left', { k: 'const', v: fromInt(1, 1) });
   }
 
   elaborate(top: string, lib?: string): Design {
@@ -596,6 +606,17 @@ export class Elaborator {
         let v = r.v;
         if (t.w) v = resize(v, t.w).withSign(t.signed);
         scope.syms.set(dn.name, { k: 'const', v, t, str: r.str });
+        continue;
+      }
+      if (t.isLine || t.isFile) {
+        const sig = this.newSignal(scope, dn.name, { kind: 'vec', w: 1, msb: 0, lsb: 0, signed: false }, L.zeros(1), true);
+        if (t.isLine) this.textState.set(sig, { kind: 'line', buf: '' });
+        else {
+          const fname = dn.init ? this.constEvalFull(dn.init, scope, { kind: 'string', w: 0, msb: 0, lsb: 0, signed: false }).str ?? '' : '';
+          const mode = dn.init ? it.fileMode ?? 'read' : 'closed';
+          this.textState.set(sig, { kind: 'file', name: fname, mode, lines: null, pos: 0, out: mode === 'append' ? this.k.host.readFile?.(fname) ?? '' : '' });
+          if (mode === 'write') this.k.host.writeFile?.(fname, '');
+        }
         continue;
       }
       if (t.kind === 'string') {
@@ -1132,7 +1153,7 @@ export class Elaborator {
           const src = A.mk(A.w, A.s);
           return leaf(() => resize(src(), 32, A.s).withSign(true), 32, true);
         }
-        return leaf(() => af().withSign(t.signed), w, t.signed, { cv: A.cv ? resize(A.cv, w).withSign(t.signed) : undefined });
+        return leaf(() => af().withSign(t.signed), w, t.signed, { cv: A.cv ? resize(A.cv, w).withSign(t.signed) : undefined, enumNames: t.enumNames, isTime: t.isTime });
       }
     }
     if (c.lang === 'vhdl') {
@@ -1378,6 +1399,10 @@ export class Elaborator {
           },
         };
       }
+      case 'endfile': {
+        const f = endfileFn(this, args[0], c, loc);
+        return leaf(() => L.bool(f()), 1, false, { enumNames: ['false', 'true'] });
+      }
       case 'std.env.stop': case 'std.env.finish': case 'stop': case 'finish': return null;
     }
     return null;
@@ -1395,6 +1420,10 @@ export class Elaborator {
         return undefined;
       }
       case 'index': case 'call': {
+        if (e.k === 'call') {
+          const ts = this.lookupName(c.scope, e.name);
+          if (ts?.k === 'type') return ts.t.w ? ts.t : undefined;
+        }
         const base = e.k === 'index' ? e.base : ({ k: 'id', name: e.name } as Expr);
         const bt = this.typeOf(base, c);
         return bt?.kind === 'array' ? bt.elem : undefined;
@@ -2359,6 +2388,7 @@ export class Elaborator {
     }
     if (name.startsWith('$')) return this.sysTask({ k: 'sys', name, args: s.args, loc: s.loc }, c);
     const sym = this.lookupName(c.scope, name);
+    if (!sym && c.lang === 'vhdl' && isTextioProc(name)) return compileTextio(this, name, s.args, c, s.loc)!;
     if (!sym || sym.k !== 'func') err(c.lang === 'vhdl' ? `(vcom-1136) Unknown identifier "${s.name}".` : `(vlog-2164) Task '${s.name}' not found.`, s.loc);
     const f = sym.f;
     if (!f.isTask) {
@@ -2382,7 +2412,14 @@ export class Elaborator {
         return;
       }
       let t = this.resolveType(a.type, ts, s.loc);
-      const an = this.ex(actual, c);
+      if (t.isLine || t.isFile) {
+        // access/file parameters are passed by reference
+        const base = actual.k === 'id' ? this.lookupName(c.scope, actual.name) : undefined;
+        if (base?.k !== 'sig' || !this.textState.has(base.sig)) err(`Actual for '${a.name}' must be a ${t.isLine ? 'LINE variable' : 'file'}.`, s.loc);
+        ts.syms.set(a.name, base);
+        return;
+      }
+      const an = this.ex(actual, { ...c, strMode: t.kind === 'string' });
       if (t.w === 0) t = { ...t, w: an.w, msb: an.w - 1, lsb: 0 };
       const v = this.newSignal(ts, a.name, t, undefined, true);
       if (a.dir !== 'output') ins.push({ sig: v, ev: final(an, v.w) });

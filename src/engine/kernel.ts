@@ -121,6 +121,7 @@ export type RunResult = 'paused' | 'finished' | 'stopped' | 'idle' | 'error' | '
 export interface KernelHost {
   print(msg: string): void;
   readFile?(name: string): string | undefined;
+  writeFile?(name: string, text: string): void;
 }
 
 export class Kernel {
