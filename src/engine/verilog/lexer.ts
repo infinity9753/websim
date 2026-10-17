@@ -165,7 +165,7 @@ function expandMacros(line: string, defines: Map<string, Macro>, file: string, l
   return out;
 }
 
-const UNIT_PS: Record<string, number> = { s: 1e12, ms: 1e9, us: 1e6, ns: 1e3, ps: 1, fs: 1e-3 };
+const UNIT_PS: Record<string, number> = { s: 1e15, ms: 1e12, us: 1e9, ns: 1e6, ps: 1e3, fs: 1 }; // in fs
 export function parseTimescale(s: string, loc: Loc): { unit: number; prec: number } {
   const m = /^(\d+)\s*(s|ms|us|ns|ps|fs)\s*\/\s*(\d+)\s*(s|ms|us|ns|ps|fs)/.exec(s);
   if (!m) throw new CompileError(`Bad \`timescale "${s}"`, loc);

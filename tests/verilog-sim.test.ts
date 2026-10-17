@@ -427,3 +427,24 @@ describe('inertial continuous assignment delays (#27)', () => {
     expect(out[0]).toBe('3 3'); // X->0 at 5 ns, then only the 10 ns pulse (2 edges); the 2 ns pulse is swallowed
   });
 });
+
+describe('femtosecond precision (#29)', () => {
+  it('honours fs timescales and delays exactly', () => {
+    const { out, design } = simulate({
+      't.v': `\`timescale 1ps/1fs
+      module t; reg a = 0;
+        initial begin #1.25 a = 1; #0.001 a = 0; #2 $display("%t %0t", $realtime, $time); end
+      endmodule`,
+    }, 't');
+    const a = design.root.objects.find(o => o.name === 'a')!.sig;
+    expect(a.times).toEqual([0, 1250, 1251]);
+    expect(design.kernel.resolution).toBe(1);
+    expect(out[0]).toBe(`${' '.repeat(16)}3251 3000`); // %t prints in the simulation precision (fs)
+  });
+
+  it('VHDL fs literals', () => {
+    const src = `entity t is end; architecture a of t is begin
+      process begin wait for 1500 fs; report time'image(now); wait; end process; end;`;
+    expect(simulate({ 't.vhd': src }, 't').out[0]).toMatch(/1\.5 ns|1500 ps|1500 fs/);
+  });
+});

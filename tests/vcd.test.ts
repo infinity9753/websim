@@ -25,9 +25,9 @@ describe('VCD export (#4)', () => {
     expect([...v.keys()].sort()).toEqual(['t.clk', 't.q']);
     const q = v.get('t.q')!;
     expect(q[0]).toEqual([0, '0']);
-    expect(q.at(-1)).toEqual([35000, '100']);
+    expect(q.at(-1)).toEqual([35, '100']);
     expect(v.get('t.clk')!.filter(([, b]) => b === '1').length).toBe(4);
-    expect(fs['w.vcd']).toContain('$timescale 1ps $end');
+    expect(fs['w.vcd']).toContain('$timescale 1ns $end');
   });
 
   it('$dumpfile/$dumpvars write the file after the run', async () => {

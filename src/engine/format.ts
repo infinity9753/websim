@@ -3,30 +3,33 @@ import { Vec, toBin, toHex, toOct, toDec, toAscii, decWidth } from './logic';
 
 export interface FmtArg { v: Vec; isStr?: boolean; real?: number }
 
-const UNITS: [number, string][] = [[1e12, 's'], [1e9, 'ms'], [1e6, 'us'], [1e3, 'ns'], [1, 'ps'], [1e-3, 'fs']];
+/** Simulation time is kept as an integer number of femtoseconds. Factors per unit: */
+export const TU: Record<string, number> = { fs: 1, ps: 1e3, ns: 1e6, us: 1e9, ms: 1e12, s: 1e15, sec: 1e15, min: 60e15, hr: 3600e15 };
 
-export function unitName(ps: number): string {
-  for (const [v, n] of UNITS) if (Math.abs(ps - v) < 1e-9) return n;
-  for (const [v, n] of UNITS) if (ps >= v) return `${ps / v}${n}`;
-  return `${ps}ps`;
+const UNITS: [number, string][] = [[1e15, 's'], [1e12, 'ms'], [1e9, 'us'], [1e6, 'ns'], [1e3, 'ps'], [1, 'fs']];
+
+export function unitName(t: number): string {
+  for (const [v, n] of UNITS) if (Math.abs(t - v) < 1e-9) return n;
+  for (const [v, n] of UNITS) if (t >= v) return `${t / v}${n}`;
+  return `${t}fs`;
 }
 
-/** Format a time in ps using the given resolution, e.g. "120 ns". */
-export function fmtTime(ps: number, resolution: number): string {
-  let unit = 1000, name = 'ns';
+/** Format a time (fs) in the given resolution's unit, e.g. "120 ns". */
+export function fmtTime(t: number, resolution: number): string {
+  let unit = 1e6, name = 'ns';
   for (const [v, n] of UNITS) if (resolution >= v) { unit = v; name = n; break; }
-  const v = ps / unit;
+  const v = t / unit;
   const s = Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000);
   return `${s} ${name}`;
 }
 
-/** Parse "10 ns", "10ns", "10" (default unit) into ps. */
-export function parseTime(s: string, defaultUnitPs = 1000): number | null {
+/** Parse "10 ns", "10ns", "10" (default unit, in fs) into fs. */
+export function parseTime(s: string, defaultUnit = 1e6): number | null {
   const m = /^\s*(-?\d+(?:\.\d+)?)\s*(s|ms|us|ns|ps|fs|sec|min|hr)?\s*$/i.exec(s);
   if (!m) return null;
   const n = parseFloat(m[1]);
   const u = (m[2] ?? '').toLowerCase();
-  const scale = u === '' ? defaultUnitPs : ({ s: 1e12, sec: 1e12, ms: 1e9, us: 1e6, ns: 1e3, ps: 1, fs: 1e-3, min: 60e12, hr: 3600e12 } as Record<string, number>)[u];
+  const scale = u === '' ? defaultUnit : TU[u];
   return Math.round(n * scale);
 }
 
@@ -42,7 +45,7 @@ function stripZeros(s: string): string {
 }
 
 /** Format one value per Verilog spec char. */
-export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scopeName: string; timeFmt: (v: Vec) => string }, prec?: number): string {
+export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scopeName: string; timeFmt: (v: Vec, real?: number) => string }, prec?: number): string {
   const zeroW = widthSpec === '0';
   const left = widthSpec.startsWith('-');
   const zeroPad = widthSpec.startsWith('0') && widthSpec.length > 1;
@@ -61,7 +64,7 @@ export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scop
     case 'c': s = String.fromCharCode(Number(v.a & 0xffn)); break;
     case 's': s = toAscii(v); break;
     case 'm': s = ctx.scopeName; break;
-    case 't': s = ctx.timeFmt(v); if (!zeroW && width < 0) return pad(s, 20, false, false); break;
+    case 't': s = ctx.timeFmt(v, a.real); if (!zeroW && width < 0) return pad(s, 20, false, false); break;
     case 'e': case 'f': case 'g': {
       const n = a.real ?? v.toNumber();
       const p = prec ?? 6;
@@ -84,7 +87,7 @@ export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scop
 }
 
 /** Expand a format string with args. Returns [text, number of args consumed]. */
-export function expandFormat(fmt: string, args: FmtArg[], ctx: { scopeName: string; timeFmt: (v: Vec) => string }): [string, number] {
+export function expandFormat(fmt: string, args: FmtArg[], ctx: { scopeName: string; timeFmt: (v: Vec, real?: number) => string }): [string, number] {
   let out = '';
   let ai = 0;
   for (let i = 0; i < fmt.length; i++) {

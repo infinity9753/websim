@@ -3,7 +3,7 @@ import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type Port
 import { lexVhdl, type VToken } from './lexer';
 import { Vec, fromBits, fromInt, mask } from '../logic';
 
-const TIME_UNITS: Record<string, number> = { fs: 1e-3, ps: 1, ns: 1e3, us: 1e6, ms: 1e9, sec: 1e12, min: 60e12, hr: 3600e12 };
+const TIME_UNITS: Record<string, number> = { fs: 1, ps: 1e3, ns: 1e6, us: 1e9, ms: 1e12, sec: 1e15, min: 60e15, hr: 3600e15 };
 import { RESERVED } from './lexer';
 
 export function parseVhdl(src: string, file: string): Unit[] {
@@ -872,7 +872,7 @@ class VhParser {
         if (nx.t === 'id' && TIME_UNITS[nx.v] !== undefined) {
           this.pos++;
           const val = t.t === 'int' ? Number(t.based!) : t.n!;
-          return { k: 'time', ps: val * TIME_UNITS[nx.v], loc };
+          return { k: 'time', fs: val * TIME_UNITS[nx.v], loc };
         }
         if (t.t === 'real') return { k: 'real', v: t.n!, loc };
         return { k: 'num', v: fromInt(t.based!, 32, true), unsized: true, loc };

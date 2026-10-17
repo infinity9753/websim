@@ -52,7 +52,7 @@ describe('breakpoints and stepping (#5, #6)', () => {
       expect(s.paused?.line).toBe(14);
       hits.push(s.now);
     }
-    expect(hits).toEqual([5000, 15000, 25000, 35000]);
+    expect(hits).toEqual([5e6, 15e6, 25e6, 35e6]); // fs
     await s.exec('bd all');
     await s.exec('run -all');
     expect(lines).toContain('sum=6');
@@ -64,7 +64,7 @@ describe('breakpoints and stepping (#5, #6)', () => {
     await s.exec('bp tb.v 14 {/tb/i == 2}');
     await s.exec('run -all');
     expect(s.paused?.line).toBe(14);
-    expect(s.now).toBe(25000);
+    expect(s.now).toBe(25e6);
     await s.exec('bd all');
     const b = s.addBreakpoint('tb.v', 12); // "initial begin" line -> next executable line
     expect(b?.line).toBe(12);
@@ -91,7 +91,7 @@ describe('breakpoints and stepping (#5, #6)', () => {
     expect(s.paused?.line).toBe(10);
     await s.exec('run -all');
     expect(s.paused?.line).toBe(9);
-    expect(s.now).toBe(10000);
+    expect(s.now).toBe(10e6);
   });
 
   it('-nodebug disables hooks', async () => {
@@ -128,7 +128,7 @@ describe('when (#16)', () => {
     await s.exec('vlog tb.v; vsim tb');
     await s.exec('when -label hit2 {/tb/i == 2} {echo "i is two"; stop}');
     await s.exec('run -all');
-    expect(s.now).toBe(15000);
+    expect(s.now).toBe(15e6);
     expect(lines).toContain('i is two');
     expect(lines.some(l => /stop requested by when "hit2"/.test(l))).toBe(true);
     await s.exec('nowhen hit2');

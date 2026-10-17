@@ -6,7 +6,7 @@ export interface Loc { file: string; line: number }
 export type Expr =
   | { k: 'num'; v: Vec; unsized?: boolean; loc?: Loc }
   | { k: 'real'; v: number; loc?: Loc }
-  | { k: 'time'; ps: number; loc?: Loc }                 // VHDL physical time literal
+  | { k: 'time'; fs: number; loc?: Loc }                 // VHDL physical time literal
   | { k: 'str'; s: string; loc?: Loc }
   | { k: 'id'; name: string; loc?: Loc }                  // may be dotted (hierarchical)
   | { k: 'index'; base: Expr; index: Expr; loc?: Loc }

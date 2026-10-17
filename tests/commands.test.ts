@@ -32,7 +32,7 @@ describe('transcript commands', () => {
     expect(text()).toContain('Loading work.tb');
     expect(text()).toContain('done q=10');
     expect(s.waves.map(w => w.path)).toContain('/tb/dut/q');
-    expect(s.now).toBe(120_000);
+    expect(s.now).toBe(120e6); // fs
   });
 
   it('reports compile errors with file and line', async () => {
@@ -49,7 +49,7 @@ describe('transcript commands', () => {
     await s.exec('force clk 0 0, 1 5 -repeat 10');
     await s.exec('force d 1');
     await s.exec('run 30');
-    expect(s.now).toBe(30_000);
+    expect(s.now).toBe(30e6);
     await s.exec('examine q');
     expect(lines[lines.length - 1].m).toBe('1');
     await s.exec('force d 0');
@@ -124,7 +124,7 @@ describe('history limits and logging (#28)', () => {
     const clk = s.findSignal('/c/clk')!.obj.sig, n = s.findSignal('/c/n')!.obj.sig;
     expect(clk.times.length).toBeLessThanOrEqual(100);
     expect(clk.times[0]).toBeGreaterThan(0);              // oldest history trimmed
-    expect(clk.times.at(-1)).toBe(1000_000);
+    expect(clk.times.at(-1)).toBe(1000e6);
     expect(n.times.length).toBe(1);                        // only the time-0 sample
     expect(n.value.toNumber()).toBe(500 % 256);            // value still tracked (500 edges, 8-bit wrap)
     await s.exec('simstats');

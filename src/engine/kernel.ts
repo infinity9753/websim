@@ -173,7 +173,7 @@ export class Kernel {
   current: Process | null = null;
   signals: Signal[] = [];
   processes: Process[] = [];
-  resolution = 1000; // ps per display unit
+  resolution = 1e6; // fs per display unit
   monitorOn = true;
   randSeed = 0;
   started = false;
@@ -414,7 +414,7 @@ export class Kernel {
       if (this.inactive.length) { const x = this.inactive; this.inactive = this.active; this.active = x; continue; }
       if (this.nba.length) {
         if (++this.deltaCount > this.iterationLimit) {
-          this.errorMsg = `Iteration limit ${this.iterationLimit} reached at time ${this.now} ps.`;
+          this.errorMsg = `Iteration limit ${this.iterationLimit} reached at time ${this.now} fs.`;
           return 'error';
         }
         this.stamp++;

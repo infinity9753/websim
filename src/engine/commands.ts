@@ -38,7 +38,7 @@ export class Session {
   design: Design | null = null;
   scope: Scope | null = null;
   waves: WaveEntry[] = [];
-  runLength = 100_000; // ps
+  runLength = 100e6; // fs (100 ns)
   defaultRadix: Radix = 'binary';
   history: string[] = [];
   running = false;
@@ -65,7 +65,7 @@ export class Session {
 
   get prompt(): string { return this.design ? `VSIM ${this.promptN}>` : 'WebSim>'; }
   get now(): number { return this.design?.kernel.now ?? 0; }
-  get resolution(): number { return this.design?.kernel.resolution ?? 1000; }
+  get resolution(): number { return this.design?.kernel.resolution ?? 1e6; }
   fmt(ps: number) { return fmtTime(ps, this.resolution); }
 
   out(msg: string, kind: MsgKind = 'out') { for (const l of msg.split('\n')) this.print(l, kind); }

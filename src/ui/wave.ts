@@ -113,7 +113,7 @@ export class WaveView {
     });
   }
 
-  get endTime() { return this.session.design ? Math.max(this.session.now, 1) : 1_000_000; }
+  get endTime() { return this.session.design ? Math.max(this.session.now, 1) : 1e9; }
   get width() { return Math.max(10, this.canvasCol.clientWidth); }
   private x(t: number) { return (t - this.t0) / this.scale; }
   private t(x: number) { return this.t0 + x * this.scale; }
@@ -332,15 +332,15 @@ export class WaveView {
 
   private tickStep(): number {
     const raw = 110 * this.scale;
-    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-3))));
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
     for (const m of [1, 2, 5, 10]) if (m * mag >= raw) return m * mag;
     return 10 * mag;
   }
 
   private fmtTick(t: number, step: number): string {
-    const units: [number, string][] = [[1e12, 's'], [1e9, 'ms'], [1e6, 'us'], [1e3, 'ns'], [1, 'ps'], [1e-3, 'fs']];
+    const units: [number, string][] = [[1e15, 's'], [1e12, 'ms'], [1e9, 'us'], [1e6, 'ns'], [1e3, 'ps'], [1, 'fs']];
     let u = units[units.length - 1];
-    for (const x of units) if (step >= x[0] || x[0] === 1e-3) { u = x; break; }
+    for (const x of units) if (step >= x[0] || x[0] === 1) { u = x; break; }
     const v = t / u[0];
     return `${Math.round(v * 1000) / 1000} ${u[1]}`;
   }

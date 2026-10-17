@@ -278,8 +278,8 @@ export class Elaborator {
       sig.times = [0]; sig.vals = [sig.value];
     }
     this.k.signals = [...sigs];
-    const prec = this.minPrec === Infinity ? 1000 : this.minPrec;
-    this.k.resolution = this.opts.resolutionPs ?? Math.max(1, Math.min(1000, prec));
+    const prec = this.minPrec === Infinity ? 1e6 : this.minPrec;
+    this.k.resolution = this.opts.resolutionPs ?? Math.max(1, Math.min(1e6, prec));
     return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines };
   }
 
@@ -301,7 +301,7 @@ export class Elaborator {
     const unit = found.unit;
     const arch = found.arch;
     const lang = unit.lang;
-    const ts = lang === 'verilog' ? unit.timescale ?? { unit: 1000, prec: 1000 } : { unit: 1, prec: 1 };
+    const ts = lang === 'verilog' ? unit.timescale ?? { unit: 1e6, prec: 1e6 } : { unit: 1, prec: 1 };
     if (lang === 'verilog') this.minPrec = Math.min(this.minPrec, ts.prec);
     const mod: ModInfo = { lang, unit, arch: arch?.name, tsUnit: ts.unit, tsPrec: ts.prec, file: (arch ?? unit).file, libName: found.libName };
     const path = parent ? `${parent.path}/${instName}` : `/${instName}`;
@@ -415,7 +415,7 @@ export class Elaborator {
       const found = this.lib.findPackage(name, lib);
       if (!found) err(`(vcom-1598) Library unit "${name}" not found in library "${lib ?? 'work'}".`, loc);
       const plang = found.pkg.lang;
-      const ts = plang === 'verilog' ? found.pkg.timescale ?? { unit: 1000, prec: 1000 } : { unit: 1, prec: 1 };
+      const ts = plang === 'verilog' ? found.pkg.timescale ?? { unit: 1e6, prec: 1e6 } : { unit: 1, prec: 1 };
       const mod: ModInfo = { lang: plang, unit: found.pkg, tsUnit: ts.unit, tsPrec: ts.prec, file: found.pkg.file, libName: found.libName };
       ps = new Scope(name, `/${name}`, null, null, mod, 'package');
       if (plang === 'vhdl') ps.imports.push(this.stdScope);
@@ -905,7 +905,11 @@ export class Elaborator {
         return constNode(e.v);
       }
       case 'real': { const x = e.v; return realNode(() => x, { real: x }); }
-      case 'time': return constNode(fromInt(Math.round(e.ps), 64, true), { isTime: true });
+      case 'time': {
+        // a VHDL time literal finer than the current display unit refines the resolution (like vsim -t)
+        if (c.lang === 'vhdl') for (const u of [1e6, 1e3, 1]) if (e.fs % u === 0) { this.minPrec = Math.min(this.minPrec, u); break; }
+        return constNode(fromInt(Math.round(e.fs), 64, true), { isTime: true });
+      }
       case 'str': {
         if (c.lang === 'vhdl' && !c.strMode && e.s.length > 0 && /^[01uxzwlh-]+$/i.test(e.s)) return constNode(L.fromBits(e.s));
         return constNode(e.s.length ? L.fromString(e.s) : L.zeros(8), { str: e.s });
@@ -1280,7 +1284,7 @@ export class Elaborator {
       const af = selfEv(arg);
       const isTime = tname === 'time' || arg.isTime;
       const names = t?.enumNames ?? arg.enumNames;
-      const res = this.k.resolution;
+      const kk = this.k;
       return {
         w: 8, s: false, str: '',
         mk: (W) => () => {
@@ -1288,7 +1292,7 @@ export class Elaborator {
           let s: string;
           if (arg.rf) s = vhdlReal(arg.rf());
           else if (names && v.known) s = names[Number(v.a)] ?? String(v.a);
-          else if (isTime) s = v.known ? fmtTime(Number(v.toBigInt()), res) : 'X';
+          else if (isTime) s = v.known ? fmtTime(Number(v.toBigInt()), kk.resolution) : 'X';
           else if (t?.scalar || arg.w === 1) s = `'${v.char(0).toUpperCase()}'`;
           else s = L.toDec(v, true);
           return resize(L.fromString(s), Math.max(W, s.length * 8));
@@ -1699,7 +1703,6 @@ export class Elaborator {
       }
       case 'to_string': case 'to_hstring': case 'to_ostring': case 'to_bstring': {
         const X = A(0); const xf = selfEv(X);
-        const res = k.resolution;
         return {
           w: 8, s: false, str: '',
           mk: (W) => () => {
@@ -1707,7 +1710,7 @@ export class Elaborator {
             let s: string;
             if (name === 'to_hstring') s = L.toHex(v).toUpperCase();
             else if (name === 'to_ostring') s = L.toOct(v);
-            else if (X.isTime) s = fmtTime(Number(v.toBigInt()), res);
+            else if (X.isTime) s = fmtTime(Number(v.toBigInt()), k.resolution);
             else if (X.enumNames && v.known) s = X.enumNames[Number(v.a)] ?? String(v.a);
             else if (X.s && X.w === 32) s = L.toDec(v, true);
             else if (X.str !== undefined) s = L.toAscii(v);
@@ -2695,7 +2698,7 @@ export class Elaborator {
     const scopeName = c.scope.dotted;
     const k = this.k;
     const tsUnit = c.scope.mod.tsUnit;
-    const timeFmt = (v: Vec) => (v.known ? String(Math.round((Number(v.a) * tsUnit) / k.resolution)) : 'x');
+    const timeFmt = (v: Vec, real?: number) => (real !== undefined ? String(Math.round((real * tsUnit) / k.resolution)) : v.known ? String(Math.round((Number(v.a) * tsUnit) / k.resolution)) : 'x');
     const fctx = { scopeName, timeFmt };
     const fn = () => {
       let out = '';

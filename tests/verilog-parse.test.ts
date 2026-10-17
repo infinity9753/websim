@@ -27,7 +27,7 @@ endmodule`;
     const units = parseVerilog(src, 't.v');
     expect(units.map(u => u.name)).toEqual(['counter', 'tb']);
     expect(units[0].ports.map(p => p.name)).toEqual(['clk', 'rst', 'q']);
-    expect(units[0].timescale).toEqual({ unit: 1000, prec: 1 });
+    expect(units[0].timescale).toEqual({ unit: 1e6, prec: 1e3 }); // fs
     expect(units[1].items.some(i => i.k === 'inst')).toBe(true);
   });
 

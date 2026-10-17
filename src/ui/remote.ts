@@ -109,7 +109,7 @@ export class RemoteSession {
   }
 
   get now() { return this.design?.kernel.now ?? 0; }
-  get resolution() { return this.design?.kernel.resolution ?? 1000; }
+  get resolution() { return this.design?.kernel.resolution ?? 1e6; }
   fmt(ps: number) { return fmtTime(ps, this.resolution); }
 
   exec(cmd: string, echo = true): Promise<boolean> {

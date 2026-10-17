@@ -730,10 +730,10 @@ class VParser {
       const e = this.primary();
       // SV time literal: 10ns
       if (this.tok.t === 'id' && /^(s|ms|us|ns|ps|fs)$/.test(this.tok.v) && this.tok.loc.line === t.loc.line) {
-        const scale = { s: 1e12, ms: 1e9, us: 1e6, ns: 1e3, ps: 1, fs: 1e-3 }[this.tok.v]!;
+        const scale = { s: 1e15, ms: 1e12, us: 1e9, ns: 1e6, ps: 1e3, fs: 1 }[this.tok.v]!;
         this.pos++;
         const v = e.k === 'num' ? Number(e.v.a) : e.k === 'real' ? e.v : 0;
-        return { k: 'time', ps: v * scale };
+        return { k: 'time', fs: v * scale };
       }
       return e;
     }

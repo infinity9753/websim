@@ -26,13 +26,16 @@ function valueLine(sig: Signal, v: Vec, id: string): string {
 
 /**
  * Build a VCD document from recorded signal histories.
- * Time is written in ps (`$timescale 1ps`) so every recorded change is exact.
+ * Times (fs internally) are written in the coarsest unit that keeps every change exact.
  */
 export function writeVcd(vars: VcdVar[], endTime: number, opts: { date?: string; version?: string } = {}): string {
   const out: string[] = [];
   out.push(`$date\n  ${opts.date ?? new Date().toUTCString()}\n$end`);
   out.push(`$version\n  ${opts.version ?? 'WebSim'}\n$end`);
-  out.push('$timescale 1ps $end');
+  const allTimes = vars.flatMap(v => v.sig.times).concat([endTime]);
+  let unit = 1, uname = 'fs';
+  for (const [f, n] of [[1e6, 'ns'], [1e3, 'ps']] as [number, string][]) if (allTimes.every(t => t % f === 0)) { unit = f; uname = n; break; }
+  out.push(`$timescale 1${uname} $end`);
 
   // scope tree
   interface Node { children: Map<string, Node>; vars: { name: string; sig: Signal }[] }
@@ -86,10 +89,10 @@ export function writeVcd(vars: VcdVar[], endTime: number, opts: { date?: string;
   out.push('$end');
   const times = [...byTime.keys()].sort((a, b) => a - b);
   for (const t of times) {
-    if (t !== 0) out.push(`#${t}`);
+    if (t !== 0) out.push(`#${t / unit}`);
     out.push(...byTime.get(t)!);
   }
-  if (!times.length || times[times.length - 1] < endTime) out.push(`#${endTime}`);
+  if (!times.length || times[times.length - 1] < endTime) out.push(`#${endTime / unit}`);
   return out.join('\n') + '\n';
 }
 
