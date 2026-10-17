@@ -2,7 +2,7 @@
 import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
-import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, type Wait, type KernelHost, type ProcInfo } from './kernel';
+import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, type Tx, type Wait, type KernelHost, type ProcInfo } from './kernel';
 import { expandFormat, fmtTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
 
@@ -2070,11 +2070,17 @@ export class Elaborator {
     const k = this.k;
     const d = delay ? this.delayFn(delay, rc) : null;
     let pending = false;
+    let inflight: { dead: boolean } | null = null;
     const fire = () => {
       pending = false;
       const v = R();
-      if (d) { const t = d(); k.schedule(k.now + t, () => this.write(L_.tg(), v)); }
-      else this.write(L_.tg(), v);
+      if (d) {
+        // continuous assignment delays are inertial: a newer evaluation replaces the pending one
+        if (inflight) inflight.dead = true;
+        const tok = { dead: false };
+        inflight = tok;
+        k.schedule(k.now + d(), () => { if (tok.dead) return; inflight = null; this.write(L_.tg(), v); });
+      } else this.write(L_.tg(), v);
     };
     const wake = () => { if (!pending) { pending = true; k.activate(fire); } };
     for (const s of rc.reads) k.listen(s, wake);
@@ -2488,20 +2494,57 @@ export class Elaborator {
     const lt = this.typeOf(s.lhs, c);
     const tReal = lt?.kind === 'real';
     const waves = s.waves.map(w => ({ R: valueFor(this.ex(this.recordAgg(w.value, lt), c), Lv.w, tReal), D: w.after ? this.delayFn(w.after, c) : null }));
+    const rejectF = s.reject ? this.delayFn(s.reject, c) : null;
+    const transport = !!s.transport;
     const self = this;
     const deferred = c.deferred;
     return {
       sync: () => {
         const t = Lv.tg();
-        for (const w of waves) {
+        waves.forEach((w, wi) => {
           const v = w.R();
           const d = w.D ? w.D() : 0;
-          if (d > 0) k.schedule(k.now + d, () => self.write(t, v), true);
+          // VHDL driver semantics (IEEE 1076 projected waveform): transactions at or after the new one are
+          // deleted; for an inertial first element, earlier ones inside the reject window with a different value too
+          if (deferred) self.preempt(t, v, k.now + d, wi === 0 && !transport ? (rejectF ? rejectF() : d) : 0);
+          if (d > 0) self.scheduleTx(t, v, k.now + d);
           else if (deferred) k.nba.push(() => self.write(t, v));
           else self.write(t, v);
-        }
+        });
       },
     };
+  }
+
+  /** Delete pending transactions on the drivers behind `tgts` per VHDL preemption rules. */
+  preempt(tgts: Tgt[], v: Vec, at: number, reject: number) {
+    let off = tgts.reduce((s, t) => s + t.w, 0);
+    for (const t of tgts) {
+      off -= t.w;
+      if (t.k !== 'sig' || !t.drv) continue;
+      const part = slice(v, off, t.w);
+      for (const tx of t.drv.pending) {
+        if (tx.dead || tx.off + tx.w <= t.off || t.off + t.w <= tx.off) continue;
+        if (tx.at >= at) tx.dead = true;
+        else if (reject > 0 && tx.at >= at - reject && !(tx.off === t.off && tx.w === t.w && tx.v.equals(part))) tx.dead = true;
+      }
+      t.drv.pending = t.drv.pending.filter(x => !x.dead);
+    }
+  }
+
+  /** Schedule a future driver update that can later be cancelled by preemption. */
+  scheduleTx(tgts: Tgt[], v: Vec, at: number) {
+    const k = this.k;
+    let off = tgts.reduce((s, t) => s + t.w, 0);
+    for (const t of tgts) {
+      off -= t.w;
+      const part = slice(v, off, t.w);
+      if (t.k === 'sig' && t.drv) {
+        const tx: Tx = { at, off: t.off, w: t.w, v: part, dead: false };
+        const drv = t.drv;
+        drv.pending.push(tx);
+        k.schedule(at, () => { if (tx.dead) return; drv.pending = drv.pending.filter(x => x !== tx); this.write1(t, part); }, true);
+      } else k.schedule(at, () => this.write1(t, part), true);
+    }
   }
 
   caseStmt(s: Extract<Stmt, { k: 'case' }>, c: Ctx): SC {

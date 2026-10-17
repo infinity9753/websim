@@ -373,7 +373,7 @@ class VParser {
 
   parseGate(items: Item[]) {
     const g = this.ident();
-    if (this.accept('#')) this.delayValue();
+    const delay = this.accept('#') ? this.delayValue() : undefined;
     do {
       if (this.tok.t === 'id') this.ident();
       const loc = this.loc();
@@ -390,7 +390,7 @@ class VParser {
         rhs = args.slice(1).reduce((l, r) => ({ k: 'bin', op, l, r }));
         if (g === 'nand' || g === 'nor' || g === 'xnor') rhs = { k: 'un', op: '~', e: rhs };
       }
-      items.push({ k: 'cassign', lhs: out, rhs, loc });
+      items.push({ k: 'cassign', lhs: out, rhs, delay, loc });
     } while (this.accept(','));
     this.expect(';');
   }

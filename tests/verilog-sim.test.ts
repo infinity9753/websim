@@ -407,3 +407,23 @@ describe('instance arrays, multi-dim arrays, defparam (#20)', () => {
     expect(out.sort()).toEqual(['t.a W=4', 't.m.l W=9']);
   });
 });
+
+describe('inertial continuous assignment delays (#27)', () => {
+  it('assign #d and gate delays swallow pulses shorter than the delay', () => {
+    const { out } = simulate({
+      't.v': `\`timescale 1ns/1ns
+      module t; reg a = 0; wire y, g; integer n = 0, m = 0;
+        assign #5 y = a;
+        buf #5 b1 (g, a);
+        always @(y) n = n + 1;
+        always @(g) m = m + 1;
+        initial begin
+          #10 a = 1; #2 a = 0;     // 2 ns pulse: swallowed
+          #20 a = 1; #10 a = 0;    // 10 ns pulse: passes
+          #20 $display("%0d %0d", n, m);
+        end
+      endmodule`,
+    }, 't');
+    expect(out[0]).toBe('3 3'); // X->0 at 5 ns, then only the 10 ns pulse (2 edges); the 2 ns pulse is swallowed
+  });
+});

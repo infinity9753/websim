@@ -553,3 +553,50 @@ end;`;
     expect(out[0]).toBe('xxxx z');
   });
 });
+
+describe('inertial and transport delays (#27)', () => {
+  it('filters short pulses with inertial delay, keeps them with transport and reject', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all;
+entity t is end;
+architecture a of t is
+  signal a : std_logic := '0';
+  signal yi, yt, yr : std_logic := '0';
+  signal n_i, n_t, n_r : integer := 0;
+begin
+  yi <= a after 10 ns;                       -- inertial (reject = 10 ns)
+  yt <= transport a after 10 ns;             -- transport
+  yr <= reject 2 ns inertial a after 10 ns;  -- only pulses < 2 ns rejected
+  process (yi) begin if yi'event then n_i <= n_i + 1; end if; end process;
+  process (yt) begin if yt'event then n_t <= n_t + 1; end if; end process;
+  process (yr) begin if yr'event then n_r <= n_r + 1; end if; end process;
+  process begin
+    wait for 20 ns;
+    a <= '1'; wait for 5 ns; a <= '0';      -- 5 ns pulse
+    wait for 50 ns;
+    a <= '1'; wait for 1 ns; a <= '0';      -- 1 ns pulse
+    wait for 50 ns;
+    report integer'image(n_i) & " " & integer'image(n_t) & " " & integer'image(n_r);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out[0]).toBe('** Note: 0 4 2');
+  });
+
+  it('a later delta assignment cancels a pending delayed one', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all;
+entity t is end;
+architecture a of t is signal s : std_logic := '0'; begin
+  process begin
+    s <= '1' after 10 ns;
+    s <= '0';
+    wait for 20 ns;
+    report std_logic'image(s);
+    wait;
+  end process;
+end;`;
+    expect(simulate({ 't.vhd': src }, 't').out[0]).toBe("** Note: '0'");
+  });
+});

@@ -39,7 +39,7 @@ export interface SensItem { edge: 'pos' | 'neg' | 'any'; expr: Expr }
 export type Stmt =
   | { k: 'block'; stmts: Stmt[]; name?: string; decls?: Item[]; loc?: Loc }
   | { k: 'assign'; lhs: Expr; rhs: Expr; nb: boolean; delay?: Expr; evctl?: SensItem[]; vsig?: boolean; loc?: Loc }
-  | { k: 'vsigassign'; lhs: Expr; waves: { value: Expr; after?: Expr }[]; loc?: Loc }  // VHDL signal assignment
+  | { k: 'vsigassign'; lhs: Expr; waves: { value: Expr; after?: Expr }[]; transport?: boolean; reject?: Expr; loc?: Loc }  // VHDL signal assignment
   | { k: 'if'; c: Expr; t: Stmt; f?: Stmt; loc?: Loc }
   | { k: 'case'; kind: 'case' | 'casez' | 'casex'; expr: Expr; items: { labels: Expr[] | null; body: Stmt }[]; loc?: Loc }
   | { k: 'for'; init?: Stmt; cond?: Expr; step?: Stmt; body: Stmt; loc?: Loc }

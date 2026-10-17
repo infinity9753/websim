@@ -417,11 +417,12 @@ class VhParser {
 
   /** waveform [when cond else waveform]* — returns a statement */
   condWaveforms(target: Expr, loc: Loc): Stmt {
-    this.accept('transport');
-    if (this.accept('reject')) { this.expr(); this.expect('inertial'); }
+    const transport = this.accept('transport');
+    let reject: Expr | undefined;
+    if (this.accept('reject')) { reject = this.expr(); this.expect('inertial'); }
     this.accept('inertial');
     const first = this.waveform();
-    if (!this.is('when')) return { k: 'vsigassign', lhs: target, waves: first, loc };
+    if (!this.is('when')) return { k: 'vsigassign', lhs: target, waves: first, transport, reject, loc };
     const branches: { c?: Expr; w: { value: Expr; after?: Expr }[] }[] = [];
     let cur = first;
     while (this.accept('when')) {
@@ -434,7 +435,7 @@ class VhParser {
     let s: Stmt | undefined;
     for (let i = branches.length - 1; i >= 0; i--) {
       const b = branches[i];
-      const a: Stmt = { k: 'vsigassign', lhs: target, waves: b.w, loc };
+      const a: Stmt = { k: 'vsigassign', lhs: target, waves: b.w, transport, reject, loc };
       s = b.c ? { k: 'if', c: b.c, t: a, f: s, loc } : a;
     }
     return s!;
@@ -456,13 +457,13 @@ class VhParser {
     this.expect('select');
     const target = this.name();
     this.expect('<=');
-    this.accept('transport');
+    const transport = this.accept('transport');
     const items: { labels: Expr[] | null; body: Stmt }[] = [];
     do {
       const w = this.waveform();
       this.expect('when');
       const labels = this.choices();
-      items.push({ labels, body: { k: 'vsigassign', lhs: target, waves: w, loc } });
+      items.push({ labels, body: { k: 'vsigassign', lhs: target, waves: w, transport, loc } });
     } while (this.accept(','));
     this.expect(';');
     return { k: 'process', kind: 'vproc', sens: 'all', name: label, body: { k: 'case', kind: 'case', expr: sel, items, loc }, loc };

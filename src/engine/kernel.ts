@@ -62,9 +62,14 @@ export class Memory {
   index(i: number): number { return i >= this.lo && i <= this.hi ? i - this.lo : -1; }
 }
 
+/** A scheduled (projected) transaction on a driver. */
+export interface Tx { at: number; off: number; w: number; v: Vec; dead: boolean }
+
 export class Driver {
   /** Bits this driver drives; bits no driver covers keep the signal's own value (VHDL). */
   cover: bigint;
+  /** Projected output waveform (pending future transactions). */
+  pending: Tx[] = [];
   constructor(public sig: Signal, public value: Vec, public owner: string, cover?: bigint) {
     this.cover = cover ?? mask(sig.w);
   }
