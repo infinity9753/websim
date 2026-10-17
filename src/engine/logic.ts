@@ -299,6 +299,31 @@ export function caseEq(x: Vec, y: Vec): Vec {
   return bool(p.a === q.a && p.b === q.b && p.u === q.u && p.k === q.k);
 }
 export function caseNeq(x: Vec, y: Vec): Vec { return lnot(caseEq(x, y)); }
+/** Verilog ===: compares the 4-state value only (drive strength is not part of it). */
+export function caseEq4(x: Vec, y: Vec): Vec {
+  const [p, q] = prep(x, y);
+  return bool(p.a === q.a && p.b === q.b);
+}
+export function caseNeq4(x: Vec, y: Vec): Vec { return lnot(caseEq4(x, y)); }
+
+export type Strength = 'supply' | 'strong' | 'pull' | 'weak' | 'highz';
+/**
+ * Apply a drive strength pair to a driven value: weak/pull drivers produce L/H/W (they lose
+ * to strong drivers in resolution), highz turns that value into Z (open-drain style).
+ */
+export function withStrength(v: Vec, s0: Strength, s1: Strength): Vec {
+  const m = mask(v.w);
+  const zero = ~v.a & ~v.b & m, one = v.a & ~v.b & m, x = v.a & v.b & m;
+  const weak = (s: Strength) => s === 'pull' || s === 'weak';
+  let a = v.a & m, b = v.b & m, k = 0n;
+  if (weak(s0)) k |= zero;
+  else if (s0 === 'highz') b |= zero;
+  if (weak(s1)) k |= one;
+  else if (s1 === 'highz') { a &= ~one; b |= one; }
+  if (weak(s0) && weak(s1)) k |= x;
+  else if (s0 === 'highz' && s1 === 'highz') a &= ~x;
+  return new Vec(v.w, a, b, v.signed, 0n, k);
+}
 /** casez/casex match: bits where either side has Z (casez) or X/Z (casex) are don't-care. */
 export function wildEq(x: Vec, y: Vec, kind: 'casez' | 'casex'): boolean {
   const [p, q, w] = prep(x, y);

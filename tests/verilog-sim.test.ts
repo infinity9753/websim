@@ -448,3 +448,105 @@ describe('femtosecond precision (#29)', () => {
     expect(simulate({ 't.vhd': src }, 't').out[0]).toMatch(/1\.5 ns|1500 ps|1500 fs/);
   });
 });
+
+describe('gate-level modelling (#33)', () => {
+  it('combinational and sequential UDPs', () => {
+    const { out } = simulate({
+      't.v': `
+      primitive mux2 (y, s, a, b);
+        output y; input s, a, b;
+        table
+        // s a b : y
+           0 0 ? : 0;
+           0 1 ? : 1;
+           1 ? 0 : 0;
+           1 ? 1 : 1;
+           x 0 0 : 0;
+           x 1 1 : 1;
+        endtable
+      endprimitive
+
+      primitive dff_r (q, clk, d, rst_n);
+        output q; reg q; input clk, d, rst_n;
+        initial q = 1'b0;
+        table
+        // clk  d  rst_n : q : q+
+           ?    ?  0     : ? : 0;
+           r    0  1     : ? : 0;
+           r    1  1     : ? : 1;
+           (?0) ?  1     : ? : -;
+           ?    *  1     : ? : -;
+           ?    ?  (?1)  : ? : -;
+        endtable
+      endprimitive
+
+      module t;
+        reg s = 0, a = 0, b = 1, clk = 0, d = 0, rst_n = 0;
+        wire y, q;
+        mux2 #2 m (y, s, a, b);
+        dff_r f (q, clk, d, rst_n);
+        always #5 clk = ~clk;
+        initial begin
+          #1 $display("%0t q=%b", $time, q);
+          #2 $display("%0t y=%b", $time, y);
+          s = 1; #1 $display("%0t y=%b (delayed)", $time, y);
+          #2 $display("%0t y=%b", $time, y);
+          s = 1'bx; #3 $display("%0t y=%b", $time, y);
+          rst_n = 1; d = 1;
+          #10 $display("%0t q=%b", $time, q);
+          d = 0; #4 $display("%0t q=%b", $time, q);
+          #4 $display("%0t q=%b", $time, q);
+          rst_n = 0; #1 $display("%0t q=%b", $time, q);
+          $finish;
+        end
+      endmodule`,
+    }, 't');
+    expect(out.filter(l => !l.startsWith('**') && !l.startsWith('   Time'))).toEqual([
+      '1 q=0', '3 y=0', '4 y=0 (delayed)', '6 y=1', '9 y=x', '19 q=1', '23 q=1', '27 q=0', '28 q=0',
+    ]);
+  });
+
+  it('drive strengths, pullup, tri1 and %v', () => {
+    const { out } = simulate({
+      't.v': `module t;
+        reg en = 0, dv = 0;
+        wire bus; tri1 t1; wire od;
+        pullup (bus);
+        bufif1 (bus, dv, en);
+        assign (strong0, highz1) od = dv;   // open drain
+        pullup (od);
+        initial begin
+          #1 $display("%b %v %b %b %v", bus, bus, t1, od, od);
+          en = 1; #1 $display("%b %v", bus, bus);
+          dv = 1; #1 $display("%b %v %b %v %0d", bus, bus, od, od, bus === 1'b1);
+          en = 1'bx; dv = 0; #1 $display("%b", bus);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['1 Pu1 1 0 St0', '0 St0', '1 St1 1 Pu1 1', 'x']);
+  });
+
+  it('rise/fall delays and specify path delays', () => {
+    const { out } = simulate({
+      't.v': `\`timescale 1ns/1ns
+      module cell (output y, input a);
+        buf (y, a);
+        specify
+          specparam tr = 3, tf = 5;
+          (a => y) = (tr, tf);
+        endspecify
+      endmodule
+      module t;
+        reg a = 0; wire y, z;
+        cell u (.y(y), .a(a));
+        assign #(2, 4) z = a;
+        initial begin
+          #10 a = 1; #10 a = 0; #10 $finish;
+        end
+        always @(y) $display("%0t y=%b", $time, y);
+        always @(z) $display("%0t z=%b", $time, z);
+      endmodule`,
+    }, 't');
+    expect(out.filter(l => /=/.test(l) && !l.startsWith('**'))).toEqual(['4 z=0', '5 y=0', '12 z=1', '13 y=1', '24 z=0', '25 y=0']);
+  });
+});

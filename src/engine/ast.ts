@@ -2,6 +2,7 @@
 import type { Vec } from './logic';
 
 export interface Loc { file: string; line: number }
+export type Strength = 'supply' | 'strong' | 'pull' | 'weak' | 'highz';
 
 export type Expr =
   | { k: 'num'; v: Vec; unsized?: boolean; loc?: Loc }
@@ -33,6 +34,7 @@ export interface TypeSpec {
   name?: string;                    // named type reference (resolved during elaboration)
   width?: number;                   // fixed width for builtin int types
   twoState?: boolean;               // SV bit/int/byte/shortint/longint: default 0
+  strength?: [Strength, Strength];  // net declaration drive strength: wire (weak0, weak1) w = e
 }
 
 export interface SensItem { edge: 'pos' | 'neg' | 'any'; expr: Expr }
@@ -101,7 +103,8 @@ export type Item =
   | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; fileMode?: 'read' | 'write' | 'append'; isStatic?: boolean; loc?: Loc }
   | { k: 'class'; name: string; ext?: string; superArgs?: Expr[]; items: Item[]; loc?: Loc }
   | ({ k: 'param' } & ParamDecl)
-  | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; loc?: Loc }
+  | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; fall?: Expr; off?: Expr; strength?: [Strength, Strength]; loc?: Loc }
+  | { k: 'specpath'; outs: string[]; delays: Expr[]; loc?: Loc }      // specify module path delay
   | { k: 'process'; kind: 'always' | 'initial' | 'always_comb' | 'always_ff' | 'always_latch' | 'vproc'; body: Stmt; sens?: Expr[] | 'all'; name?: string; loc?: Loc }
   | { k: 'inst'; module: string; lib?: string; arch?: string; name: string; params: { name?: string; value: Expr }[]; conns: { name?: string; expr: Expr | null; sel?: Expr }[]; isEntity?: boolean; range?: [Expr, Expr]; loc?: Loc }
   | { k: 'defparam'; path: string; value: Expr; loc?: Loc }
@@ -126,6 +129,7 @@ export interface Unit {
   timescale?: { unit: number; prec: number }; // in ps (may be fractional for fs)
   typedefs?: Record<string, TypeSpec>;          // Verilog package: exported type names
   iface?: boolean;                              // SystemVerilog interface (kind 'module')
+  udp?: { seq: boolean; init?: Expr; rows: string[] };  // Verilog user-defined primitive
   source?: string;
 }
 

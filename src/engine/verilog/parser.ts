@@ -1,5 +1,5 @@
 // Verilog (IEEE 1364 subset + common SystemVerilog) recursive-descent parser.
-import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem } from '../ast';
+import { CompileError, type Strength, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem } from '../ast';
 import { isKeyword, lexVerilog, parseTimescale, preprocess, type Macro, type Token } from './lexer';
 import { fromBits } from '../logic';
 
@@ -21,7 +21,9 @@ export function parseVerilog(src: string, file: string, opts: VerilogParseOption
 
 const NET_TYPES = new Set(['wire', 'tri', 'tri0', 'tri1', 'wand', 'wor', 'supply0', 'supply1']);
 const VAR_TYPES = new Set(['struct', 'event', 'reg', 'logic', 'bit', 'integer', 'int', 'byte', 'shortint', 'longint', 'time', 'real', 'realtime', 'genvar', 'string']);
-const GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buf']);
+const GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buf', 'bufif0', 'bufif1', 'notif0', 'notif1',
+  'nmos', 'pmos', 'rnmos', 'rpmos', 'cmos', 'rcmos', 'pullup', 'pulldown']);
+const STRENGTHS = new Set(['supply0', 'supply1', 'strong0', 'strong1', 'pull0', 'pull1', 'weak0', 'weak1', 'highz0', 'highz1']);
 
 const BIN_PREC: Record<string, number> = {
   '||': 1, '&&': 2, '|': 3, '^': 4, '^~': 4, '~^': 4, '&': 5,
@@ -51,6 +53,7 @@ class VParser {
     if (!this.is(v)) this.err(`near "${this.tok.v}": syntax error, expecting '${v}'`);
     return this.toks[this.pos++];
   }
+  atEof() { return this.tok.t === 'eof'; }
   err(msg: string, loc = this.loc()): never { throw new CompileError(msg, loc); }
   ident(): string {
     const t = this.tok;
@@ -71,6 +74,7 @@ class VParser {
       if (this.is('typedef')) { this.globalItems.push(this.parseTypedef()); continue; }
       if (this.is('class') || (this.is('virtual') && this.peek().v === 'class')) { this.globalItems.push(this.parseClass()); continue; }
       if (this.is('package')) { units.push(this.parsePackage()); continue; }
+      if (this.is('primitive')) { units.push(this.parsePrimitive()); continue; }
       if (this.is('import')) { this.globalItems.push(...this.parseImport()); continue; }
       if (this.accept(';')) continue;
       this.err(`near "${this.tok.v}": syntax error, unexpected ${this.tok.v}`);
@@ -257,7 +261,13 @@ class VParser {
     const t: TypeSpec = { base: 'logic' };
     if (this.tok.t === 'id') {
       const v = this.tok.v;
-      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit' || v === 'event') { this.pos++; if (v === 'bit') t.twoState = true; if (this.accept('signed')) t.signed = true; }
+      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit' || v === 'event') {
+        this.pos++;
+        if (v === 'bit') t.twoState = true;
+        if (NET_TYPES.has(v)) { const st = this.strengthSpec(); if (st) t.strength = st; }
+        this.accept('vectored'); this.accept('scalared');
+        if (this.accept('signed')) t.signed = true;
+      }
       else if (v === 'integer' || v === 'int') { this.pos++; t.base = 'integer'; t.width = 32; t.signed = true; if (v === 'int') t.twoState = true; }
       else if (v === 'byte') { this.pos++; t.base = 'integer'; t.width = 8; t.signed = true; t.twoState = true; }
       else if (v === 'shortint') { this.pos++; t.base = 'integer'; t.width = 16; t.signed = true; t.twoState = true; }
@@ -484,11 +494,12 @@ class VParser {
       }
       case 'assign': {
         this.pos++;
-        const delay = this.accept('#') ? this.delayValue() : undefined;
+        const strength = this.strengthSpec();
+        const [delay, fall, off] = this.accept('#') ? this.delayList() : [];
         do {
           const lhs = this.lvalue();
           this.expect('=');
-          items.push({ k: 'cassign', lhs, rhs: this.expr(), delay, loc });
+          items.push({ k: 'cassign', lhs, rhs: this.expr(), delay, fall, off, strength, loc });
         } while (this.accept(','));
         this.expect(';');
         return;
@@ -515,7 +526,7 @@ class VParser {
       case 'class': items.push(this.parseClass()); return;
       case 'virtual': if (this.peek().v === 'class') { items.push(this.parseClass()); return; } break;
       case 'import': items.push(...this.parseImport()); return;
-      case 'specify': while (!this.accept('endspecify')) this.pos++; return;
+      case 'specify': this.pos++; this.parseSpecify(items); return;
       case 'modport': {
         // directions are not enforced: modport members are plain references into the interface
         this.pos++;
@@ -546,8 +557,9 @@ class VParser {
       if (isNet && this.is('reg')) this.pos++;
       this.pos--;
       const type = v === 'genvar' ? (this.pos++, { base: 'integer', width: 32, signed: true } as TypeSpec) : this.parseDataType();
-      let delay: Expr | undefined;
-      if (this.accept('#')) delay = this.delayValue();
+      const strength = type.strength;
+      let delay: Expr | undefined, fall: Expr | undefined, off: Expr | undefined;
+      if (this.accept('#')) [delay, fall, off] = this.delayList();
       const names: DeclName[] = [];
       do {
         const nloc = this.loc();
@@ -563,7 +575,7 @@ class VParser {
         }
         if (this.accept('=')) {
           const init = this.expr();
-          if (isNet) items.push({ k: 'cassign', lhs: { k: 'id', name, loc: nloc }, rhs: init, delay, loc: nloc });
+          if (isNet) items.push({ k: 'cassign', lhs: { k: 'id', name, loc: nloc }, rhs: init, delay, fall, off, strength, loc: nloc });
           else dn.init = init;
         }
         // named events are modelled as a 1-bit variable toggled by "->"; start known so a toggle is a change
@@ -573,6 +585,8 @@ class VParser {
       this.expect(';');
       items.push({ k: 'decl', kind: isNet ? 'net' : 'var', type, names, loc });
       if (v === 'supply0' || v === 'supply1') for (const dn of names) items.push({ k: 'cassign', lhs: { k: 'id', name: dn.name }, rhs: { k: 'num', v: fromBits(v === 'supply1' ? '1' : '0') }, loc });
+      // tri0 / tri1: a pull-strength driver keeps the net at 0 / 1 when nothing else drives it
+      if (v === 'tri0' || v === 'tri1') for (const dn of names) items.push({ k: 'cassign', lhs: { k: 'id', name: dn.name }, rhs: { k: 'fill', bit: v === 'tri1' ? '1' : '0' }, strength: ['pull', 'pull'], loc });
       return;
     }
     if (GATES.has(v)) { this.parseGate(items); return; }
@@ -581,9 +595,40 @@ class VParser {
     this.err(`near "${v}": syntax error, unexpected ${v}`);
   }
 
+  /** Optional drive strength: (strong0, weak1), (pull1) ... -> [strength of 0, strength of 1]. */
+  strengthSpec(): [Strength, Strength] | undefined {
+    if (!this.isOp('(') || !STRENGTHS.has(this.peek().v)) return undefined;
+    this.pos++;
+    const st: [Strength, Strength] = ['strong', 'strong'];
+    do {
+      const s = this.ident();
+      if (!STRENGTHS.has(s)) this.err(`near "${s}": expecting a drive strength`);
+      st[s.endsWith('0') ? 0 : 1] = s.slice(0, -1) as Strength;
+    } while (this.accept(','));
+    this.expect(')');
+    return st;
+  }
+
+  /** #d | #(rise[, fall[, turn-off]]) with optional min:typ:max (typ is used). */
+  delayList(): (Expr | undefined)[] {
+    if (!this.isOp('(')) return [this.delayValue()];
+    this.pos++;
+    const out: Expr[] = [];
+    do {
+      const e = this.expr();
+      if (this.accept(':')) { const typ = this.expr(); this.expect(':'); this.expr(); out.push(typ); } else out.push(e);
+    } while (this.accept(','));
+    this.expect(')');
+    return out;
+  }
+
   parseGate(items: Item[]) {
     const g = this.ident();
-    const delay = this.accept('#') ? this.delayValue() : undefined;
+    let strength = this.strengthSpec();
+    const [delay, fall, off] = this.accept('#') ? this.delayList() : [];
+    if (g.startsWith('r') && (g === 'rnmos' || g === 'rpmos' || g === 'rcmos')) strength ??= ['pull', 'pull']; // resistive: strong -> pull
+    const Z: Expr = { k: 'fill', bit: 'z' };
+    const not = (e: Expr): Expr => ({ k: 'un', op: '~', e });
     do {
       if (this.tok.t === 'id') this.ident();
       const loc = this.loc();
@@ -591,18 +636,130 @@ class VParser {
       const args: Expr[] = [];
       do args.push(this.expr()); while (this.accept(','));
       this.expect(')');
+      const push = (lhs: Expr, rhs: Expr, st = strength) => items.push({ k: 'cassign', lhs, rhs, delay, fall, off, strength: st, loc });
+      if (g === 'pullup' || g === 'pulldown') {
+        const st: [Strength, Strength] = strength ? (g === 'pullup' ? ['highz', strength[1]] : [strength[0], 'highz']) : ['pull', 'pull'];
+        for (const a of args) push(a, { k: 'fill', bit: g === 'pullup' ? '1' : '0' }, st);
+        continue;
+      }
       if (args.length < 2) this.err(`gate '${g}' needs at least 2 terminals`);
       const out = args[0];
-      let rhs: Expr;
-      if (g === 'not' || g === 'buf') rhs = g === 'not' ? { k: 'un', op: '~', e: args[1] } : args[1];
-      else {
-        const op = { and: '&', or: '|', xor: '^', nand: '&', nor: '|', xnor: '^' }[g]!;
-        rhs = args.slice(1).reduce((l, r) => ({ k: 'bin', op, l, r }));
-        if (g === 'nand' || g === 'nor' || g === 'xnor') rhs = { k: 'un', op: '~', e: rhs };
+      switch (g) {
+        case 'not': case 'buf':
+          // buf/not may drive several outputs from the last terminal
+          for (const o of args.slice(0, -1)) push(o, g === 'not' ? not(args[args.length - 1]) : args[args.length - 1]);
+          break;
+        case 'bufif0': case 'bufif1': case 'notif0': case 'notif1': case 'nmos': case 'pmos': case 'rnmos': case 'rpmos': {
+          if (args.length !== 3) this.err(`gate '${g}' needs 3 terminals (out, in, control)`);
+          const data = g.startsWith('notif') ? not(args[1]) : args[1];
+          const high = g.endsWith('1') || g === 'nmos' || g === 'rnmos';
+          push(out, high ? { k: 'tern', c: args[2], t: data, f: Z } : { k: 'tern', c: args[2], t: Z, f: data });
+          break;
+        }
+        case 'cmos': case 'rcmos':
+          if (args.length !== 4) this.err(`gate '${g}' needs 4 terminals (out, in, ncontrol, pcontrol)`);
+          push(out, { k: 'tern', c: args[2], t: args[1], f: Z });
+          push(out, { k: 'tern', c: args[3], t: Z, f: args[1] });
+          break;
+        default: {
+          const op = { and: '&', or: '|', xor: '^', nand: '&', nor: '|', xnor: '^' }[g]!;
+          let rhs: Expr = args.slice(1).reduce((l, r) => ({ k: 'bin', op, l, r }));
+          if (g === 'nand' || g === 'nor' || g === 'xnor') rhs = not(rhs);
+          push(out, rhs);
+        }
       }
-      items.push({ k: 'cassign', lhs: out, rhs, delay, loc });
     } while (this.accept(','));
     this.expect(';');
+  }
+
+  /** primitive name (out, in, ...); ... table ... endtable endprimitive */
+  parsePrimitive(): Unit {
+    const loc = this.loc();
+    this.expect('primitive');
+    const name = this.ident();
+    const ports: PortDecl[] = [];
+    const byName = new Map<string, PortDecl>();
+    let seq = false, init: Expr | undefined;
+    const declare = (n: string, dir: PortDecl['dir']) => { const p = byName.get(n); if (!p) this.err(`'${n}' is not a port of primitive '${name}'`); p.dir = dir; };
+    this.expect('(');
+    let dir: PortDecl['dir'] = 'input';
+    do {
+      if (this.accept('output')) { dir = 'output'; if (this.accept('reg')) seq = true; }
+      else if (this.accept('input')) dir = 'input';
+      this.accept('wire');
+      const pn = this.ident();
+      const p: PortDecl = { name: pn, dir, type: { base: 'logic' }, loc: this.loc() };
+      if (dir === 'output' && this.accept('=')) init = this.expr();
+      ports.push(p); byName.set(pn, p);
+    } while (this.accept(','));
+    this.expect(')');
+    this.expect(';');
+    const rows: string[] = [];
+    while (!this.accept('endprimitive')) {
+      if (this.tok.t === 'eof') this.err('Unexpected end of file, expecting endprimitive');
+      if (this.accept('output')) { if (this.accept('reg')) seq = true; do declare(this.ident(), 'output'); while (this.accept(',')); this.expect(';'); continue; }
+      if (this.accept('input')) { do declare(this.ident(), 'input'); while (this.accept(',')); this.expect(';'); continue; }
+      if (this.accept('reg')) { this.ident(); seq = true; this.expect(';'); continue; }
+      if (this.accept('initial')) { this.ident(); this.expect('='); init = this.expr(); this.expect(';'); continue; }
+      if (this.accept('table')) {
+        let row = '';
+        while (!this.accept('endtable')) {
+          if (this.atEof()) this.err('Unexpected end of file, expecting endtable');
+          if (this.accept(';')) { rows.push(row); row = ''; continue; }
+          row += this.tok.v.toLowerCase();
+          this.pos++;
+        }
+        continue;
+      }
+      this.err(`near "${this.tok.v}": syntax error in primitive '${name}'`);
+    }
+    if (ports[0]?.dir !== 'output' || ports.slice(1).some(p => p.dir !== 'input')) this.err(`Primitive '${name}': the first port must be the output and the rest inputs`, loc);
+    if (rows.some(r => r.split(':').length === 3)) seq = true;
+    return { kind: 'module', lang: 'verilog', name, file: this.file, line: loc.line, params: [], ports, items: [], timescale: this.timescale, udp: { seq, init, rows }, source: this.src };
+  }
+
+  /** specify ... endspecify: specparams and module path delays (timing checks are ignored). */
+  parseSpecify(items: Item[]) {
+    const skipStmt = () => { let d = 0; while (!(d === 0 && this.isOp(';'))) { if (this.tok.t === 'eof') this.err('Unexpected end of file in specify'); if (this.isOp('(')) d++; else if (this.isOp(')')) d--; this.pos++; } this.pos++; };
+    while (!this.accept('endspecify')) {
+      if (this.tok.t === 'eof') this.err('Unexpected end of file, expecting endspecify');
+      const loc = this.loc();
+      if (this.accept('specparam')) {
+        do {
+          const n = this.ident(); this.expect('=');
+          let e = this.expr();
+          if (this.accept(':')) { e = this.expr(); this.expect(':'); this.expr(); }
+          items.push({ k: 'param', name: n, value: e, local: true, loc });
+        } while (this.accept(','));
+        this.expect(';');
+        continue;
+      }
+      if (this.tok.t === 'sys' || ['showcancelled', 'noshowcancelled', 'pulsestyle_onevent', 'pulsestyle_ondetect'].includes(this.tok.v)) { skipStmt(); continue; }
+      if (this.accept('if')) { this.expect('('); this.expr(); this.expect(')'); }
+      else this.accept('ifnone');
+      if (!this.isOp('(')) this.err(`near "${this.tok.v}": syntax error in specify block`);
+      // ( [edge] inputs (=>|*>) outputs | (out [+|-]: data) )
+      this.pos++;
+      let d = 0;
+      while (!(d === 0 && this.isOp('>') && ['=', '*', '+=', '-='].includes(this.toks[this.pos - 1].v))) {
+        if (this.atEof() || (d === 0 && this.isOp(')'))) this.err('Expected => or *> in module path');
+        if (this.isOp('(')) d++; else if (this.isOp(')')) d--;
+        this.pos++;
+      }
+      this.pos++;
+      const outs: string[] = [];
+      const paren = this.accept('(');
+      do {
+        outs.push(this.ident());
+        while (this.isOp('[')) { while (!this.accept(']')) this.pos++; }
+      } while (this.accept(','));
+      if (paren) { while (!this.accept(')')) this.pos++; }
+      this.expect(')');
+      this.expect('=');
+      const delays = this.isOp('(') ? this.delayList().filter((x): x is Expr => !!x) : [this.expr()];
+      this.expect(';');
+      items.push({ k: 'specpath', outs, delays, loc });
+    }
   }
 
   parseInstances(items: Item[]) {

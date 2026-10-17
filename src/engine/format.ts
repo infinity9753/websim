@@ -50,7 +50,9 @@ export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scop
   const left = widthSpec.startsWith('-');
   const zeroPad = widthSpec.startsWith('0') && widthSpec.length > 1;
   const width = widthSpec === '' ? -1 : Math.abs(parseInt(widthSpec, 10));
-  const v = a.v;
+  // Verilog shows logic values without strength (weak 1 prints as 1); %v names the strength
+  const raw = a.v;
+  const v = raw.rich ? new Vec(raw.w, raw.a, raw.b, raw.signed) : raw;
   let s: string;
   switch (spec.toLowerCase()) {
     case 'd': case 'i': {
@@ -78,7 +80,14 @@ export function fmtValue(spec: string, a: FmtArg, widthSpec: string, ctx: { scop
       }
       break;
     }
-    case 'u': case 'z': case 'v': s = toBin(v); break;
+    case 'u': case 'z': s = toBin(v); break;
+    case 'v': {
+      const names: Record<string, string> = { '0': 'St0', '1': 'St1', x: 'StX', z: 'HiZ', L: 'Pu0', H: 'Pu1', W: 'PuX', U: 'StX' };
+      const parts: string[] = [];
+      for (let i = raw.w - 1; i >= 0; i--) parts.push(names[raw.char(i)] ?? 'StX');
+      s = parts.join('_');
+      break;
+    }
     case 'l': s = 'work'; break;
     default: s = '%' + spec;
   }

@@ -1,5 +1,5 @@
 // Elaboration: builds the instance hierarchy and compiles processes into closures.
-import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem } from './ast';
+import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem, type Strength } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
@@ -242,6 +242,8 @@ export interface ElabOptions {
   resolutionPs?: number;
   /** Compile statement hooks so breakpoints and stepping work (slightly slower). */
   debug?: boolean;
+  /** vsim +nospecify: ignore specify path delays. */
+  noSpecify?: boolean;
 }
 
 export class Elaborator {
@@ -365,6 +367,18 @@ export class Elaborator {
     }
     scope.overrides = { named, positional: positional.slice(posIdx), from: parent ?? scope };
 
+    // specify module paths: output port -> delays (the largest of all paths, per rise/fall/turn-off)
+    const paths = new Map<string, Expr[]>();
+    if (lang === 'verilog' && !this.opts.noSpecify) {
+      const max = (a: Expr, b: Expr): Expr => ({ k: 'tern', c: { k: 'bin', op: '>', l: a, r: b }, t: a, f: b });
+      for (const it of unit.items) {
+        if (it.k !== 'specpath') continue;
+        for (const o of it.outs) {
+          const cur = paths.get(o);
+          paths.set(o, cur ? it.delays.map((d, i) => (cur[i] ? max(cur[i], d) : d)) : it.delays);
+        }
+      }
+    }
     // ports
     const byName = conns.some(c => c.name && c.name !== '*');
     const wildcard = conns.some(c => c.name === '*');
@@ -395,7 +409,8 @@ export class Elaborator {
         return;
       }
       if (conn?.expr && parent && arr) conn = { ...conn, expr: this.arraySlice(conn.expr, parent, t.w || 1, arr, loc) };
-      if (conn?.expr && parent) {
+      const pathDelay = dir === 'out' ? paths.get(port.name) : undefined;
+      if (conn?.expr && parent && !pathDelay) {
         const alias = this.aliasTarget(conn.expr, parent, t);
         if (alias) {
           // a variable port (output reg / VHDL port) collapsed onto an undriven net starts unknown, not Z
@@ -415,6 +430,7 @@ export class Elaborator {
         const pexpr = conn.expr;
         const self = { k: 'id', name: port.name } as Expr;
         if (dir === 'in') this.pending.push(() => this.compileCassign(self, pexpr, undefined, scope, parent, `port ${port.name}`));
+        else if (pathDelay) this.pending.push(() => this.compileCassign(pexpr, self, pathDelay[0], parent, scope, `path ${port.name}`, { fall: pathDelay[1], off: pathDelay[2] }));
         else this.pending.push(() => this.compileCassign(pexpr, self, undefined, parent, scope, `port ${port.name}`));
       } else if (dir === 'in' && lang === 'verilog' && !init) {
         sig.value = allZ(sig.w); sig.prev = sig.value;
@@ -654,7 +670,7 @@ export class Elaborator {
         }
         case 'process': this.pending.push(() => this.compileProcess(it, scope)); break;
         case 'sva': this.pending.push(() => this.compileSva(it, scope)); break;
-        case 'cassign': this.pending.push(() => this.compileCassign(it.lhs, it.rhs, it.delay, scope, scope, `assign@${it.loc?.line ?? 0}`)); break;
+        case 'cassign': this.pending.push(() => this.compileCassign(it.lhs, it.rhs, it.delay, scope, scope, `assign@${it.loc?.line ?? 0}`, it)); break;
       }
     }
   }
@@ -712,6 +728,11 @@ export class Elaborator {
       if (rest.includes('.')) deeper.set(rest, v); else own.push({ name: rest, value: n(v) });
     }
     const params = [...it.params, ...own];
+    if (found.unit.udp) {
+      if (it.range) err('Arrays of UDP instances are not supported.', it.loc);
+      this.pending.push(() => this.compileUdp(found!.unit, it, scope));
+      return;
+    }
     if (!it.range) { this.instantiate(found, it.name, scope, params, it.conns, it.loc, undefined, deeper); return; }
     const a = this.constInt(it.range[0], scope), b = this.constInt(it.range[1], scope);
     const count = Math.abs(a - b) + 1;
@@ -1549,8 +1570,8 @@ export class Elaborator {
       case '>>>': return shiftOp(L.ashr);
       case '==': return cmpOp(L.eq);
       case '!=': return cmpOp(L.neq);
-      case '===': return cmpOp(L.caseEq);
-      case '!==': return cmpOp(L.caseNeq);
+      case '===': return cmpOp(c.lang === 'verilog' ? L.caseEq4 : L.caseEq);
+      case '!==': return cmpOp(c.lang === 'verilog' ? L.caseNeq4 : L.caseNeq);
       case '<': return cmpOp(L.lt);
       case '<=': return cmpOp(L.le);
       case '>': return cmpOp(L.gt);
@@ -2401,18 +2422,128 @@ export class Elaborator {
     return () => { const v = f(); return v.known ? scale(Number(v.toBigInt())) : 0; };
   }
 
+  /**
+   * User-defined primitive instance: evaluate the truth table whenever an input changes.
+   * Sequential tables are evaluated one input transition at a time; unlisted combinations give x.
+   */
+  compileUdp(u: Unit, it: Extract<Item, { k: 'inst' }>, scope: Scope) {
+    const udp = u.udp!;
+    const nIn = u.ports.length - 1;
+    if (it.conns.some(c => c.name)) err(`(vlog-2110) UDP '${u.name}' instances must use ordered port connections.`, it.loc);
+    if (it.conns.length !== u.ports.length) err(`(vsim-3015) UDP '${u.name}' expects ${u.ports.length} terminals, got ${it.conns.length}.`, it.loc);
+    const owner = `${scope.path}/${it.name}#${++this.ownerSeq}`;
+    // table rows -> per input a level set or edge pairs, then state / output
+    type In = { lv: string } | { edge: [string, string][] };
+    const level = (ch: string): string => ({ '0': '0', '1': '1', x: 'x', '?': '01x', b: '01' } as Record<string, string>)[ch] ?? err(`UDP '${u.name}': bad table symbol '${ch}'`, it.loc);
+    const edgeSym: Record<string, [string, string][]> = { r: [['0', '1']], f: [['1', '0']], p: [['0', '1x'], ['x', '1']], n: [['1', '0x'], ['x', '0']], '*': [['01x', '01x']] };
+    const rows = udp.rows.map(r => {
+      const f = r.split(':');
+      if (f.length !== (udp.seq ? 3 : 2)) err(`UDP '${u.name}': table row "${r}" has the wrong number of fields`, it.loc);
+      const ins: In[] = [];
+      const src = f[0];
+      for (let i = 0; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === '(') { ins.push({ edge: [[level(src[i + 1]), level(src[i + 2])]] }); i += 3; }
+        else if (edgeSym[ch]) ins.push({ edge: edgeSym[ch] });
+        else ins.push({ lv: level(ch) });
+      }
+      if (ins.length !== nIn) err(`UDP '${u.name}': table row "${r}" has ${ins.length} inputs, expected ${nIn}`, it.loc);
+      const edges = ins.filter(x => 'edge' in x).length;
+      if (!udp.seq && edges) err(`UDP '${u.name}': edges are only allowed in sequential tables`, it.loc);
+      if (edges > 1) err(`UDP '${u.name}': at most one edge per table row`, it.loc);
+      return { ins, edgeAt: ins.findIndex(x => 'edge' in x), state: udp.seq ? level(f[1]) : '', out: f[f.length - 1] };
+    });
+    const rc = this.ctx(scope, owner);
+    rc.reads = new Set();
+    const inEvs = it.conns.slice(1).map(c => (c.expr ? selfEv(this.ex(c.expr, rc)) : () => L.X1));
+    const lc = this.ctx(scope, owner);
+    lc.driverMode = true;
+    const outL = it.conns[0].expr ? this.lv(it.conns[0].expr, lc) : null;
+    const k = this.k;
+    const ch = (v: Vec): string => { const b = v.bit(0); return b === 'z' ? 'x' : b; };
+    let prev = inEvs.map(() => 'x');
+    let state = udp.init ? ch(this.constEval(udp.init, scope, 1)) : 'x';
+    const matchLevels = (r: typeof rows[number], vals: string[], skip = -1) =>
+      r.ins.every((x, i) => i === skip || ('lv' in x && x.lv.includes(vals[i]))) && (!udp.seq || r.state.includes(state));
+    const lookupComb = (vals: string[]) => rows.find(r => matchLevels(r, vals))?.out ?? 'x';
+    const transition = (vals: string[], i: number, from: string): string => {
+      // level-sensitive rows take precedence over edge rows
+      const lvRow = rows.find(r => r.edgeAt < 0 && matchLevels(r, vals));
+      if (lvRow) return lvRow.out;
+      const eRow = rows.find(r => r.edgeAt === i && (r.ins[i] as { edge: [string, string][] }).edge.some(([a, b]) => a.includes(from) && b.includes(vals[i])) && matchLevels(r, vals, i));
+      return eRow ? eRow.out : 'x';
+    };
+    const [dRise, dFall] = [it.params[0]?.value, it.params[1]?.value];
+    const delay = dRise ? this.riseFall(dRise, dFall, it.params[2]?.value, rc) : null;
+    let inflight: { dead: boolean } | null = null;
+    const drive = (o: string) => {
+      if (!outL) return;
+      const v = o === '0' ? L.ZERO : o === '1' ? L.ONE : L.X1;
+      if (!delay) { this.write(outL.tg(), v); return; }
+      if (inflight) inflight.dead = true;
+      const tok = { dead: false };
+      inflight = tok;
+      k.schedule(k.now + delay(v), () => { if (!tok.dead) { inflight = null; this.write(outL.tg(), v); } });
+    };
+    let first = true;
+    let pending = false;
+    const fire = () => {
+      pending = false;
+      const cur = inEvs.map(f => ch(f()));
+      if (!udp.seq) { drive(lookupComb(cur)); prev = cur; return; }
+      if (first) {
+        // time 0: only level-sensitive rows apply
+        first = false;
+        const r = rows.find(x => x.edgeAt < 0 && matchLevels(x, cur));
+        if (r && r.out !== '-') state = r.out;
+        prev = cur;
+        drive(state);
+        return;
+      }
+      const vals = [...prev];
+      for (let i = 0; i < cur.length; i++) {
+        if (cur[i] === vals[i]) continue;
+        const from = vals[i];
+        vals[i] = cur[i];
+        const o = transition(vals, i, from);
+        if (o !== '-') state = o;
+      }
+      prev = cur;
+      drive(state);
+    };
+    const wake = () => { if (!pending) { pending = true; k.activate(fire); } };
+    for (const s of rc.reads) k.listen(s, wake);
+    pending = true;
+    k.activate(fire);
+  }
+
+  /** Delay for a new value: rise (to 1), fall (to 0), turn-off (to Z); X takes the smallest (IEEE 1364 §7.14). */
+  riseFall(rise: Expr, fall: Expr | undefined, off: Expr | undefined, c: Ctx): (v: Vec) => number {
+    const r = this.delayFn(rise, c);
+    if (!fall) return () => r();
+    const f = this.delayFn(fall, c), o = off ? this.delayFn(off, c) : null;
+    return (v: Vec) => {
+      const m = L.mask(v.w);
+      if (v.b === m && v.a === 0n) return o ? o() : Math.min(r(), f());
+      if (v.b === 0n) return v.a === 0n ? f() : r();
+      return Math.min(r(), f(), o ? o() : Infinity);
+    };
+  }
+
   // ---------------------------------------------------------- processes
 
-  compileCassign(lhs: Expr, rhs: Expr, delay: Expr | undefined, lscope: Scope, rscope: Scope, name: string) {
+  compileCassign(lhs: Expr, rhs: Expr, delay: Expr | undefined, lscope: Scope, rscope: Scope, name: string, opt: { fall?: Expr; off?: Expr; strength?: [Strength, Strength] } = {}) {
     const owner = `assign#${++this.ownerSeq}`;
     const lc = this.ctx(lscope, owner);
     lc.driverMode = true;
     const L_ = this.lv(lhs, lc);
     const rc = this.ctx(rscope, owner);
     rc.reads = new Set();
-    const R = valueFor(this.ex(rhs, rc), L_.w, this.isRealTarget(lhs, lc));
+    const R0 = valueFor(this.ex(rhs, rc), L_.w, this.isRealTarget(lhs, lc));
+    const st = opt.strength && (opt.strength[0] !== 'strong' || opt.strength[1] !== 'strong') ? opt.strength : null;
+    const R = st ? () => L.withStrength(R0(), st[0], st[1]) : R0;
     const k = this.k;
-    const d = delay ? this.delayFn(delay, rc) : null;
+    const d = delay ? this.riseFall(delay, opt.fall, opt.off, rc) : null;
     let pending = false;
     let inflight: { dead: boolean } | null = null;
     const fire = () => {
@@ -2423,7 +2554,7 @@ export class Elaborator {
         if (inflight) inflight.dead = true;
         const tok = { dead: false };
         inflight = tok;
-        k.schedule(k.now + d(), () => { if (tok.dead) return; inflight = null; this.write(L_.tg(), v); });
+        k.schedule(k.now + d(v), () => { if (tok.dead) return; inflight = null; this.write(L_.tg(), v); });
       } else this.write(L_.tg(), v);
     };
     const wake = () => { if (!pending) { pending = true; k.activate(fire); } };

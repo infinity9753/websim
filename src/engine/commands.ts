@@ -258,8 +258,11 @@ export class Session {
   }
 
   // ------------------------------------------------------------ simulation
+  noSpecify = false;
+
   vsim(args: string[]) {
     this.debug = !args.includes('-nodebug');
+    this.noSpecify = args.includes('+nospecify');
     let res: number | undefined;
     const generics = new Map<string, string>();
     let lib: string | undefined;
@@ -285,7 +288,7 @@ export class Session {
 
   private load(o: { top: string; lib?: string; generics: Map<string, string>; res?: number }) {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug });
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);
