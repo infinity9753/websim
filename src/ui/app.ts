@@ -1,7 +1,7 @@
 // Application shell: menus, toolbar, panes, dialogs, persistence.
 import { h, icon, modal, promptText, confirmBox, download, clear } from './dom';
 import { Pane } from './pane';
-import { Session } from '../engine/commands';
+import { RemoteSession } from './remote';
 import { BrowserFS, langOf, loadState, saveState } from './vfs';
 import { Transcript } from './transcript';
 import { Editors } from './editor';
@@ -27,7 +27,7 @@ const DEFAULT_STATE: AppState = { compiled: [], libs: ['work'], runLength: '100 
 
 export class App {
   fs = new BrowserFS();
-  session: Session;
+  session: RemoteSession;
   transcript: Transcript;
   editors: Editors;
   wave: WaveView;
@@ -54,7 +54,7 @@ export class App {
     this.applyTheme();
     // the transcript needs the session and vice versa: route prints through a late-bound function
     let sink: (m: string, k?: any) => void = () => {};
-    this.session = new Session(this.fs, (m, k) => sink(m, k));
+    this.session = new RemoteSession(this.fs, (m, k) => sink(m, k));
     this.transcript = new Transcript(this.session);
     sink = (m, k) => this.transcript.print(m, k);
     this.editors = new Editors(this.right, this.fs);
@@ -188,8 +188,8 @@ export class App {
         { label: 'Center on Cursor', kbd: 'C', action: () => this.wave.centerCursor() },
         '-',
         { label: 'Add All Signals (recursive)', action: () => void this.cmd('add wave -r /*') },
-        { label: 'Export VCD (wave signals)…', action: () => this.exportVcd(false) },
-        { label: 'Export VCD (all signals)…', action: () => this.exportVcd(true) },
+        { label: 'Export VCD (wave signals)…', action: () => void this.exportVcd(false) },
+        { label: 'Export VCD (all signals)…', action: () => void this.exportVcd(true) },
         { label: 'Delete Selected', kbd: 'Del', action: () => this.wave.deleteSelected() },
         { label: 'Delete All', action: () => void this.cmd('delete wave *') },
       ]],
@@ -409,10 +409,12 @@ export class App {
     inp.click();
   }
 
-  exportVcd(all: boolean) {
+  async exportVcd(all: boolean) {
     try {
-      const name = `${this.session.design?.top ?? 'wave'}.vcd`;
-      download(name, this.session.vcdText(all));
+      if (!this.session.design) throw new Error('No design is loaded.');
+      if (!all && !this.session.waves.length) throw new Error('The wave window is empty.');
+      const name = `${this.session.design.top}.vcd`;
+      download(name, await this.session.vcdText(all));
       this.transcript.print(`Exported ${all ? 'all signals' : 'wave signals'} to ${name}.`);
     } catch (e) {
       this.transcript.print(`** Error: ${(e as Error).message}`, 'err');
@@ -438,13 +440,10 @@ export class App {
 
   async resetWorkspace() {
     if (!(await confirmBox('Reset workspace', 'Delete all files and libraries stored in this browser and reload the examples?'))) return;
-    this.session.quitSim();
+    await this.session.exec('quit -sim', false);
     for (const n of this.editors.openNames()) this.editors.close(n);
     this.fs.clear();
-    for (const l of this.session.libs.libs.values()) l.clear();
-    this.session.compiledSources = [];
-    this.session.fileStatus.clear();
-    this.session.emit('library');
+    this.session.resetLibraries();
     this.transcript.clear();
     await this.loadExample('counter', true);
   }

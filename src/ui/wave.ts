@@ -1,6 +1,6 @@
 // Waveform viewer: signal names, values at cursor, and a canvas-rendered timeline.
 import { h, icon, contextMenu, clear } from './dom';
-import type { Session, WaveEntry } from '../engine/commands';
+import type { RemoteSession as Session, MWave as WaveEntry } from './remote';
 import * as L from '../engine/logic';
 import type { Radix } from '../engine/logic';
 import { fmtTime } from '../engine/format';
@@ -164,7 +164,7 @@ export class WaveView {
 
   setRadix(r: Radix) {
     for (const w of this.session.waves) if (this.selected.has(w.id)) w.radix = r;
-    this.rebuildRows();
+    this.session.emit('wave');
   }
 
   // -------------------------------------------------------------- DOM rows
@@ -546,7 +546,7 @@ export class WaveView {
     const name = prompt('Divider label', 'Group');
     if (name === null) return;
     const ws = this.session.waves;
-    ws.splice(i + 1, 0, { id: Date.now(), path: '', name, sig: ws[i].sig, radix: 'binary', dividerLabel: name || '-' });
+    ws.splice(i + 1, 0, { id: Date.now() % 1e9, path: '', name, sig: ws[i].sig, radix: 'binary', dividerLabel: name || '-' });
     this.session.emit('wave');
   }
 

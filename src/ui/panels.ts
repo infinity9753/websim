@@ -1,7 +1,6 @@
 // Project / Library / Structure / Objects / Processes panels.
 import { h, icon, clear, contextMenu } from './dom';
-import type { Session } from '../engine/commands';
-import type { Scope } from '../engine/elab';
+import type { RemoteSession as Session, MScope as Scope, MSignal } from './remote';
 import * as L from '../engine/logic';
 import { langOf, type BrowserFS } from './vfs';
 import { DND_TYPE } from './wave';
@@ -313,7 +312,7 @@ export class ObjectsPanel {
   }
 }
 
-function kindOf(s: Scope, sig: import('../engine/kernel').Signal): string {
+function kindOf(s: Scope, sig: MSignal): string {
   const base = sig.enumNames ? 'Enum' : s.mod.lang === 'vhdl' ? 'Signal' : sig.drivers?.length ? 'Net' : 'Reg';
   return sig.w > 1 || sig.msb !== 0 ? `${base} [${sig.msb}:${sig.lsb}]` : base;
 }

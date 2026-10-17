@@ -1,6 +1,7 @@
 // Transcript console: command output plus prompt with history.
 import { h, clear } from './dom';
-import type { MsgKind, Session } from '../engine/commands';
+import type { MsgKind } from '../engine/commands';
+import type { RemoteSession as Session } from './remote';
 
 const MAX_LINES = 6000;
 
