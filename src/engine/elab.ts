@@ -296,7 +296,7 @@ export class Elaborator {
 
   // ---------------------------------------------------------- hierarchy
 
-  instantiate(found: { unit: Unit; arch?: Unit; libName: string }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null }[], loc: Loc | undefined, arr?: { n: number; k: number }, defs?: Map<string, Vec>): Scope {
+  instantiate(found: { unit: Unit; arch?: Unit; libName: string }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null; sel?: Expr }[], loc: Loc | undefined, arr?: { n: number; k: number }, defs?: Map<string, Vec>): Scope {
     if (++this.instDepth > 64) err('Design hierarchy too deep (recursive instantiation?)', loc);
     const unit = found.unit;
     const arch = found.arch;
@@ -343,10 +343,27 @@ export class Elaborator {
       const t = this.resolveType(port.type, scope, port.loc);
       let conn: { name?: string; expr: Expr | null } | undefined;
       if (byName || wildcard) {
-        conn = conns.find(c => c.name && c.name !== '*' && eqName(c.name, port.name));
+        conn = conns.find(c => c.name && c.name !== '*' && !c.sel && eqName(c.name, port.name));
         if (!conn && wildcard) conn = { name: port.name, expr: { k: 'id', name: port.name } };
       } else conn = conns[pi];
       const dir = port.dir === 'input' ? 'in' : port.dir === 'output' ? 'out' : 'inout';
+      const partial = conns.filter(cn => cn.sel && cn.name && eqName(cn.name, port.name));
+      if (partial.length && parent) {
+        // formal slices: one continuous connection per part
+        const psig = this.newSignal(scope, port.name, t, port.init ? this.constEval(port.init, scope, t.w) : undefined, false, dir);
+        void psig;
+        for (const pc of partial) {
+          if (!pc.expr) continue;
+          const sel = pc.sel!;
+          const part: Expr = sel.k === 'call' && (sel.name === '__downto' || sel.name === '__to')
+            ? { k: 'range', base: { k: 'id', name: port.name }, msb: sel.args[0], lsb: sel.args[1] }
+            : { k: 'index', base: { k: 'id', name: port.name }, index: sel };
+          const pexpr = pc.expr;
+          if (dir === 'in') this.pending.push(() => this.compileCassign(part, pexpr, undefined, scope, parent, `port ${port.name}`));
+          else this.pending.push(() => this.compileCassign(pexpr, part, undefined, parent, scope, `port ${port.name}`));
+        }
+        return;
+      }
       if (conn?.expr && parent && arr) conn = { ...conn, expr: this.arraySlice(conn.expr, parent, t.w || 1, arr, loc) };
       if (conn?.expr && parent) {
         const alias = this.aliasTarget(conn.expr, parent, t);

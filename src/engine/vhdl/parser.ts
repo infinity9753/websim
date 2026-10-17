@@ -528,24 +528,30 @@ class VhParser {
     return { k: 'inst', module: module!, lib, arch, name: label, params, conns, isEntity, loc };
   }
 
-  assocList(): { name?: string; expr: Expr | null }[] {
-    const out: { name?: string; expr: Expr | null }[] = [];
+  assocList(): { name?: string; expr: Expr | null; sel?: Expr }[] {
+    const out: { name?: string; expr: Expr | null; sel?: Expr }[] = [];
     this.expect('(');
     do {
       let name: string | undefined;
+      let sel: Expr | undefined;
       if (this.tok.t === 'id' && this.isAt(1, '=>')) { name = this.ident(); this.expect('=>'); }
       else if (this.tok.t === 'id' && this.isAt(1, '(')) {
-        // formal could be partial "q(0) => x" — detect by scanning for => before , or )
+        // partial formal "q(0) => x" / "q(7 downto 4) => y": scan for => after the matching ')'
         let j = this.pos + 1, depth = 0;
         for (; j < this.toks.length; j++) {
           const t = this.toks[j];
           if (t.v === '(') depth++;
           else if (t.v === ')') { depth--; if (depth === 0) break; }
         }
-        if (this.toks[j + 1]?.v === '=>') this.err('Partial port associations (formal slices) are not supported');
+        if (this.toks[j + 1]?.v === '=>') {
+          const f = this.name();
+          if (f.k !== 'call' || f.args.length !== 1) this.err('Unsupported formal in association');
+          name = f.name; sel = f.args[0];
+          this.expect('=>');
+        }
       }
-      if (this.accept('open')) out.push({ name, expr: null });
-      else out.push({ name, expr: this.expr() });
+      if (this.accept('open')) out.push({ name, expr: null, sel });
+      else out.push({ name, expr: this.expr(), sel });
     } while (this.accept(','));
     this.expect(')');
     return out;

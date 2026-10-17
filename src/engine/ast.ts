@@ -93,7 +93,7 @@ export type Item =
   | ({ k: 'param' } & ParamDecl)
   | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; loc?: Loc }
   | { k: 'process'; kind: 'always' | 'initial' | 'always_comb' | 'always_ff' | 'always_latch' | 'vproc'; body: Stmt; sens?: Expr[] | 'all'; name?: string; loc?: Loc }
-  | { k: 'inst'; module: string; lib?: string; arch?: string; name: string; params: { name?: string; value: Expr }[]; conns: { name?: string; expr: Expr | null }[]; isEntity?: boolean; range?: [Expr, Expr]; loc?: Loc }
+  | { k: 'inst'; module: string; lib?: string; arch?: string; name: string; params: { name?: string; value: Expr }[]; conns: { name?: string; expr: Expr | null; sel?: Expr }[]; isEntity?: boolean; range?: [Expr, Expr]; loc?: Loc }
   | { k: 'defparam'; path: string; value: Expr; loc?: Loc }
   | { k: 'alias'; name: string; type?: TypeSpec; target: Expr; loc?: Loc }
   | FuncDecl

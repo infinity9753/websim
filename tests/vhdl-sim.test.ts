@@ -486,3 +486,28 @@ end;`;
     expect(out[0]).toBe('** Note: 4+1i 5+5i int 12 true false');
   });
 });
+
+describe('partial port associations (#25)', () => {
+  it('connects formal slices and elements to different actuals', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all;
+entity swap is port (i : in std_logic_vector(7 downto 0); o : out std_logic_vector(7 downto 0)); end;
+architecture rtl of swap is begin o <= i(3 downto 0) & i(7 downto 4); end;
+library ieee; use ieee.std_logic_1164.all;
+entity t is end;
+architecture a of t is
+  signal hi, lo, ohi, olo : std_logic_vector(3 downto 0);
+  signal b0 : std_logic;
+begin
+  u : entity work.swap port map (i(7 downto 4) => hi, i(3 downto 0) => lo, o(7 downto 4) => ohi, o(3 downto 1) => olo(3 downto 1), o(0) => b0);
+  process begin
+    hi <= x"A"; lo <= x"3";
+    wait for 1 ns;
+    report to_hstring(ohi) & " " & to_string(olo(3 downto 1)) & " " & std_logic'image(b0);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out[0]).toBe("** Note: 3 101 '0'");
+  });
+});
