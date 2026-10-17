@@ -10,6 +10,7 @@ import { ListView } from './list';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
+import { t, getLang, setLang } from './i18n';
 
 interface AppState {
   compiled: { file: string; lang: 'verilog' | 'vhdl'; lib: string }[];
@@ -78,17 +79,17 @@ export class App {
 
   // ------------------------------------------------------------ layout
   private build() {
-    this.left.add('project', 'Project', this.project.el, { activate: true });
-    this.left.add('library', 'Library', this.library.el, { activate: false });
+    this.left.add('project', t('Project'), this.project.el, { activate: true });
+    this.left.add('library', t('Library'), this.library.el, { activate: false });
     this.left.add('sim', 'sim', this.structure.el, { activate: false });
-    this.mid.add('objects', 'Objects', this.objects.el);
-    this.mid.add('processes', 'Processes', this.processes.el, { activate: false });
-    this.mid.add('memory', 'Memory', this.memory.el, { activate: false });
-    this.mid.add('locals', 'Locals', this.locals.el, { activate: false });
+    this.mid.add('objects', t('Objects'), this.objects.el);
+    this.mid.add('processes', t('Processes'), this.processes.el, { activate: false });
+    this.mid.add('memory', t('Memory'), this.memory.el, { activate: false });
+    this.mid.add('locals', t('Locals'), this.locals.el, { activate: false });
     this.mid.onActivate = (id) => { if (id === 'memory') this.memory.show(); };
-    this.right.add('wave', 'Wave', this.wave.el);
-    this.right.add('list', 'List', this.list.el, { activate: false });
-    this.bottom.add('transcript', 'Transcript', this.transcript.el);
+    this.right.add('wave', t('Wave'), this.wave.el);
+    this.right.add('list', t('List'), this.list.el, { activate: false });
+    this.bottom.add('transcript', t('Transcript'), this.transcript.el);
 
     const s1 = h('div', { class: 'split-v1', role: 'separator', 'aria-orientation': 'vertical' });
     const s2 = h('div', { class: 'split-v2', role: 'separator', 'aria-orientation': 'vertical' });
@@ -103,7 +104,7 @@ export class App {
 
     this.status = {
       ind: h('span', { class: 'run-ind' }),
-      state: h('b', {}, 'No design'),
+      state: h('b', {}, t('No design')),
       now: h('b', {}, '0 ns'),
       delta: h('b', {}, '0'),
       scope: h('b', {}, '—'),
@@ -113,13 +114,13 @@ export class App {
     const st = this.status;
     const statusbar = h('div', { class: 'statusbar' },
       h('span', {}, st.ind, st.state),
-      h('span', {}, 'Now: ', st.now),
-      h('span', {}, 'Delta: ', st.delta),
-      h('span', {}, 'Region: ', st.scope),
-      h('span', { title: 'Recorded waveform history (estimate). Use "log -cap" / "nolog" to limit.' }, 'History: ', st.mem),
+      h('span', {}, t('Now: '), st.now),
+      h('span', {}, t('Delta: '), st.delta),
+      h('span', {}, t('Region: '), st.scope),
+      h('span', { title: t('Recorded waveform history (estimate). Use "log -cap" / "nolog" to limit.') }, t('History: '), st.mem),
       h('span', { class: 'grow' }),
-      h('span', {}, 'Library: ', st.lib),
-      h('span', {}, 'WebSim — clean-room HDL simulator'));
+      h('span', {}, t('Library: '), st.lib),
+      h('span', {}, t('WebSim — clean-room HDL simulator')));
 
     this.root.append(this.buildMenus(), this.buildToolbar(), this.main, statusbar);
   }
@@ -146,76 +147,79 @@ export class App {
   private buildMenus(): HTMLElement {
     type MI = { label: string; kbd?: string; action?: () => void; sub?: MI[]; disabled?: () => boolean } | '-';
     const menus: [string, MI[]][] = [
-      ['File', [
-        { label: 'New File…', kbd: 'Ctrl+Alt+N', action: () => this.newFile() },
-        { label: 'Import Files…', action: () => this.importFiles() },
-        { label: 'Open VCD Waveform…', action: () => this.openVcd() },
-        { label: 'Save', kbd: 'Ctrl+S', action: () => { const n = this.editors.activeName; if (n) this.editors.save(n); } },
-        { label: 'Save All', action: () => this.editors.saveAll() },
+      [t('File'), [
+        { label: t('New File…'), kbd: 'Ctrl+Alt+N', action: () => this.newFile() },
+        { label: t('Import Files…'), action: () => this.importFiles() },
+        { label: t('Open VCD Waveform…'), action: () => this.openVcd() },
+        { label: t('Save'), kbd: 'Ctrl+S', action: () => { const n = this.editors.activeName; if (n) this.editors.save(n); } },
+        { label: t('Save All'), action: () => this.editors.saveAll() },
         '-',
-        { label: 'Load Example', sub: EXAMPLES.map(ex => ({ label: ex.title, action: () => void this.loadExample(ex.id, true) })) },
-        { label: 'Download Project (.json)', action: () => this.exportProject() },
-        { label: 'Export Transcript', action: () => download('transcript.txt', this.transcript.text()) },
+        { label: t('Load Example'), sub: EXAMPLES.map(ex => ({ label: ex.title, action: () => void this.loadExample(ex.id, true) })) },
+        { label: t('Download Project (.json)'), action: () => this.exportProject() },
+        { label: t('Export Transcript'), action: () => download('transcript.txt', this.transcript.text()) },
         '-',
-        { label: 'Reset Workspace…', action: () => void this.resetWorkspace() },
+        { label: t('Reset Workspace…'), action: () => void this.resetWorkspace() },
       ]],
-      ['View', [
-        { label: 'Toggle Project/Library pane', action: () => this.togglePane('left') },
-        { label: 'Toggle Objects/Processes pane', action: () => this.togglePane('mid') },
+      [t('View'), [
+        { label: t('Toggle Project/Library pane'), action: () => this.togglePane('left') },
+        { label: t('Toggle Objects/Processes pane'), action: () => this.togglePane('mid') },
         '-',
-        { label: 'Project', action: () => { this.showLeft(); this.left.activate('project'); } },
-        { label: 'Library', action: () => { this.showLeft(); this.left.activate('library'); } },
-        { label: 'Structure (sim)', action: () => { this.showLeft(); this.left.activate('sim'); } },
-        { label: 'Objects', action: () => { this.showMid(); this.mid.activate('objects'); } },
-        { label: 'Processes', action: () => { this.showMid(); this.mid.activate('processes'); } },
-        { label: 'Memory', action: () => { this.showMid(); this.mid.activate('memory'); } },
-        { label: 'Wave', action: () => this.right.activate('wave') },
-        { label: 'List', action: () => this.right.activate('list') },
+        { label: t('Project'), action: () => { this.showLeft(); this.left.activate('project'); } },
+        { label: t('Library'), action: () => { this.showLeft(); this.left.activate('library'); } },
+        { label: t('Structure (sim)'), action: () => { this.showLeft(); this.left.activate('sim'); } },
+        { label: t('Objects'), action: () => { this.showMid(); this.mid.activate('objects'); } },
+        { label: t('Processes'), action: () => { this.showMid(); this.mid.activate('processes'); } },
+        { label: t('Memory'), action: () => { this.showMid(); this.mid.activate('memory'); } },
+        { label: t('Wave'), action: () => this.right.activate('wave') },
+        { label: t('List'), action: () => this.right.activate('list') },
         '-',
-        { label: 'Theme: Auto', action: () => this.setTheme('auto') },
-        { label: 'Theme: Light', action: () => this.setTheme('light') },
-        { label: 'Theme: Dark', action: () => this.setTheme('dark') },
+        { label: t('Theme: Auto'), action: () => this.setTheme('auto') },
+        { label: t('Theme: Light'), action: () => this.setTheme('light') },
+        { label: t('Theme: Dark'), action: () => this.setTheme('dark') },
+        '-',
+        { label: `${getLang() === 'en' ? '✓ ' : ''}English`, action: () => setLang('en') },
+        { label: `${getLang() === 'ko' ? '✓ ' : ''}한국어 (Korean)`, action: () => setLang('ko') },
       ]],
-      ['Compile', [
-        { label: 'Compile Current File', kbd: 'F7', action: () => this.compileCurrent() },
-        { label: 'Compile All', kbd: 'Shift+F7', action: () => this.compileFiles(this.project.hdlFiles()) },
-        { label: 'Compile Selected', action: () => this.project.sel && this.compileFiles([this.project.sel]) },
+      [t('Compile'), [
+        { label: t('Compile Current File'), kbd: 'F7', action: () => this.compileCurrent() },
+        { label: t('Compile All'), kbd: 'Shift+F7', action: () => this.compileFiles(this.project.hdlFiles()) },
+        { label: t('Compile Selected'), action: () => this.project.sel && this.compileFiles([this.project.sel]) },
         '-',
-        { label: 'Clear Library "work"', action: () => void this.cmd('vdel -lib work -all') },
+        { label: t('Clear Library "work"'), action: () => void this.cmd('vdel -lib work -all') },
       ]],
-      ['Simulate', [
-        { label: 'Start Simulation…', action: () => void this.startSimDialog() },
-        { label: 'Run', kbd: 'F9', action: () => void this.cmd(`run ${this.runField.value}`) },
-        { label: 'Run -All', kbd: 'F5', action: () => void this.cmd('run -all') },
-        { label: 'Continue', action: () => void this.cmd('run -continue') },
-        { label: 'Break', kbd: 'Esc', action: () => this.session.breakRun() },
-        { label: 'Step', kbd: 'F11', action: () => void this.cmd('step') },
-        { label: 'Step Over', kbd: 'F10', action: () => void this.cmd('step -over') },
-        { label: 'Toggle Breakpoint at Cursor', kbd: 'F8', action: () => this.toggleBpAtCursor() },
-        { label: 'Delete All Breakpoints', action: () => void this.cmd('bd all') },
-        { label: 'Restart', action: () => void this.cmd('restart -f') },
+      [t('Simulate'), [
+        { label: t('Start Simulation…'), action: () => void this.startSimDialog() },
+        { label: t('Run'), kbd: 'F9', action: () => void this.cmd(`run ${this.runField.value}`) },
+        { label: t('Run -All'), kbd: 'F5', action: () => void this.cmd('run -all') },
+        { label: t('Continue'), action: () => void this.cmd('run -continue') },
+        { label: t('Break'), kbd: 'Esc', action: () => this.session.breakRun() },
+        { label: t('Step'), kbd: 'F11', action: () => void this.cmd('step') },
+        { label: t('Step Over'), kbd: 'F10', action: () => void this.cmd('step -over') },
+        { label: t('Toggle Breakpoint at Cursor'), kbd: 'F8', action: () => this.toggleBpAtCursor() },
+        { label: t('Delete All Breakpoints'), action: () => void this.cmd('bd all') },
+        { label: t('Restart'), action: () => void this.cmd('restart -f') },
         '-',
-        { label: 'End Simulation', action: () => void this.cmd('quit -sim') },
+        { label: t('End Simulation'), action: () => void this.cmd('quit -sim') },
       ]],
-      ['Wave', [
-        { label: 'Zoom Full', kbd: 'F', action: () => this.wave.zoomFull() },
-        { label: 'Zoom In', kbd: 'I', action: () => this.wave.zoom(0.5) },
-        { label: 'Zoom Out', kbd: 'O', action: () => this.wave.zoom(2) },
-        { label: 'Center on Cursor', kbd: 'C', action: () => this.wave.centerCursor() },
+      [t('Wave'), [
+        { label: t('Zoom Full'), kbd: 'F', action: () => this.wave.zoomFull() },
+        { label: t('Zoom In'), kbd: 'I', action: () => this.wave.zoom(0.5) },
+        { label: t('Zoom Out'), kbd: 'O', action: () => this.wave.zoom(2) },
+        { label: t('Center on Cursor'), kbd: 'C', action: () => this.wave.centerCursor() },
         '-',
-        { label: 'Add All Signals (recursive)', action: () => void this.cmd('add wave -r /*') },
-        { label: 'Save Format…', action: () => void this.saveWaveFormat() },
-        { label: 'Load Format…', action: () => void this.loadWaveFormat() },
+        { label: t('Add All Signals (recursive)'), action: () => void this.cmd('add wave -r /*') },
+        { label: t('Save Format…'), action: () => void this.saveWaveFormat() },
+        { label: t('Load Format…'), action: () => void this.loadWaveFormat() },
         '-',
-        { label: 'Export VCD (wave signals)…', action: () => void this.exportVcd(false) },
-        { label: 'Export VCD (all signals)…', action: () => void this.exportVcd(true) },
-        { label: 'Delete Selected', kbd: 'Del', action: () => this.wave.deleteSelected() },
-        { label: 'Delete All', action: () => void this.cmd('delete wave *') },
+        { label: t('Export VCD (wave signals)…'), action: () => void this.exportVcd(false) },
+        { label: t('Export VCD (all signals)…'), action: () => void this.exportVcd(true) },
+        { label: t('Delete Selected'), kbd: 'Del', action: () => this.wave.deleteSelected() },
+        { label: t('Delete All'), action: () => void this.cmd('delete wave *') },
       ]],
-      ['Help', [
-        { label: 'Command Reference', action: () => void this.cmd('help') },
-        { label: 'Keyboard Shortcuts', action: () => this.shortcuts() },
-        { label: 'About WebSim', action: () => this.about() },
+      [t('Help'), [
+        { label: t('Command Reference'), action: () => void this.cmd('help') },
+        { label: t('Keyboard Shortcuts'), action: () => this.shortcuts() },
+        { label: t('About WebSim'), action: () => this.about() },
       ]],
     ];
     const close = () => { if (this.openMenu) { this.openMenu.classList.remove('open'); this.openMenu.querySelector('.menu-drop')?.remove(); this.openMenu = null; } };
@@ -237,32 +241,32 @@ export class App {
 
   private buildToolbar(): HTMLElement {
     const b = (ic: string, title: string, f: () => void) => h('button', { class: 'tb-btn', title, 'aria-label': title, onclick: f }, icon(ic)) as HTMLButtonElement;
-    this.runField = h('input', { class: 'tb-field', value: this.state.runLength, title: 'Run length', 'aria-label': 'Run length', onchange: () => { this.state.runLength = this.runField.value; this.persist(); } });
-    const run = b('run', 'Run (F9): advance by the run length', () => void this.cmd(`run ${this.runField.value}`));
-    const cont = b('cont', 'Continue run', () => void this.cmd('run -continue'));
-    const runall = b('runall', 'Run -All (F5)', () => void this.cmd('run -all'));
-    this.brkBtn = b('brk', 'Break (Esc)', () => this.session.breakRun());
-    const restart = b('restart', 'Restart', () => void this.cmd('restart -f'));
-    const stepIn = b('stepinto', 'Step (F11): run to the next statement', () => void this.cmd('step'));
-    const stepOver = b('stepover', 'Step Over (F10): next statement in this process, skipping task calls', () => void this.cmd('step -over'));
+    this.runField = h('input', { class: 'tb-field', value: this.state.runLength, title: t('Run length'), 'aria-label': t('Run length'), onchange: () => { this.state.runLength = this.runField.value; this.persist(); } });
+    const run = b('run', t('Run (F9): advance by the run length'), () => void this.cmd(`run ${this.runField.value}`));
+    const cont = b('cont', t('Continue run'), () => void this.cmd('run -continue'));
+    const runall = b('runall', t('Run -All (F5)'), () => void this.cmd('run -all'));
+    this.brkBtn = b('brk', t('Break (Esc)'), () => this.session.breakRun());
+    const restart = b('restart', t('Restart'), () => void this.cmd('restart -f'));
+    const stepIn = b('stepinto', t('Step (F11): run to the next statement'), () => void this.cmd('step'));
+    const stepOver = b('stepover', t('Step Over (F10): next statement in this process, skipping task calls'), () => void this.cmd('step -over'));
     this.runBtns = [run, cont, runall, stepIn, stepOver];
     this.simBtns = [restart];
     return h('div', { class: 'toolbar', role: 'toolbar' },
-      b('newfile', 'New file', () => this.newFile()),
-      b('open', 'Import files', () => this.importFiles()),
-      b('save', 'Save (Ctrl+S)', () => { const n = this.editors.activeName; if (n) this.editors.save(n); }),
+      b('newfile', t('New file'), () => this.newFile()),
+      b('open', t('Import files'), () => this.importFiles()),
+      b('save', t('Save (Ctrl+S)'), () => { const n = this.editors.activeName; if (n) this.editors.save(n); }),
       h('span', { class: 'tb-sep' }),
-      b('compile', 'Compile current file (F7)', () => this.compileCurrent()),
-      b('compileall', 'Compile all (Shift+F7)', () => this.compileFiles(this.project.hdlFiles())),
+      b('compile', t('Compile current file (F7)'), () => this.compileCurrent()),
+      b('compileall', t('Compile all (Shift+F7)'), () => this.compileFiles(this.project.hdlFiles())),
       h('span', { class: 'tb-sep' }),
-      b('simulate', 'Start simulation…', () => void this.startSimDialog()),
+      b('simulate', t('Start simulation…'), () => void this.startSimDialog()),
       restart,
       h('span', { class: 'tb-sep' }),
       this.runField, run, cont, runall, this.brkBtn, stepIn, stepOver,
       h('span', { class: 'tb-sep' }),
-      b('zoomin', 'Zoom in', () => this.wave.zoom(0.5)),
-      b('zoomout', 'Zoom out', () => this.wave.zoom(2)),
-      b('zoomfull', 'Zoom full', () => this.wave.zoomFull()),
+      b('zoomin', t('Zoom in'), () => this.wave.zoom(0.5)),
+      b('zoomout', t('Zoom out'), () => this.wave.zoom(2)),
+      b('zoomfull', t('Zoom full'), () => this.wave.zoomFull()),
     );
   }
 
@@ -279,14 +283,14 @@ export class App {
     this.project.onExport = (f) => download(f, this.fs.read(f) ?? '');
     this.project.onRunDo = (f) => void this.cmd(`do ${f}`);
     this.project.onRename = async (f) => {
-      const n = await promptText('Rename file', 'New name', f);
+      const n = await promptText(t('Rename file'), t('New name'), f);
       if (!n || n === f) return;
-      if (!this.fs.rename(f, n)) { alert(`A file named "${n}" already exists.`); return; }
+      if (!this.fs.rename(f, n)) { alert(t('A file named "{0}" already exists.', n)); return; }
       this.editors.rename(f, n);
       this.project.sel = n;
     };
     this.project.onDelete = async (f) => {
-      if (!(await confirmBox('Remove file', `Remove "${f}" from the project? This deletes it from browser storage.`))) return;
+      if (!(await confirmBox(t('Remove file'), t('Remove "{0}" from the project? This deletes it from browser storage.', f)))) return;
       this.editors.close(f);
       this.fs.remove(f);
       s.fileStatus.delete(f);
@@ -300,7 +304,7 @@ export class App {
     this.library.onOpenFile = (f) => this.editors.open(f);
     this.objects.onForce = (p) => void this.forceDialog(p);
     this.memory.onEdit = async (path, addr, cur) => {
-      const v = await promptText('Change memory word', `${path}[${addr}]`, cur);
+      const v = await promptText(t('Change memory word'), `${path}[${addr}]`, cur);
       if (v) { await this.session.memDeposit(path, addr, /^[0-9a-f]+$/i.test(v) && !/^[01]+$/.test(v) ? `16#${v}` : v); void this.memory.refresh(); }
     };
 
@@ -346,7 +350,7 @@ export class App {
   private toggleBpAtCursor() {
     const n = this.editors.activeName;
     const line = n ? this.editors.cursorLine(n) : null;
-    if (!n || !line) { this.transcript.print('** Error: Open a source file and place the cursor on a statement.', 'err'); return; }
+    if (!n || !line) { this.transcript.print('** Error: ' + t('Open a source file and place the cursor on a statement.'), 'err'); return; }
     this.session.toggleBreakpoint(n, line);
     this.saveBreakpoints();
   }
@@ -361,7 +365,7 @@ export class App {
     const d = s.design;
     const st = this.status;
     st.ind.classList.toggle('on', s.running);
-    st.state.textContent = s.running ? 'Running' : d ? (d.kernel.finished ? 'Finished' : s.paused ? `Paused at ${s.paused.file}:${s.paused.line}` : 'Ready') : 'No design';
+    st.state.textContent = s.running ? t('Running') : d ? (d.kernel.finished ? t('Finished') : s.paused ? t('Paused at {0}', `${s.paused.file}:${s.paused.line}`) : t('Ready')) : t('No design');
     st.now.textContent = fmtTime(s.now, s.resolution);
     st.delta.textContent = String(d?.kernel.deltaCount ?? 0);
     const hb = d?.kernel.histBytes;
@@ -385,14 +389,14 @@ export class App {
 
   compileCurrent() {
     const n = this.editors.activeName ?? this.project.sel;
-    if (!n) { this.transcript.print('** Error: No file selected to compile.', 'err'); return; }
+    if (!n) { this.transcript.print('** Error: ' + t('No file selected to compile.'), 'err'); return; }
     this.compileFiles([n]);
   }
 
   compileFiles(files: string[]) {
     this.editors.saveAll();
     const hdl = files.filter(f => langOf(f) === 'verilog' || langOf(f) === 'vhdl');
-    if (!hdl.length) { this.transcript.print('** Error: No Verilog/VHDL files to compile.', 'err'); return; }
+    if (!hdl.length) { this.transcript.print('** Error: ' + t('No Verilog/VHDL files to compile.'), 'err'); return; }
     // group consecutive files by language to keep compile order
     const groups: { lang: string; files: string[] }[] = [];
     for (const f of hdl) {
@@ -406,7 +410,7 @@ export class App {
   }
 
   async newFile() {
-    const n = await promptText('New file', 'File name', 'design.v');
+    const n = await promptText(t('New file'), t('File name'), 'design.v');
     if (!n) return;
     if (this.fs.has(n)) { this.editors.open(n); return; }
     const l = langOf(n);
@@ -432,7 +436,7 @@ export class App {
         this.fs.write(f.name, text);
         this.editors.reload(f.name);
       }
-      this.transcript.print(`Imported ${inp.files?.length ?? 0} file(s).`);
+      this.transcript.print(t('Imported {0} file(s).', inp.files?.length ?? 0));
     });
     inp.click();
   }
@@ -450,27 +454,27 @@ export class App {
   }
 
   async saveWaveFormat() {
-    if (!this.session.design) { this.transcript.print('** Error: No design is loaded.', 'err'); return; }
-    const n = await promptText('Save Wave Format', 'File name', 'wave.do');
+    if (!this.session.design) { this.transcript.print('** Error: ' + t('No design is loaded.'), 'err'); return; }
+    const n = await promptText(t('Save Wave Format'), t('File name'), 'wave.do');
     if (n) await this.cmd(`write format wave ${n}`);
   }
 
   async loadWaveFormat() {
     const dos = this.fs.list().filter(f => langOf(f) === 'do');
-    if (!dos.length) { this.transcript.print('** Error: No .do files in the project.', 'err'); return; }
+    if (!dos.length) { this.transcript.print('** Error: ' + t('No .do files in the project.'), 'err'); return; }
     const sel = h('select', { class: 'field' }, dos.map(d => h('option', { value: d, selected: d === 'wave.do' }, d)));
-    if ((await modal('Load Wave Format', h('label', { class: 'form-row' }, h('span', {}, 'Format file'), sel))) !== 'ok') return;
+    if ((await modal(t('Load Wave Format'), h('label', { class: 'form-row' }, h('span', {}, t('Format file')), sel))) !== 'ok') return;
     await this.cmd('delete wave *');
     await this.cmd(`do ${sel.value}`);
   }
 
   async exportVcd(all: boolean) {
     try {
-      if (!this.session.design) throw new Error('No design is loaded.');
-      if (!all && !this.session.waves.length) throw new Error('The wave window is empty.');
+      if (!this.session.design) throw new Error(t('No design is loaded.'));
+      if (!all && !this.session.waves.length) throw new Error(t('The wave window is empty.'));
       const name = `${this.session.design.top}.vcd`;
       download(name, await this.session.vcdText(all));
-      this.transcript.print(`Exported ${all ? 'all signals' : 'wave signals'} to ${name}.`);
+      this.transcript.print(all ? t('Exported all signals to {0}.', name) : t('Exported wave signals to {0}.', name));
     } catch (e) {
       this.transcript.print(`** Error: ${(e as Error).message}`, 'err');
     }
@@ -485,7 +489,7 @@ export class App {
     const ex = EXAMPLES.find(e => e.id === id);
     if (!ex) return;
     for (const [n, t] of Object.entries(ex.files)) { this.fs.write(n, t); this.editors.reload(n); }
-    this.transcript.print(`Loaded example "${ex.title}". Running ${ex.doFile} …`, 'note');
+    this.transcript.print(t('Loaded example "{0}". Running {1} …', ex.title, ex.doFile), 'note');
     const first = Object.keys(ex.files).find(f => langOf(f) !== 'do');
     if (first) this.editors.open(first);
     this.right.activate('wave');
@@ -494,7 +498,7 @@ export class App {
   }
 
   async resetWorkspace() {
-    if (!(await confirmBox('Reset workspace', 'Delete all files and libraries stored in this browser and reload the examples?'))) return;
+    if (!(await confirmBox(t('Reset workspace'), t('Delete all files and libraries stored in this browser and reload the examples?')))) return;
     await this.session.exec('quit -sim', false);
     for (const n of this.editors.openNames()) this.editors.close(n);
     this.fs.clear();
@@ -525,28 +529,28 @@ export class App {
   async startSimDialog() {
     const units: { lib: string; name: string; kind: string; file: string }[] = [];
     for (const [ln, lib] of this.session.libs.libs) for (const u of lib.list()) if (u.kind === 'module' || u.kind === 'entity') units.push({ lib: ln, name: u.name, kind: u.kind, file: u.file });
-    if (!units.length) { await modal('Start Simulation', h('p', {}, 'The library is empty. Compile your design first (Compile ▸ Compile All).'), [{ label: 'OK', value: 'ok', primary: true }]); return; }
+    if (!units.length) { await modal(t('Start Simulation'), h('p', {}, t('The library is empty. Compile your design first (Compile ▸ Compile All).')), [{ label: t('OK'), value: 'ok', primary: true }]); return; }
     const tops = new Set(this.session.libs.topLevels());
     let chosen = units.find(u => tops.has(u.name) && u.name === this.session.lastVsim?.top) ?? units.find(u => tops.has(u.name) && /tb|test/i.test(u.name)) ?? units.find(u => tops.has(u.name)) ?? units[0];
     const list = h('div', { class: 'unit-list' });
     const renderList = () => {
       clear(list);
       list.appendChild(h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Design unit'), h('th', {}, 'Type'), h('th', {}, 'Library'), h('th', {}, 'File'))),
+        h('thead', {}, h('tr', {}, h('th', {}, t('Design unit')), h('th', {}, t('Type')), h('th', {}, t('Library')), h('th', {}, t('File')))),
         h('tbody', {}, units.map(u => h('tr', {
           class: u === chosen ? 'sel' : '',
           onclick: () => { chosen = u; renderList(); },
           ondblclick: () => { chosen = u; (overlayOk() as HTMLElement | null)?.click(); },
-        }, h('td', {}, u.name, tops.has(u.name) ? h('span', { class: 'kind' }, '  (top)') : ''), h('td', { class: 'kind' }, u.kind === 'module' ? 'Module' : 'Entity'), h('td', { class: 'kind' }, u.lib), h('td', { class: 'kind' }, u.file))))));
+        }, h('td', {}, u.name, tops.has(u.name) ? h('span', { class: 'kind' }, '  (top)') : ''), h('td', { class: 'kind' }, u.kind === 'module' ? t('Module') : t('Entity')), h('td', { class: 'kind' }, u.lib), h('td', { class: 'kind' }, u.file))))));
     };
     const overlayOk = () => document.querySelector('.modal .btn.primary');
     renderList();
     const res = h('select', { class: 'field' }, ['default', '1fs', '1ps', '10ps', '100ps', '1ns'].map(r => h('option', { value: r }, r)));
-    const gen = h('input', { class: 'field', placeholder: 'e.g. WIDTH=8 DEPTH=16', spellcheck: 'false' });
+    const gen = h('input', { class: 'field', placeholder: t('e.g. WIDTH=8 DEPTH=16'), spellcheck: 'false' });
     const body = h('div', {}, list,
-      h('label', { class: 'form-row' }, h('span', {}, 'Resolution'), res),
-      h('label', { class: 'form-row' }, h('span', {}, 'Generics'), gen));
-    const r = await modal('Start Simulation', body, [{ label: 'OK', value: 'ok', primary: true }, { label: 'Cancel', value: 'cancel' }]);
+      h('label', { class: 'form-row' }, h('span', {}, t('Resolution')), res),
+      h('label', { class: 'form-row' }, h('span', {}, t('Generics')), gen));
+    const r = await modal(t('Start Simulation'), body, [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }]);
     if (r !== 'ok' || !chosen) return;
     const parts = ['vsim'];
     if (res.value !== 'default') parts.push('-t', res.value);
@@ -558,43 +562,43 @@ export class App {
   async forceDialog(path: string) {
     const f = this.session.findSignal(path);
     const val = h('input', { class: 'field', value: f ? f.obj.sig.value.toString() : '', spellcheck: 'false' });
-    const kind = h('select', { class: 'field' }, h('option', { value: 'freeze' }, 'Freeze (force)'), h('option', { value: 'deposit' }, 'Deposit'));
-    const delay = h('input', { class: 'field', placeholder: 'optional, e.g. 10 ns', spellcheck: 'false' });
+    const kind = h('select', { class: 'field' }, h('option', { value: 'freeze' }, t('Freeze (force)')), h('option', { value: 'deposit' }, t('Deposit')));
+    const delay = h('input', { class: 'field', placeholder: t('optional, e.g. 10 ns'), spellcheck: 'false' });
     const body = h('div', {},
-      h('p', {}, 'Signal: ', h('code', {}, path)),
-      h('label', { class: 'form-row' }, h('span', {}, 'Value'), val),
-      h('label', { class: 'form-row' }, h('span', {}, 'Kind'), kind),
-      h('label', { class: 'form-row' }, h('span', {}, 'Delay'), delay),
+      h('p', {}, t('Signal: '), h('code', {}, path)),
+      h('label', { class: 'form-row' }, h('span', {}, t('Value')), val),
+      h('label', { class: 'form-row' }, h('span', {}, t('Kind')), kind),
+      h('label', { class: 'form-row' }, h('span', {}, t('Delay')), delay),
       h('p', { class: 'kind' }, 'Values: 1, 0, X, Z, 1010, 16#FF, 8\'hA5, decimal.'));
-    if ((await modal('Force Signal', body)) !== 'ok' || !val.value.trim()) return;
+    if ((await modal(t('Force Signal'), body)) !== 'ok' || !val.value.trim()) return;
     await this.cmd(`force ${kind.value === 'deposit' ? '-deposit ' : ''}${path} ${val.value.trim()}${delay.value.trim() ? ' ' + delay.value.trim().replace(/\s+/g, '') : ''}`);
   }
 
   about() {
-    void modal('About WebSim', h('div', { class: 'about' },
+    void modal(t('About WebSim'), h('div', { class: 'about' },
       h('h2', {}, 'WebSim'),
-      h('p', {}, 'A browser-based Verilog / SystemVerilog / VHDL event-driven simulator with a classic desktop-simulator workflow: libraries, ', h('code', {}, 'vlog'), '/', h('code', {}, 'vcom'), ' compilation, ', h('code', {}, 'vsim'), ' elaboration, a transcript console and a waveform viewer.'),
-      h('p', {}, 'This is an independent clean-room implementation written from a functional specification and the IEEE 1364 / 1076 standards. It contains no code from, and is not affiliated with, any commercial simulator vendor.'),
-      h('p', { class: 'kind' }, 'Everything runs locally in your browser; files are kept in browser storage.')),
-      [{ label: 'Close', value: 'ok', primary: true }]);
+      h('p', {}, t('A browser-based Verilog / SystemVerilog / VHDL event-driven simulator with a classic desktop-simulator workflow: libraries, vlog/vcom compilation, vsim elaboration, a transcript console and a waveform viewer.')),
+      h('p', {}, t('This is an independent clean-room implementation written from a functional specification and the IEEE 1364 / 1076 standards. It contains no code from, and is not affiliated with, any commercial simulator vendor.')),
+      h('p', { class: 'kind' }, t('Everything runs locally in your browser; files are kept in browser storage.'))),
+      [{ label: t('Close'), value: 'ok', primary: true }]);
   }
 
   shortcuts() {
     const rows: [string, string][] = [
-      ['F7 / Shift+F7', 'Compile current file / all files'], ['F9', 'Run for the run length'], ['F5', 'Run -all'], ['Esc', 'Break a running simulation'],
-      ['F8', 'Toggle breakpoint at the editor cursor (or click the gutter)'], ['F11 / F10', 'Step / Step over'],
-      ['Ctrl+S', 'Save file'], ['Ctrl+Alt+N', 'New file'],
-      ['Wave: F / I / O / C', 'Zoom full / in / out / center cursor'], ['Wave: Tab / Shift+Tab', 'Next / previous transition'], ['Wave: Del', 'Delete selected signals'],
-      ['Wave: Ctrl+wheel', 'Zoom around mouse'], ['Wave: drag', 'Zoom to area'], ['Transcript: ↑ / ↓ / Tab', 'History / completion'],
+      ['F7 / Shift+F7', t('Compile current file / all files')], ['F9', t('Run for the run length')], ['F5', t('Run -all')], ['Esc', t('Break a running simulation')],
+      ['F8', t('Toggle breakpoint at the editor cursor (or click the gutter)')], ['F11 / F10', t('Step / Step over')],
+      ['Ctrl+S', t('Save file')], ['Ctrl+Alt+N', t('New file')],
+      [t('Wave: F / I / O / C'), t('Zoom full / in / out / center cursor')], [t('Wave: Tab / Shift+Tab'), t('Next / previous transition')], [t('Wave: Del'), t('Delete selected signals')],
+      [t('Wave: Ctrl+wheel'), t('Zoom around mouse')], [t('Wave: drag'), t('Zoom to area')], [t('Transcript: ↑ / ↓ / Tab'), t('History / completion')],
     ];
-    void modal('Keyboard Shortcuts', h('table', { class: 'grid' }, h('tbody', {}, rows.map(([k, v]) => h('tr', {}, h('td', { class: 'mono' }, k), h('td', {}, v))))), [{ label: 'Close', value: 'ok', primary: true }]);
+    void modal(t('Keyboard Shortcuts'), h('table', { class: 'grid' }, h('tbody', {}, rows.map(([k, v]) => h('tr', {}, h('td', { class: 'mono' }, k), h('td', {}, v))))), [{ label: t('Close'), value: 'ok', primary: true }]);
   }
 
   // ------------------------------------------------------------ startup
   private async start() {
-    const t = this.transcript;
-    t.print('WebSim — browser HDL simulator (clean-room implementation).');
-    t.print('Type "help" for commands. Use File ▸ Load Example to try the bundled designs.');
+    const tr = this.transcript;
+    tr.print(t('WebSim — browser HDL simulator (clean-room implementation).'));
+    tr.print(t('Type "help" for commands. Use File ▸ Load Example to try the bundled designs.'));
     for (const l of this.state.libs) this.session.libs.ensure(l);
     this.session.loadBreakpoints(this.state.breakpoints ?? []);
     if (this.fs.empty || !this.state.seen) {
@@ -604,7 +608,7 @@ export class App {
     }
     if (this.state.compiled.length) {
       this.session.rebuild(this.state.compiled);
-      t.print(`Restored library "work" (${this.state.compiled.length} source file(s) recompiled).`);
+      tr.print(t('Restored library "work" ({0} source file(s) recompiled).', this.state.compiled.length));
     }
     for (const f of this.state.openFiles) if (this.fs.has(f)) this.editors.open(f);
     this.right.activate('wave');

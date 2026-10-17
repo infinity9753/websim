@@ -2,6 +2,7 @@
 import { h, clear } from './dom';
 import type { MsgKind } from '../engine/commands';
 import type { RemoteSession as Session } from './remote';
+import { t } from './i18n';
 
 const MAX_LINES = 6000;
 
@@ -18,7 +19,7 @@ export class Transcript {
   constructor(private session: Session) {
     this.out = h('div', { class: 'tr-out', role: 'log', 'aria-live': 'polite' });
     this.promptEl = h('span', { class: 'prompt' });
-    this.input = h('input', { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Command input' });
+    this.input = h('input', { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-label': t('Command input') });
     this.input.addEventListener('keydown', (e) => this.onKey(e));
     this.el = h('div', { class: 'transcript', onclick: (e: MouseEvent) => { if ((e.target as HTMLElement).closest('.tr-out') && !window.getSelection()?.toString()) this.input.focus(); } },
       this.out, h('div', { class: 'tr-in' }, this.promptEl, this.input));

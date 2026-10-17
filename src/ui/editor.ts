@@ -10,6 +10,7 @@ import { tcl } from '@codemirror/legacy-modes/mode/tcl';
 import { h } from './dom';
 import { langOf, type BrowserFS } from './vfs';
 import type { Pane } from './pane';
+import { t } from './i18n';
 
 const verilogLang = StreamLanguage.define(verilog);
 const vhdlLang = StreamLanguage.define(vhdl);
@@ -37,7 +38,7 @@ const errorLineField = StateField.define<DecorationSet>({
 // ---- breakpoints gutter and current execution line
 const setBpLines = StateEffect.define<number[]>();
 class BpMarker extends GutterMarker {
-  toDOM() { const d = document.createElement('div'); d.className = 'cm-bp-dot'; d.title = 'Breakpoint (click to remove)'; return d; }
+  toDOM() { const d = document.createElement('div'); d.className = 'cm-bp-dot'; d.title = t('Breakpoint (click to remove)'); return d; }
 }
 const bpMarker = new BpMarker();
 const bpField = StateField.define<RangeSet<GutterMarker>>({
@@ -139,7 +140,7 @@ export class Editors {
 
   private closing(name: string): boolean {
     const d = this.docs.get(name);
-    if (d?.dirty && !confirm(`Save changes to ${name} before closing?\n\nOK = save, Cancel = discard`)) { /* discard */ }
+    if (d?.dirty && !confirm(t('Save changes to {0} before closing?\n\nOK = save, Cancel = discard', name))) { /* discard */ }
     else if (d?.dirty) this.save(name);
     d?.view.destroy();
     this.docs.delete(name);

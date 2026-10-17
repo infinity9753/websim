@@ -4,6 +4,7 @@ import { fmtSig, type RemoteSession as Session, type MScope as Scope, type MSign
 import * as L from '../engine/logic';
 import { langOf, type BrowserFS } from './vfs';
 import { DND_TYPE } from './wave';
+import { t } from './i18n';
 
 
 /** Renders only the rows of a long table that are in view (fixed row height). */
@@ -64,20 +65,20 @@ export class ProjectPanel {
     this.tbody = h('tbody');
     this.el = h('div', {},
       bar(
-        tbtn('newfile', 'New file', () => this.onNew?.()),
-        tbtn('upload', 'Import files from disk', () => this.onImport?.()),
-        tbtn('download', 'Download selected file', () => this.sel && this.onExport?.(this.sel)),
-        tbtn('rename', 'Rename selected file', () => this.sel && this.onRename?.(this.sel)),
-        tbtn('trash', 'Remove selected file', () => this.sel && this.onDelete?.(this.sel)),
+        tbtn('newfile', t('New file'), () => this.onNew?.()),
+        tbtn('upload', t('Import files from disk'), () => this.onImport?.()),
+        tbtn('download', t('Download selected file'), () => this.sel && this.onExport?.(this.sel)),
+        tbtn('rename', t('Rename selected file'), () => this.sel && this.onRename?.(this.sel)),
+        tbtn('trash', t('Remove selected file'), () => this.sel && this.onDelete?.(this.sel)),
         h('span', { class: 'tb-sep' }),
-        tbtn('up', 'Move up in compile order', () => { if (this.sel) { fs.move(this.sel, -1); this.render(); } }),
-        tbtn('down', 'Move down in compile order', () => { if (this.sel) { fs.move(this.sel, 1); this.render(); } }),
+        tbtn('up', t('Move up in compile order'), () => { if (this.sel) { fs.move(this.sel, -1); this.render(); } }),
+        tbtn('down', t('Move down in compile order'), () => { if (this.sel) { fs.move(this.sel, 1); this.render(); } }),
         h('span', { class: 'tb-sep' }),
-        tbtn('compile', 'Compile selected', () => this.sel && this.onCompile?.([this.sel])),
-        tbtn('compileall', 'Compile all (in order)', () => this.onCompile?.(this.hdlFiles())),
+        tbtn('compile', t('Compile selected'), () => this.sel && this.onCompile?.([this.sel])),
+        tbtn('compileall', t('Compile all (in order)'), () => this.onCompile?.(this.hdlFiles())),
       ),
       h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', { title: 'Compile status' }, 'Status'), h('th', {}, 'Type'), h('th', { title: 'Compile order' }, 'Order'))),
+        h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', { title: t('Compile status') }, t('Status')), h('th', {}, t('Type')), h('th', { title: t('Compile order') }, t('Order')))),
         this.tbody)));
     fs.onChange(() => this.render());
     session.on('compiled', () => this.render());
@@ -90,7 +91,7 @@ export class ProjectPanel {
     clear(this.tbody);
     const files = this.fs.list();
     if (!files.length) {
-      this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No files. Use File ▸ New or Import.')));
+      this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No files. Use File ▸ New or Import.'))));
       return;
     }
     let order = 0;
@@ -105,21 +106,21 @@ export class ProjectPanel {
         oncontextmenu: (e: MouseEvent) => {
           e.preventDefault(); this.sel = f; this.render();
           contextMenu(e.clientX, e.clientY, [
-            { label: 'Open', action: () => this.onOpen?.(f) },
-            ...(isHdl ? [{ label: 'Compile', action: () => this.onCompile?.([f]) }] : []),
-            ...(lang === 'do' ? [{ label: 'Execute script', action: () => this.onRunDo?.(f) }] : []),
-            ...(/\.vcd$/i.test(f) ? [{ label: 'Open as waveform', action: () => { void this.session.exec(`vcd load ${f}`); } }] : []),
-            { label: 'Compile all', action: () => this.onCompile?.(this.hdlFiles()) },
+            { label: t('Open'), action: () => this.onOpen?.(f) },
+            ...(isHdl ? [{ label: t('Compile'), action: () => this.onCompile?.([f]) }] : []),
+            ...(lang === 'do' ? [{ label: t('Execute script'), action: () => this.onRunDo?.(f) }] : []),
+            ...(/\.vcd$/i.test(f) ? [{ label: t('Open as waveform'), action: () => { void this.session.exec(`vcd load ${f}`); } }] : []),
+            { label: t('Compile all'), action: () => this.onCompile?.(this.hdlFiles()) },
             '-',
-            { label: 'Rename…', action: () => this.onRename?.(f) },
-            { label: 'Download', action: () => this.onExport?.(f) },
-            { label: 'Remove from project', action: () => this.onDelete?.(f) },
+            { label: t('Rename…'), action: () => this.onRename?.(f) },
+            { label: t('Download'), action: () => this.onExport?.(f) },
+            { label: t('Remove from project'), action: () => this.onDelete?.(f) },
           ]);
         },
       },
         h('td', {}, f),
         h('td', { class: st === 'ok' ? 'st-ok' : st === 'error' ? 'st-err' : 'st-none' }, isHdl ? (st === 'ok' ? '✓' : st === 'error' ? '✗' : '?') : ''),
-        h('td', { class: 'kind' }, lang === 'verilog' ? (/\.sv$/i.test(f) ? 'SystemVerilog' : 'Verilog') : lang === 'vhdl' ? 'VHDL' : lang === 'do' ? 'Macro' : 'Text'),
+        h('td', { class: 'kind' }, lang === 'verilog' ? (/\.sv$/i.test(f) ? 'SystemVerilog' : 'Verilog') : lang === 'vhdl' ? 'VHDL' : lang === 'do' ? t('Macro') : t('Text')),
         h('td', { class: 'kind' }, isHdl ? String(order++) : ''));
       this.tbody.appendChild(row);
     }
@@ -140,7 +141,7 @@ export class LibraryPanel {
     this.tbody = h('tbody');
     this.el = h('div', {},
       h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Type'), h('th', {}, 'Path'))),
+        h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', {}, t('Type')), h('th', {}, t('Path')))),
         this.tbody)));
     session.on('library', () => this.render());
     this.render();
@@ -153,7 +154,7 @@ export class LibraryPanel {
       const units = lib.list();
       this.tbody.appendChild(h('tr', { ondblclick: () => this.toggle(name) },
         h('td', {}, h('span', { class: 'tree-toggle', onclick: () => this.toggle(name) }, units.length ? (open ? '▾' : '▸') : ''), icon('lib'), ' ', name),
-        h('td', { class: 'kind' }, 'Library'),
+        h('td', { class: 'kind' }, t('Library')),
         h('td', { class: 'kind' }, name === 'work' ? '$WORK' : name)));
       if (!open) continue;
       for (const u of units) {
@@ -162,20 +163,20 @@ export class LibraryPanel {
         const label = u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name;
         this.tbody.appendChild(h('tr', {
           class: this.sel === key ? 'sel' : '',
-          title: simable ? 'Double-click to simulate' : '',
+          title: simable ? t('Double-click to simulate') : '',
           onclick: () => { this.sel = key; this.render(); },
           ondblclick: () => { if (simable) this.onSimulate?.(name, u.name); else if (u.kind === 'architecture') this.onSimulate?.(name, `${u.of}(${u.name})`); },
           oncontextmenu: (e: MouseEvent) => {
             e.preventDefault(); this.sel = key; this.render();
             contextMenu(e.clientX, e.clientY, [
-              { label: 'Simulate', disabled: !simable && u.kind !== 'architecture', action: () => this.onSimulate?.(name, u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name) },
-              { label: 'Edit source', action: () => this.onOpenFile?.(u.file) },
-              { label: 'Delete', action: () => { void this.session.exec(`vdel -lib ${name} ${u.name}`); } },
+              { label: t('Simulate'), disabled: !simable && u.kind !== 'architecture', action: () => this.onSimulate?.(name, u.kind === 'architecture' ? `${u.of}(${u.name})` : u.name) },
+              { label: t('Edit source'), action: () => this.onOpenFile?.(u.file) },
+              { label: t('Delete'), action: () => { void this.session.exec(`vdel -lib ${name} ${u.name}`); } },
             ]);
           },
         },
           h('td', { style: { paddingLeft: '26px' } }, label),
-          h('td', { class: 'kind' }, u.iface ? 'Interface' : kindLabel(u.kind, u.lang)),
+          h('td', { class: 'kind' }, u.iface ? t('Interface') : kindLabel(u.kind, u.lang)),
           h('td', { class: 'kind' }, u.file)));
       }
     }
@@ -186,12 +187,12 @@ export class LibraryPanel {
 
 function kindLabel(k: string, lang: string) {
   switch (k) {
-    case 'module': return 'Module';
-    case 'entity': return 'Entity';
-    case 'architecture': return 'Architecture';
-    case 'package': return 'Package';
-    case 'package_body': return 'Package body';
-    case 'configuration': return 'Configuration';
+    case 'module': return t('Module');
+    case 'entity': return t('Entity');
+    case 'architecture': return t('Architecture');
+    case 'package': return t('Package');
+    case 'package_body': return t('Package body');
+    case 'configuration': return t('Configuration');
   }
   return lang;
 }
@@ -208,7 +209,7 @@ export class StructurePanel {
   constructor(private session: Session) {
     this.tbody = h('tbody');
     const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Instance'), h('th', {}, 'Design unit'), h('th', {}, 'Type'))),
+      h('thead', {}, h('tr', {}, h('th', {}, t('Instance')), h('th', {}, t('Design unit')), h('th', {}, t('Type')))),
       this.tbody));
     this.el = h('div', {}, scroll);
     this.vr = new VRows(scroll, this.tbody, 3);
@@ -219,7 +220,7 @@ export class StructurePanel {
 
   render() {
     const d = this.session.design;
-    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No design loaded.'))); return; }
+    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '3', class: 'empty' }, t('No design loaded.')))); return; }
     const nodes: { s: Scope; depth: number }[] = [];
     const visit = (s: Scope, depth: number) => {
       nodes.push({ s, depth });
@@ -238,8 +239,8 @@ export class StructurePanel {
         oncontextmenu: (e: MouseEvent) => {
           e.preventDefault(); this.session.setScope(s);
           contextMenu(e.clientX, e.clientY, [
-            { label: 'Add signals of this region to wave', action: () => { void this.session.exec(`add wave ${s.path}/*`); } },
-            { label: 'Add recursively to wave', action: () => { void this.session.exec(`add wave -r ${s.path}/*`); } },
+            { label: t('Add signals of this region to wave'), action: () => { void this.session.exec(`add wave ${s.path}/*`); } },
+            { label: t('Add recursively to wave'), action: () => { void this.session.exec(`add wave -r ${s.path}/*`); } },
           ]);
         },
       },
@@ -247,7 +248,7 @@ export class StructurePanel {
           h('span', { class: 'tree-toggle', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggle(s.path); } }, s.children.length ? (open ? '▾' : '▸') : ''),
           isInst ? icon('chip') : '', ' ', s.name),
         h('td', { class: 'kind' }, isInst ? `${unit.name}${s.mod.arch ? `(${s.mod.arch})` : ''}` : ''),
-        h('td', { class: 'kind' }, isInst ? (unit.lang === 'vhdl' ? 'Architecture' : 'Module') : 'Generate'));
+        h('td', { class: 'kind' }, isInst ? (unit.lang === 'vhdl' ? t('Architecture') : t('Module')) : t('Generate')));
     });
   }
 
@@ -267,13 +268,13 @@ export class ObjectsPanel {
 
   constructor(private session: Session) {
     this.tbody = h('tbody');
-    this.filter = h('input', { type: 'search', class: 'tb-field', placeholder: 'Filter', style: { width: '110px' }, 'aria-label': 'Filter objects', oninput: () => this.render() });
+    this.filter = h('input', { type: 'search', class: 'tb-field', placeholder: t('Filter'), style: { width: '110px' }, 'aria-label': t('Filter objects'), oninput: () => this.render() });
     const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Kind'), h('th', {}, 'Mode'))),
+      h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', {}, t('Value')), h('th', {}, t('Kind')), h('th', {}, t('Mode')))),
       this.tbody));
     this.el = h('div', {},
       bar(
-        tbtn('addwave', 'Add selected to wave (or all if none selected)', () => this.addToWave()),
+        tbtn('addwave', t('Add selected to wave (or all if none selected)'), () => this.addToWave()),
         h('span', { class: 'grow' }),
         this.filter),
       scroll);
@@ -296,11 +297,11 @@ export class ObjectsPanel {
   render() {
     this.valueCells.clear();
     const s = this.session.scope;
-    if (!s) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    if (!s) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No design loaded.')))); return; }
     const f = this.filter.value.trim().toLowerCase();
     const objs = f ? s.objects.filter(o => o.name.toLowerCase().includes(f)) : s.objects;
     const mems = f ? s.memories.filter(m => m.name.toLowerCase().includes(f)) : s.memories;
-    if (!objs.length && !mems.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No objects in this region.'))); return; }
+    if (!objs.length && !mems.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No objects in this region.')))); return; }
     // cells of rows scrolled out of view are dropped from the update map
     this.valueCells = new Map();
     // rows are built before they are attached, so detached cells are pruned in updateValues(), not here
@@ -308,7 +309,7 @@ export class ObjectsPanel {
       if (i >= objs.length) {
         const m = mems[i - objs.length];
         return h('tr', { title: `${s.path}/${m.name}` },
-          h('td', {}, m.name), h('td', { class: 'mono kind' }, `[${m.mem.lo}:${m.mem.hi}] × ${m.mem.w}b`), h('td', { class: 'kind' }, 'Memory'), h('td', { class: 'kind' }, 'Internal'));
+          h('td', {}, m.name), h('td', { class: 'mono kind' }, `[${m.mem.lo}:${m.mem.hi}] × ${m.mem.w}b`), h('td', { class: 'kind' }, t('Memory')), h('td', { class: 'kind' }, t('Internal')));
       }
       const o = objs[i];
       const path = this.pathOf(s, o.name);
@@ -334,18 +335,18 @@ export class ObjectsPanel {
           e.preventDefault();
           if (!this.sel.has(path)) { this.sel = new Set([path]); this.render(); }
           contextMenu(e.clientX, e.clientY, [
-            { label: 'Add to Wave', action: () => this.session.addWavePaths([...this.sel]) },
-            { label: 'Add to List', action: () => { void this.session.exec(`add list ${[...this.sel].join(' ')}`); } },
-            { label: 'Force…', action: () => this.onForce?.(path) },
-            { label: 'NoForce', action: () => { void this.session.exec(`noforce ${path}`); }, disabled: !o.sig.forced },
-            { label: 'Examine', action: () => { void this.session.exec(`examine ${path}`); } },
+            { label: t('Add to Wave'), action: () => this.session.addWavePaths([...this.sel]) },
+            { label: t('Add to List'), action: () => { void this.session.exec(`add list ${[...this.sel].join(' ')}`); } },
+            { label: t('Force…'), action: () => this.onForce?.(path) },
+            { label: t('NoForce'), action: () => { void this.session.exec(`noforce ${path}`); }, disabled: !o.sig.forced },
+            { label: t('Examine'), action: () => { void this.session.exec(`examine ${path}`); } },
           ]);
         },
       },
-        h('td', {}, o.sig.forced ? h('span', { title: 'Forced' }, o.name, ' ⚑') : o.name),
+        h('td', {}, o.sig.forced ? h('span', { title: t('Forced') }, o.name, ' ⚑') : o.name),
         val,
         h('td', { class: 'kind' }, kindOf(s, o.sig)),
-        h('td', { class: 'kind' }, o.dir === 'in' ? 'In' : o.dir === 'out' ? 'Out' : o.dir === 'inout' ? 'InOut' : 'Internal'));
+        h('td', { class: 'kind' }, o.dir === 'in' ? t('In') : o.dir === 'out' ? t('Out') : o.dir === 'inout' ? t('InOut') : t('Internal')));
     });
   }
 
@@ -364,8 +365,8 @@ export class ObjectsPanel {
 }
 
 function kindOf(s: Scope, sig: MSignal): string {
-  if (sig.isReal) return 'Real';
-  const base = sig.enumNames ? 'Enum' : s.mod.lang === 'vhdl' ? 'Signal' : sig.drivers?.length ? 'Net' : 'Reg';
+  if (sig.isReal) return t('Real');
+  const base = sig.enumNames ? t('Enum') : s.mod.lang === 'vhdl' ? t('Signal') : sig.drivers?.length ? t('Net') : t('Reg');
   return sig.w > 1 || sig.msb !== 0 ? `${base} [${sig.msb}:${sig.lsb}]` : base;
 }
 
@@ -381,7 +382,7 @@ export class ProcessesPanel {
     this.tbody = h('tbody');
     this.all = h('input', { type: 'checkbox', onchange: () => this.render() });
     const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Region'), h('th', {}, 'State'), h('th', {}, 'Source'))),
+      h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', {}, t('Region')), h('th', {}, t('State')), h('th', {}, t('Source')))),
       this.tbody));
     this.el = h('div', {}, bar(h('label', { class: 'hint' }, this.all, ' Show all regions')), scroll);
     this.vr = new VRows(scroll, this.tbody, 4);
@@ -394,16 +395,16 @@ export class ProcessesPanel {
 
   render() {
     const d = this.session.design;
-    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No design loaded.')))); return; }
     const scopes = this.all.checked ? d.allScopes : this.session.scope ? [this.session.scope] : [];
     const procs = scopes.flatMap(s => s.procs);
-    if (!procs.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No processes in this region.'))); return; }
+    if (!procs.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No processes in this region.')))); return; }
     this.vr.set(procs.length, (i) => {
       const p = procs[i];
       return h('tr', {},
         h('td', {}, p.info.name),
         h('td', { class: 'kind' }, p.info.scope),
-        h('td', { class: 'kind' }, p.done ? 'Done' : !p.gen ? 'Ready' : 'Wait'),
+        h('td', { class: 'kind' }, p.done ? t('Done') : !p.gen ? t('Ready') : t('Wait')),
         h('td', { class: 'kind' }, p.info.file ? `${p.info.file}:${p.info.line}` : ''));
     });
   }
@@ -423,17 +424,17 @@ export class MemoryPanel {
   onEdit?: (path: string, addr: number, current: string) => void;
 
   constructor(private session: Session) {
-    this.sel = h('select', { class: 'tb-field', style: { width: '170px' }, 'aria-label': 'Memory', onchange: () => { this.start = 0; void this.refresh(); } });
-    this.addr = h('input', { class: 'tb-field', placeholder: 'Go to addr', style: { width: '80px' }, 'aria-label': 'Go to address', onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') this.goto(); } });
-    this.radix = h('select', { class: 'tb-field', style: { width: '80px' }, 'aria-label': 'Radix', onchange: () => void this.refresh() },
+    this.sel = h('select', { class: 'tb-field', style: { width: '170px' }, 'aria-label': t('Memory'), onchange: () => { this.start = 0; void this.refresh(); } });
+    this.addr = h('input', { class: 'tb-field', placeholder: t('Go to addr'), style: { width: '80px' }, 'aria-label': t('Go to address'), onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') this.goto(); } });
+    this.radix = h('select', { class: 'tb-field', style: { width: '80px' }, 'aria-label': t('Radix'), onchange: () => void this.refresh() },
       ['hex', 'binary', 'unsigned', 'decimal', 'octal'].map(r => h('option', { value: r }, r)));
     this.tbody = h('tbody');
     this.el = h('div', {},
       bar(this.sel, this.addr, this.radix,
-        tbtn('up', 'Previous page', () => { this.start -= MemoryPanel.PAGE; void this.refresh(); }),
-        tbtn('down', 'Next page', () => { this.start += MemoryPanel.PAGE; void this.refresh(); })),
+        tbtn('up', t('Previous page'), () => { this.start -= MemoryPanel.PAGE; void this.refresh(); }),
+        tbtn('down', t('Next page'), () => { this.start += MemoryPanel.PAGE; void this.refresh(); })),
       h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Value'))),
+        h('thead', {}, h('tr', {}, h('th', {}, t('Address')), h('th', {}, t('Value')))),
         this.tbody)));
     session.on('sim', () => void this.reload());
     session.on('time', () => this.schedule());
@@ -454,11 +455,11 @@ export class MemoryPanel {
 
   async reload() {
     clear(this.sel);
-    if (!this.session.design) { this.empty('No design loaded.'); return; }
+    if (!this.session.design) { this.empty(t('No design loaded.')); return; }
     const mems = await this.session.listMemories();
     for (const m of mems) this.sel.appendChild(h('option', { value: m.path }, `${m.path.split('/').slice(-2).join('/')} [${m.lo}:${m.hi}]`));
     this.start = mems[0]?.lo ?? 0;
-    if (!mems.length) { this.empty('No memories in this design.'); return; }
+    if (!mems.length) { this.empty(t('No memories in this design.')); return; }
     await this.refresh();
   }
 
@@ -477,7 +478,7 @@ export class MemoryPanel {
     r.words.forEach((v, i) => {
       const a = Math.max(r.lo, this.start) + i;
       const txt = L.format(v, this.radix.value as L.Radix);
-      this.tbody.appendChild(h('tr', { title: 'Double-click to change', ondblclick: () => this.onEdit?.(path, a, txt) },
+      this.tbody.appendChild(h('tr', { title: t('Double-click to change'), ondblclick: () => this.onEdit?.(path, a, txt) },
         h('td', { class: 'mono kind' }, a.toString(16).padStart(digits, '0')),
         h('td', { class: 'mono' }, txt)));
     });
@@ -495,10 +496,10 @@ export class LocalsPanel {
     this.stackEl = h('div', { class: 'callstack' });
     this.tbody = h('tbody');
     this.el = h('div', {},
-      h('div', { class: 'subbar' }, h('span', { class: 'hint' }, 'Call stack')),
+      h('div', { class: 'subbar' }, h('span', { class: 'hint' }, t('Call stack'))),
       this.stackEl,
       h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Frame'))),
+        h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', {}, t('Value')), h('th', {}, t('Frame')))),
         this.tbody)));
     session.on('debug', () => this.render());
     session.on('time', () => this.render());
@@ -510,11 +511,11 @@ export class LocalsPanel {
     clear(this.stackEl); clear(this.tbody);
     const s = this.session;
     if (!s.paused) {
-      this.stackEl.appendChild(h('div', { class: 'empty' }, 'Not paused. Set a breakpoint (click the editor gutter) or use Step.'));
+      this.stackEl.appendChild(h('div', { class: 'empty' }, t('Not paused. Set a breakpoint (click the editor gutter) or use Step.')));
       return;
     }
     s.stack.forEach((f, i) => this.stackEl.appendChild(h('div', { class: 'frame' + (i === 0 ? ' top' : '') }, f)));
-    if (!s.locals.length) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No local variables in this frame (module signals are in Objects).')));
+    if (!s.locals.length) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '3', class: 'empty' }, t('No local variables in this frame (module signals are in Objects).'))));
     for (const l of s.locals) {
       const radix = s.defaultRadix === 'binary' && l.value.w > 16 ? 'hex' : s.defaultRadix;
       const v = l.value.signed && l.value.w === 32 ? L.toDec(l.value, true) : L.format(l.value, radix, l.enumNames);

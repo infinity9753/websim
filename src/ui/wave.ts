@@ -7,6 +7,7 @@ import * as L from '../engine/logic';
 import type { Radix } from '../engine/logic';
 import { fmtTime } from '../engine/format';
 import { parseValue } from '../engine/commands';
+import { t } from './i18n';
 
 const ROW_H = 22;
 const HEAD_H = 26;
@@ -63,34 +64,34 @@ export class WaveView {
     this.track = h('div', { style: { position: 'relative' } }, this.canvas);
     this.canvasCol = h('div', { class: 'wave-col wave-canvas-col' }, this.ruler, this.track);
     this.emptyMsg = h('div', { class: 'wave-empty' });
-    const split1 = h('div', { class: 'wave-split', title: 'Drag to resize' });
-    const split2 = h('div', { class: 'wave-split', title: 'Drag to resize' });
+    const split1 = h('div', { class: 'wave-split', title: t('Drag to resize') });
+    const split2 = h('div', { class: 'wave-split', title: t('Drag to resize') });
     this.body = h('div', { class: 'wave-body' }, this.names, split1, this.values, split2, this.canvasCol, this.emptyMsg);
     this.footText = h('span', {});
-    this.scrollbar = h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': 'Scroll time' });
+    this.scrollbar = h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': t('Scroll time') });
     this.foot = h('div', { class: 'wave-foot' }, this.footText, this.scrollbar);
 
     this.findInput = h('input', {
-      type: 'search', class: 'tb-field wave-find', placeholder: 'Find value', title: 'Value of the selected signal to search for (in its radix, or decimal / 16#hex / 4\'b1010). Enter = next, Shift+Enter = previous',
-      'aria-label': 'Find value in selected signal',
+      type: 'search', class: 'tb-field wave-find', placeholder: t('Find value'), title: t('Value of the selected signal to search for (in its radix, or decimal / 16#hex / 4\'b1010). Enter = next, Shift+Enter = previous'),
+      'aria-label': t('Find value in selected signal'),
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); this.findValue(e.shiftKey ? -1 : 1); } },
     });
     const bar = h('div', { class: 'subbar' },
-      this.tb('zoomin', 'Zoom in (I)', () => this.zoom(0.5)),
-      this.tb('zoomout', 'Zoom out (O)', () => this.zoom(2)),
-      this.tb('zoomfull', 'Zoom full (F)', () => this.zoomFull()),
-      this.tb('zoomcursor', 'Center on cursor (C)', () => this.centerCursor()),
+      this.tb('zoomin', t('Zoom in (I)'), () => this.zoom(0.5)),
+      this.tb('zoomout', t('Zoom out (O)'), () => this.zoom(2)),
+      this.tb('zoomfull', t('Zoom full (F)'), () => this.zoomFull()),
+      this.tb('zoomcursor', t('Center on cursor (C)'), () => this.centerCursor()),
       h('span', { class: 'tb-sep' }),
-      this.tb('prevedge', 'Previous transition of selected signal (Shift+Tab)', () => this.jumpEdge(-1)),
-      this.tb('nextedge', 'Next transition of selected signal (Tab)', () => this.jumpEdge(1)),
+      this.tb('prevedge', t('Previous transition of selected signal (Shift+Tab)'), () => this.jumpEdge(-1)),
+      this.tb('nextedge', t('Next transition of selected signal (Tab)'), () => this.jumpEdge(1)),
       h('span', { class: 'tb-sep' }),
-      this.tb('trash', 'Delete selected signals (Del)', () => this.deleteSelected()),
+      this.tb('trash', t('Delete selected signals (Del)'), () => this.deleteSelected()),
       h('span', { class: 'tb-sep' }),
       this.findInput,
-      this.tb('prevedge', 'Find previous', () => this.findValue(-1)),
-      this.tb('nextedge', 'Find next', () => this.findValue(1)),
+      this.tb('prevedge', t('Find previous'), () => this.findValue(-1)),
+      this.tb('nextedge', t('Find next'), () => this.findValue(1)),
       h('span', { class: 'grow' }),
-      h('span', { class: 'hint' }, 'Click: cursor · Ctrl+click: 2nd cursor · Drag: zoom area · Ctrl+wheel: zoom · Right-click names: radix · format · colour · group'),
+      h('span', { class: 'hint' }, t('Click: cursor · Ctrl+click: 2nd cursor · Drag: zoom area · Ctrl+wheel: zoom · Right-click names: radix · format · colour · group')),
     );
     this.el = h('div', { class: 'wave', tabindex: '0' }, bar, this.body, this.foot);
 
@@ -185,7 +186,7 @@ export class WaveView {
   findValue(dir: 1 | -1) {
     const q = this.findInput.value.trim();
     const e = this.selectedEntry();
-    if (!q || !e) { this.flashFind(!e ? 'Select a signal first' : 'Type a value'); return; }
+    if (!q || !e) { this.flashFind(!e ? t('Select a signal first') : t('Type a value')); return; }
     const sig = e.sig;
     let target: L.Vec | null = null;
     try { target = parseValue(q, sig.w); } catch { /* compare text only */ }
@@ -203,7 +204,7 @@ export class WaveView {
     let hit: number | undefined;
     if (dir > 0) { for (let i = 0; i < ts.length; i++) if (ts[i] > c && match(vs[i])) { hit = ts[i]; break; } }
     else for (let i = ts.length - 1; i >= 0; i--) if (ts[i] < c && match(vs[i])) { hit = ts[i]; break; }
-    if (hit === undefined) { this.flashFind('Not found'); return; }
+    if (hit === undefined) { this.flashFind(t('Not found')); return; }
     this.cursor = hit;
     const x = this.x(hit);
     if (x < 0 || x > this.width) this.centerCursor();
@@ -252,8 +253,8 @@ export class WaveView {
       }
     }
     this.totalH = y;
-    if (!this.session.design) this.emptyMsg.textContent = 'No simulation loaded. Compile your sources, then Simulate ▸ Start Simulation (or type "vsim <top>").';
-    else if (!waves.length) this.emptyMsg.textContent = 'Wave window is empty. Drag signals here from Objects, double-click them, or type "add wave -r /*".';
+    if (!this.session.design) this.emptyMsg.textContent = t('No simulation loaded. Compile your sources, then Simulate ▸ Start Simulation (or type "vsim <top>").');
+    else if (!waves.length) this.emptyMsg.textContent = t('Wave window is empty. Drag signals here from Objects, double-click them, or type "add wave -r /*".');
     else this.emptyMsg.textContent = '';
     this.paintFirst = -1;
     this.paintRows();
@@ -282,8 +283,8 @@ export class WaveView {
     const last = Math.min(total, Math.max(0, this.rowIndexAt(top + Math.max(this.body.clientHeight, 200))) + 10);
     if (first === this.paintFirst && last === this.paintLast) return;
     this.paintFirst = first; this.paintLast = last;
-    const nameRows: HTMLElement[] = [h('div', { class: 'wave-head' }, 'Name')];
-    const valueRows: HTMLElement[] = [h('div', { class: 'wave-head' }, 'Value')];
+    const nameRows: HTMLElement[] = [h('div', { class: 'wave-head' }, t('Name'))];
+    const valueRows: HTMLElement[] = [h('div', { class: 'wave-head' }, t('Value'))];
     const pad = (px: number) => h('div', { style: { height: px + 'px' } });
     if (first > 0) { const px = this.rows[first].y; nameRows.push(pad(px)); valueRows.push(pad(px)); }
     this.valueEls = [];
@@ -298,7 +299,7 @@ export class WaveView {
       if (w.dividerLabel !== undefined) { nameRows.push(h('div', { class: 'wave-row divider' + sel, 'data-id': w.id, draggable: 'true' }, w.dividerLabel)); continue; }
       if (w.groupLabel !== undefined) {
         const n = this.session.waves.filter(x => x.parent === w.id).length;
-        const tog = h('span', { class: 'wave-exp', title: w.collapsed ? 'Expand group' : 'Collapse group', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleGroup(w); } }, w.collapsed ? '▸' : '▾');
+        const tog = h('span', { class: 'wave-exp', title: w.collapsed ? t('Expand group') : t('Collapse group'), onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleGroup(w); } }, w.collapsed ? '▸' : '▾');
         nameRows.push(h('div', { class: 'wave-row group' + sel, 'data-id': w.id, draggable: 'true', ondblclick: () => this.toggleGroup(w) }, tog, `${w.groupLabel} (${n})`));
         continue;
       }
@@ -308,7 +309,7 @@ export class WaveView {
       if (bit !== undefined) { nameRows.push(h('div', { class: 'wave-row bitrow' + sel, 'data-id': w.id, style: indent }, `${label}[${bit}]`)); continue; }
       const isBus = w.sig.w > 1 && !isAnalog(w);
       const open = isBus && this.expanded.has(w.id);
-      const tog = isBus ? h('span', { class: 'wave-exp', title: open ? 'Collapse' : 'Expand bits', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleExpand(w.id); } }, open ? '▾' : '▸') : h('span', { class: 'wave-exp' });
+      const tog = isBus ? h('span', { class: 'wave-exp', title: open ? t('Collapse') : t('Expand bits'), onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleExpand(w.id); } }, open ? '▾' : '▸') : h('span', { class: 'wave-exp' });
       const fmt = isAnalog(w) ? `, ${w.format}` : '';
       nameRows.push(h('div', { class: 'wave-row' + sel, 'data-id': w.id, title: `${w.path}  [${w.sig.w > 1 || w.sig.msb !== 0 ? `${w.sig.msb}:${w.sig.lsb}` : '1 bit'}, ${w.radix}${fmt}]`, draggable: 'true', style: { ...sz, ...indent, ...(col ? { color: col } : {}) } }, tog, label));
     }
@@ -636,10 +637,10 @@ export class WaveView {
 
   private updateFoot() {
     const res = this.session.resolution;
-    const parts = [`Now: ${fmtTime(this.session.now, res)}`];
-    if (this.cursor !== null) parts.push(`Cursor: ${fmtTime(this.cursor, res)}`);
+    const parts = [t('Now: ') + fmtTime(this.session.now, res)];
+    if (this.cursor !== null) parts.push(t('Cursor: ') + fmtTime(this.cursor, res));
     if (this.cursor !== null && this.cursor2 !== null) parts.push(`Δ: ${fmtTime(Math.abs(this.cursor2 - this.cursor), res)}`);
-    parts.push(`View: ${fmtTime(Math.round(this.t0), res)} – ${fmtTime(Math.round(this.t(this.width)), res)}`);
+    parts.push(t('View: ') + `${fmtTime(Math.round(this.t0), res)} – ${fmtTime(Math.round(this.t(this.width)), res)}`);
     this.footText.textContent = parts.join('   ');
     const span = this.width * this.scale;
     const max = Math.max(0, this.endTime - span);
@@ -734,11 +735,11 @@ export class WaveView {
       const w = this.session.waves.find(x => x.id === id)!;
       if (w.groupLabel !== undefined) {
         contextMenu(e.clientX, e.clientY, [
-          { label: w.collapsed ? 'Expand group' : 'Collapse group', action: () => this.toggleGroup(w) },
-          { label: 'Rename group…', action: () => void this.renameGroup(w) },
-          { label: 'Ungroup', action: () => this.ungroup(w) },
+          { label: w.collapsed ? t('Expand group') : t('Collapse group'), action: () => this.toggleGroup(w) },
+          { label: t('Rename group…'), action: () => void this.renameGroup(w) },
+          { label: t('Ungroup'), action: () => this.ungroup(w) },
           '-',
-          { label: 'Delete group and its signals', action: () => this.deleteSelected() },
+          { label: t('Delete group and its signals'), action: () => this.deleteSelected() },
         ]);
         return;
       }
@@ -747,29 +748,29 @@ export class WaveView {
       const setAll = (f: (x: WaveEntry) => void) => { for (const x of sel()) f(x); this.ranges.clear(); this.rebuildRows(); this.session.emit('wave'); };
       const fmt = (label: string, f: WaveEntry['format']) => ({ label, checked: (w.format ?? 'literal') === f, action: () => setAll(x => { x.format = f === 'literal' ? undefined : f; if (f === 'literal') x.height = undefined; }) });
       const radixItems: CtxItem[] = [
-        r('Binary', 'binary'), r('Hexadecimal', 'hex'), r('Unsigned', 'unsigned'), r('Decimal (signed)', 'decimal'), r('Octal', 'octal'), r('ASCII', 'ascii'),
-        ...(w.sig.enumNames ? [r('Symbolic', 'symbolic')] : []),
+        r(t('Binary'), 'binary'), r(t('Hexadecimal'), 'hex'), r(t('Unsigned'), 'unsigned'), r(t('Decimal (signed)'), 'decimal'), r(t('Octal'), 'octal'), r(t('ASCII'), 'ascii'),
+        ...(w.sig.enumNames ? [r(t('Symbolic'), 'symbolic')] : []),
       ];
       contextMenu(e.clientX, e.clientY, [
-        { label: 'Radix', sub: radixItems },
-        { label: 'Format', sub: [
-          fmt('Literal', 'literal'), fmt('Analog (step)', 'analog-step'), fmt('Analog (interpolated)', 'analog-interp'),
+        { label: t('Radix'), sub: radixItems },
+        { label: t('Format'), sub: [
+          fmt(t('Literal'), 'literal'), fmt(t('Analog (step)'), 'analog-step'), fmt(t('Analog (interpolated)'), 'analog-interp'),
           '-',
-          { label: 'Analog height…', disabled: !isAnalog(w), action: () => void this.askNumber('Analog height (pixels)', w.height ?? ANALOG_H).then(n => { if (n !== null) setAll(x => { x.height = Math.max(16, Math.min(400, Math.round(n))); }); }) },
-          { label: 'Analog range…', disabled: !isAnalog(w), action: () => void this.askRange(w).then(rg => { if (rg) setAll(x => { x.min = rg[0]; x.max = rg[1]; }); }) },
-          { label: 'Auto range', disabled: !isAnalog(w) || (w.min === undefined && w.max === undefined), action: () => setAll(x => { x.min = undefined; x.max = undefined; }) },
+          { label: t('Analog height…'), disabled: !isAnalog(w), action: () => void this.askNumber(t('Analog height (pixels)'), w.height ?? ANALOG_H).then(n => { if (n !== null) setAll(x => { x.height = Math.max(16, Math.min(400, Math.round(n))); }); }) },
+          { label: t('Analog range…'), disabled: !isAnalog(w), action: () => void this.askRange(w).then(rg => { if (rg) setAll(x => { x.min = rg[0]; x.max = rg[1]; }); }) },
+          { label: t('Auto range'), disabled: !isAnalog(w) || (w.min === undefined && w.max === undefined), action: () => setAll(x => { x.min = undefined; x.max = undefined; }) },
         ] },
-        { label: 'Color', sub: PALETTE.map(([name, c]) => ({ label: name, swatch: c || undefined, checked: (waveColor(w.color) ?? '') === c, action: () => setAll(x => { x.color = c ? name.toLowerCase() : undefined; }) })) },
-        { label: 'Group selected…', action: () => void this.groupSelected() },
-        ...(w.parent !== undefined ? [{ label: 'Remove from group', action: () => setAll(x => { x.parent = undefined; }) }] : []),
+        { label: t('Color'), sub: PALETTE.map(([name, c]) => ({ label: t(name), swatch: c || undefined, checked: (waveColor(w.color) ?? '') === c, action: () => setAll(x => { x.color = c ? name.toLowerCase() : undefined; }) })) },
+        { label: t('Group selected…'), action: () => void this.groupSelected() },
+        ...(w.parent !== undefined ? [{ label: t('Remove from group'), action: () => setAll(x => { x.parent = undefined; }) }] : []),
         '-',
-        ...(w.sig.w > 1 && !isAnalog(w) ? [{ label: this.expanded.has(w.id) ? 'Collapse bits' : 'Expand bits', action: () => this.toggleExpand(w.id) }] : []),
-        { label: 'Jump to next transition', action: () => this.jumpEdge(1) },
-        { label: 'Jump to previous transition', action: () => this.jumpEdge(-1) },
+        ...(w.sig.w > 1 && !isAnalog(w) ? [{ label: this.expanded.has(w.id) ? t('Collapse bits') : t('Expand bits'), action: () => this.toggleExpand(w.id) }] : []),
+        { label: t('Jump to next transition'), action: () => this.jumpEdge(1) },
+        { label: t('Jump to previous transition'), action: () => this.jumpEdge(-1) },
         '-',
-        { label: 'Insert divider below', action: () => this.insertDivider(id) },
-        { label: 'Delete selected', action: () => this.deleteSelected() },
-        { label: 'Delete all', action: () => { this.session.waves = []; this.session.emit('wave'); } },
+        { label: t('Insert divider below'), action: () => this.insertDivider(id) },
+        { label: t('Delete selected'), action: () => this.deleteSelected() },
+        { label: t('Delete all'), action: () => { this.session.waves = []; this.session.emit('wave'); } },
       ]);
     };
     this.names.addEventListener('contextmenu', onCtx);
@@ -786,7 +787,7 @@ export class WaveView {
   }
 
   private async askNumber(title: string, cur: number): Promise<number | null> {
-    const s = await promptText(title, 'Value', String(cur));
+    const s = await promptText(title, t('Value'), String(cur));
     if (s === null) return null;
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
@@ -794,7 +795,7 @@ export class WaveView {
 
   private async askRange(w: WaveEntry): Promise<[number, number] | null> {
     const [lo, hi] = this.analogRange(w);
-    const s = await promptText('Analog range', 'min max', `${lo} ${hi}`);
+    const s = await promptText(t('Analog range'), t('min max'), `${lo} ${hi}`);
     const m = s && /^\s*(-?[\d.eE+-]+)[\s,]+(-?[\d.eE+-]+)\s*$/.exec(s);
     if (!m) return null;
     const a = Number(m[1]), b = Number(m[2]);
@@ -806,7 +807,7 @@ export class WaveView {
     const ws = this.session.waves;
     const members = ws.filter(w => this.selected.has(w.id) && !isMarkerRow(w));
     if (!members.length) return;
-    const name = await promptText('New group', 'Group name', 'Group');
+    const name = await promptText(t('New group'), t('Group name'), t('Group'));
     if (!name) return;
     const at = ws.indexOf(members[0]);
     const hdr: WaveEntry = { id: Date.now() % 1e9, path: '', name, sig: members[0].sig, radix: 'binary', groupLabel: name };
@@ -820,7 +821,7 @@ export class WaveView {
   }
 
   private async renameGroup(w: WaveEntry) {
-    const name = await promptText('Rename group', 'Group name', w.groupLabel);
+    const name = await promptText(t('Rename group'), t('Group name'), w.groupLabel);
     if (!name) return;
     w.groupLabel = name; w.name = name;
     this.session.emit('wave');
@@ -834,7 +835,7 @@ export class WaveView {
 
   private insertDivider(afterId: number) {
     const i = this.session.waves.findIndex(w => w.id === afterId);
-    const name = prompt('Divider label', 'Group');
+    const name = prompt(t('Divider label'), t('Group'));
     if (name === null) return;
     const ws = this.session.waves;
     ws.splice(i + 1, 0, { id: Date.now() % 1e9, path: '', name, sig: ws[i].sig, radix: 'binary', dividerLabel: name || '-' });

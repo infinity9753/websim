@@ -1,5 +1,6 @@
 // Tabbed pane container.
 import { h, icon } from './dom';
+import { t } from './i18n';
 
 interface Tab { id: string; tab: HTMLElement; label: HTMLElement; page: HTMLElement; onClose?: () => boolean | void }
 
@@ -21,7 +22,7 @@ export class Pane {
     if (this.tabs.has(id)) { if (opts.activate !== false) this.activate(id); return; }
     const label = h('span', {}, title);
     const tab = h('div', { class: 'pane-tab', role: 'tab', title: opts.tooltip ?? title, onclick: () => this.activate(id), onauxclick: (e: MouseEvent) => { if (e.button === 1 && opts.closable) this.close(id); } }, label);
-    if (opts.closable) tab.appendChild(h('span', { class: 'tab-x', title: 'Close', onclick: (e: MouseEvent) => { e.stopPropagation(); this.close(id); } }, icon('close')));
+    if (opts.closable) tab.appendChild(h('span', { class: 'tab-x', title: t('Close'), onclick: (e: MouseEvent) => { e.stopPropagation(); this.close(id); } }, icon('close')));
     page.classList.add('pane-page');
     this.tabsEl.appendChild(tab);
     this.body.appendChild(page);

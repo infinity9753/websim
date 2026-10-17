@@ -1,4 +1,5 @@
 // Tiny DOM helpers and inline icons.
+import { t } from './i18n';
 
 type Child = Node | string | number | null | undefined | false | Child[];
 
@@ -66,7 +67,7 @@ export function icon(name: string, cls = 'ic') {
 }
 
 /** Simple modal dialog. Resolves with the form values or null. */
-export function modal(title: string, body: HTMLElement, buttons: { label: string; value: string; primary?: boolean }[] = [{ label: 'OK', value: 'ok', primary: true }, { label: 'Cancel', value: 'cancel' }]): Promise<string> {
+export function modal(title: string, body: HTMLElement, buttons: { label: string; value: string; primary?: boolean }[] = [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }]): Promise<string> {
   return new Promise(resolve => {
     const close = (v: string) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
     const onKey = (e: KeyboardEvent) => {
@@ -75,7 +76,7 @@ export function modal(title: string, body: HTMLElement, buttons: { label: string
     };
     const overlay = h('div', { class: 'modal-overlay', onmousedown: (e: MouseEvent) => { if (e.target === overlay) close('cancel'); } },
       h('div', { class: 'modal', role: 'dialog', 'aria-label': title },
-        h('div', { class: 'modal-title' }, title, h('button', { class: 'modal-x', title: 'Close', onclick: () => close('cancel') }, icon('close'))),
+        h('div', { class: 'modal-title' }, title, h('button', { class: 'modal-x', title: t('Close'), onclick: () => close('cancel') }, icon('close'))),
         h('div', { class: 'modal-body' }, body),
         h('div', { class: 'modal-buttons' }, buttons.map(b => h('button', { class: b.primary ? 'btn primary' : 'btn', onclick: () => close(b.value) }, b.label)))));
     document.body.appendChild(overlay);
@@ -92,7 +93,7 @@ export async function promptText(title: string, label: string, value = ''): Prom
 }
 
 export async function confirmBox(title: string, msg: string): Promise<boolean> {
-  return (await modal(title, h('p', {}, msg), [{ label: 'OK', value: 'ok', primary: true }, { label: 'Cancel', value: 'cancel' }])) === 'ok';
+  return (await modal(title, h('p', {}, msg), [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }])) === 'ok';
 }
 
 let ctxMenu: HTMLElement | null = null;

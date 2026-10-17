@@ -3,6 +3,7 @@ import { h, icon } from './dom';
 import { VRows } from './panels';
 import { fmtSig, type RemoteSession as Session } from './remote';
 import { listRows, listUnit } from '../engine/list';
+import { t } from './i18n';
 
 export class ListView {
   el: HTMLElement;
@@ -22,8 +23,8 @@ export class ListView {
     const btn = (ic: string, title: string, f: () => void) => h('button', { class: 'tb-btn', title, 'aria-label': title, onclick: f }, icon(ic));
     this.el = h('div', { class: 'list-view' },
       h('div', { class: 'subbar' },
-        btn('save', 'Write the list to list.lst', () => { void this.session.exec('write list list.lst'); }),
-        btn('trash', 'Remove all signals from the list', () => { void this.session.exec('delete list *'); }),
+        btn('save', t('Write the list to list.lst'), () => { void this.session.exec('write list list.lst'); }),
+        btn('trash', t('Remove all signals from the list'), () => { void this.session.exec('delete list *'); }),
         h('span', { class: 'grow' }),
         this.info),
       scroll);
@@ -50,11 +51,11 @@ export class ListView {
     if (this.cols !== lists.length + 1) { this.cols = lists.length + 1; this.vr = new VRows(this.tbody.closest('.scroll') as HTMLElement, this.tbody, this.cols); }
     if (!s.design || !lists.length) {
       this.info.textContent = '';
-      this.vr.set(1, () => h('tr', {}, h('td', { colspan: String(this.cols), class: 'empty' }, s.design ? 'Use "add list <signals>" or the Objects context menu to list signals.' : 'No design loaded.')));
+      this.vr.set(1, () => h('tr', {}, h('td', { colspan: String(this.cols), class: 'empty' }, s.design ? t('Use "add list <signals>" or the Objects context menu to list signals.') : t('No design loaded.'))));
       return;
     }
     const rows = listRows(lists.map(l => ({ times: l.sig.times, at: (i: number) => l.sig.vals[i] })), s.now);
-    this.info.textContent = `${rows.length} row${rows.length === 1 ? '' : 's'}`;
+    this.info.textContent = rows.length === 1 ? t('1 row') : t('{0} rows', rows.length);
     this.vr.set(rows.length, i => {
       const r = rows[i];
       return h('tr', {}, h('td', { class: 'num' }, String(r.t / f)),
