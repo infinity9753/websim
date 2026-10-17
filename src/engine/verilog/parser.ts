@@ -64,7 +64,7 @@ class VParser {
         this.pos++; continue;
       }
       if (this.is('module') || this.is('macromodule')) { units.push(this.parseModule()); continue; }
-      if (this.is('typedef')) { this.parseTypedef(); continue; }
+      if (this.is('typedef')) { this.globalItems.push(this.parseTypedef()); continue; }
       if (this.accept(';')) continue;
       this.err(`near "${this.tok.v}": syntax error, unexpected ${this.tok.v}`);
     }
@@ -75,7 +75,7 @@ class VParser {
     const startTok = this.tok;
     this.pos++;
     const name = this.ident();
-    const unit: Unit = { kind: 'module', lang: 'verilog', name, file: this.file, line: startTok.loc.line, params: [], ports: [], items: [], timescale: this.timescale };
+    const unit: Unit = { kind: 'module', lang: 'verilog', name, file: this.file, line: startTok.loc.line, params: [], ports: [], items: [...this.globalItems], timescale: this.timescale };
     const savedTypedefs = new Map(this.typedefs);
     // parameter port list
     if (this.accept('#')) {
@@ -167,7 +167,10 @@ class VParser {
     return null;
   }
 
-  parseTypedef() {
+  globalItems: Item[] = [];
+
+  parseTypedef(): Item {
+    const loc = this.loc();
     this.expect('typedef');
     let t: TypeSpec;
     if (this.accept('enum')) {
@@ -184,6 +187,7 @@ class VParser {
     const name = this.ident();
     this.expect(';');
     this.typedefs.set(name, t);
+    return { k: 'typedef', name, type: t, loc };
   }
 
   parseModuleItem(items: Item[], unit: Unit | null, nonAnsi: Map<string, PortDecl>) {
@@ -249,7 +253,7 @@ class VParser {
         if (this.accept(':')) this.ident();
         return;
       }
-      case 'typedef': this.parseTypedef(); return;
+      case 'typedef': items.push(this.parseTypedef()); return;
       case 'specify': while (!this.accept('endspecify')) this.pos++; return;
       case 'defparam': this.err('defparam is not supported; use #() parameter overrides');
     }
