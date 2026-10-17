@@ -183,6 +183,8 @@ export class App {
         { label: 'Center on Cursor', kbd: 'C', action: () => this.wave.centerCursor() },
         '-',
         { label: 'Add All Signals (recursive)', action: () => void this.cmd('add wave -r /*') },
+        { label: 'Export VCD (wave signals)…', action: () => this.exportVcd(false) },
+        { label: 'Export VCD (all signals)…', action: () => this.exportVcd(true) },
         { label: 'Delete Selected', kbd: 'Del', action: () => this.wave.deleteSelected() },
         { label: 'Delete All', action: () => void this.cmd('delete wave *') },
       ]],
@@ -369,6 +371,16 @@ export class App {
       this.transcript.print(`Imported ${inp.files?.length ?? 0} file(s).`);
     });
     inp.click();
+  }
+
+  exportVcd(all: boolean) {
+    try {
+      const name = `${this.session.design?.top ?? 'wave'}.vcd`;
+      download(name, this.session.vcdText(all));
+      this.transcript.print(`Exported ${all ? 'all signals' : 'wave signals'} to ${name}.`);
+    } catch (e) {
+      this.transcript.print(`** Error: ${(e as Error).message}`, 'err');
+    }
   }
 
   exportProject() {

@@ -6,10 +6,12 @@ import { fmtTime, parseTime } from './format';
 import * as L from './logic';
 import type { Radix } from './logic';
 import './vhdl';
+import { writeVcd, type VcdVar } from './vcd';
 
 export interface VFS {
   read(name: string): string | undefined;
   list(): string[];
+  write?(name: string, text: string): void;
 }
 
 export type MsgKind = 'cmd' | 'out' | 'err' | 'warn' | 'note' | 'echo';
@@ -113,6 +115,7 @@ export class Session {
       case 'describe': return this.describe(rest);
       case 'find': return this.find(rest);
       case 'now': this.out(this.fmt(this.now)); return;
+      case 'vcd': return this.vcd(rest);
     }
     throw new Error(`invalid command name "${cmd}"`);
   }
@@ -137,6 +140,7 @@ export class Session {
       '  env [<scope>]                      show/change current scope',
       '  find signals <pattern>             list signals',
       '  do <file>                          run a script',
+      '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
       '  ls, pwd, echo, history, clear, help',
     ].join('\n'));
@@ -359,7 +363,55 @@ export class Session {
         k.finished = true;
         break;
     }
+    if (k.dumpItems) this.writeDump();
     this.emit('time');
+  }
+
+  // ------------------------------------------------------------ VCD
+  /** Signals selected by $dumpvars-style items (path prefix + depth; levels 0 = all below). */
+  dumpVars(items: { path: string; levels: number }[]): VcdVar[] {
+    const d = this.requireDesign();
+    const out: VcdVar[] = [];
+    const seen = new Set<string>();
+    const add = (path: string, sig: Signal) => { if (!seen.has(path)) { seen.add(path); out.push({ path, sig }); } };
+    for (const it of items) {
+      for (const s of d.allScopes) {
+        const sigMatch = s.objects.find(o => `${s.path}/${o.name}` === it.path);
+        if (sigMatch) { add(it.path, sigMatch.sig); continue; }
+        const rel = it.path === '' ? s.path : s.path === it.path ? '' : s.path.startsWith(it.path + '/') ? s.path.slice(it.path.length) : null;
+        if (rel === null) continue;
+        const depth = rel.split('/').filter(Boolean).length + (it.path === '' ? 0 : 1);
+        if (it.levels > 0 && depth > it.levels) continue;
+        for (const o of s.objects) add(`${s.path}/${o.name}`, o.sig);
+      }
+    }
+    return out;
+  }
+
+  vcdText(all: boolean): string {
+    const d = this.requireDesign();
+    const vars: VcdVar[] = all
+      ? this.dumpVars([{ path: '', levels: 0 }])
+      : this.waves.filter(w => w.dividerLabel === undefined).map(w => ({ path: w.path, sig: w.sig }));
+    return writeVcd(vars, d.kernel.now);
+  }
+
+  private writeDump() {
+    const k = this.design!.kernel;
+    if (!this.fs.write) return;
+    const text = writeVcd(this.dumpVars(k.dumpItems!), k.now);
+    this.fs.write(k.dumpFile, text);
+  }
+
+  vcd(args: string[]) {
+    const sub = args[0];
+    if (sub !== 'export' && sub !== 'file') throw new Error('Usage: vcd export [-all] [file.vcd]');
+    const all = args.includes('-all');
+    const file = args.slice(1).find(a => !a.startsWith('-')) ?? 'wave.vcd';
+    if (!this.fs.write) throw new Error('vcd: file system is read-only');
+    if (!all && !this.waves.length) throw new Error('vcd: the wave window is empty (use -all to dump every signal)');
+    this.fs.write(file, this.vcdText(all));
+    this.out(`Wrote ${file}`);
   }
 
   // ------------------------------------------------------------ hierarchy helpers

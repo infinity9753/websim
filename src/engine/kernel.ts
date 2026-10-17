@@ -149,6 +149,9 @@ export class Kernel {
   randSeed = 0;
   started = false;
   lastStopInfo = '';
+  /** $dumpfile / $dumpvars requests: written out by the session after each run. */
+  dumpFile = 'dump.vcd';
+  dumpItems: { path: string; levels: number }[] | null = null;
 
   constructor(public host: KernelHost) {}
 

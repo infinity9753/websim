@@ -2108,7 +2108,27 @@ export class Elaborator {
           },
         };
       }
-      case '$dumpfile': case '$dumpvars': case '$dumpon': case '$dumpoff': case '$dumpall': case '$dumpflush': case '$fclose': case '$timeformat': case '$printtimescale': case '$fflush':
+      case '$dumpfile': {
+        const a = s.args[0];
+        if (!a) return { sync: () => {} };
+        const n = this.ex(a, c);
+        const f = selfEv(n);
+        return { sync: () => { k.dumpFile = n.str ?? L.toAscii(f()); } };
+      }
+      case '$dumpvars': {
+        // $dumpvars; | $dumpvars(levels, scope_or_signal, ...)
+        const levels = s.args[0] ? this.constInt(s.args[0], c.scope) : 0;
+        const paths: string[] = [];
+        for (const a of s.args.slice(1)) {
+          if (!a || a.k !== 'id') err('$dumpvars: expected a module instance or signal name', s.loc);
+          const sym = this.lookupName(c.scope, a.name) ?? (this.root && a.name === this.root.name ? { k: 'scope', s: this.root } as Sym : undefined);
+          if (sym?.k === 'scope') paths.push(sym.s.path);
+          else if (sym?.k === 'sig') paths.push(sym.sig.path);
+          else err(`$dumpvars: cannot find '${a.name}'`, s.loc);
+        }
+        return { sync: () => { const items = paths.length ? paths.map(p => ({ path: p, levels })) : [{ path: '', levels: 0 }]; k.dumpItems = [...(k.dumpItems ?? []), ...items]; } };
+      }
+      case '$dumpon': case '$dumpoff': case '$dumpall': case '$dumpflush': case '$fclose': case '$timeformat': case '$printtimescale': case '$fflush':
         return { sync: () => {} };
       case '$random': case '$urandom': return { sync: () => { k.random(); } };
     }
