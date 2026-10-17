@@ -723,10 +723,14 @@ export class Elaborator {
         const evs = parts.map(p => selfEv(p));
         const w = parts.reduce((s, p) => s + p.w, 0);
         const allStr = parts.every(p => p.str !== undefined);
+        // strings built at run time ('image, to_string) may be longer than their nominal width
+        const strish = parts.some(p => p.str !== undefined);
         return {
           w, s: false, str: allStr ? parts.map(p => p.str).join('') : undefined,
           cv: parts.every(p => p.cv) ? L.concat(evs.map(f => f())) : undefined,
-          mk: (W) => () => resize(L.concat(evs.map(f => f())), W),
+          mk: (W) => strish
+            ? () => { const v = L.concat(evs.map(f => f())); return v.w >= W ? v : resize(v, W); }
+            : () => resize(L.concat(evs.map(f => f())), W),
         };
       }
       case 'repl': {
@@ -1408,10 +1412,9 @@ export class Elaborator {
         const em = inner.mem.elemMsb, el = inner.mem.elemLsb;
         off = (i) => (em >= el ? (i >= el && i <= em ? i - el : -1) : (i <= el && i >= em ? el - i : -1));
       } else {
-        const base = this.lv(e.base, c);
-        const bt = base.tg();
-        if (bt.length !== 1 || bt[0].k !== 'sig' || e.base.k !== 'id') err('Unsupported assignment target', e.loc);
-        sig = (bt[0] as any).sig as Signal;
+        const bsym = e.base.k === 'id' ? this.lookupName(c.scope, e.base.name) : undefined;
+        if (bsym?.k !== 'sig') err('Unsupported assignment target', e.loc);
+        sig = bsym.sig;
         const s = sig;
         off = (i) => s.offsetOf(i);
       }
