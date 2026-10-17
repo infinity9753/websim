@@ -204,6 +204,8 @@ tr.sel .kind { color: inherit; opacity: .85; }
 .wave .subbar { background: #11161c; border-bottom-color: #2a3340; }
 .wave .tb-btn:hover:not(:disabled) { background: #1f2833; border-color: #3a4656; }
 .wave .subbar .hint { color: #8b98a6; }
+.wave .wave-find { width: 110px; background: #0d1117; color: #e8f0e8; border-color: #3a4656; }
+.wave .wave-find.notfound { border-color: #ff3b3b; box-shadow: 0 0 0 1px #ff3b3b; }
 .drop-hi { box-shadow: inset 0 0 0 2px #4a90e2; }
 
 /* ---------- status bar ---------- */

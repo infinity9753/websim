@@ -4,6 +4,7 @@ import type { RemoteSession as Session, MWave as WaveEntry } from './remote';
 import * as L from '../engine/logic';
 import type { Radix } from '../engine/logic';
 import { fmtTime } from '../engine/format';
+import { parseValue } from '../engine/commands';
 
 const ROW_H = 22;
 const HEAD_H = 26;
@@ -23,6 +24,7 @@ export class WaveView {
   private foot: HTMLElement;
   private footText: HTMLElement;
   private scrollbar: HTMLInputElement;
+  private findInput: HTMLInputElement;
   private emptyMsg: HTMLElement;
   t0 = 0;
   scale = 100; // ps per pixel
@@ -56,6 +58,11 @@ export class WaveView {
     this.scrollbar = h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': 'Scroll time' });
     this.foot = h('div', { class: 'wave-foot' }, this.footText, this.scrollbar);
 
+    this.findInput = h('input', {
+      type: 'search', class: 'tb-field wave-find', placeholder: 'Find value', title: 'Value of the selected signal to search for (in its radix, or decimal / 16#hex / 4\'b1010). Enter = next, Shift+Enter = previous',
+      'aria-label': 'Find value in selected signal',
+      onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); this.findValue(e.shiftKey ? -1 : 1); } },
+    });
     const bar = h('div', { class: 'subbar' },
       this.tb('zoomin', 'Zoom in (I)', () => this.zoom(0.5)),
       this.tb('zoomout', 'Zoom out (O)', () => this.zoom(2)),
@@ -66,6 +73,10 @@ export class WaveView {
       this.tb('nextedge', 'Next transition of selected signal (Tab)', () => this.jumpEdge(1)),
       h('span', { class: 'tb-sep' }),
       this.tb('trash', 'Delete selected signals (Del)', () => this.deleteSelected()),
+      h('span', { class: 'tb-sep' }),
+      this.findInput,
+      this.tb('prevedge', 'Find previous', () => this.findValue(-1)),
+      this.tb('nextedge', 'Find next', () => this.findValue(1)),
       h('span', { class: 'grow' }),
       h('span', { class: 'hint' }, 'Click: cursor · Ctrl+click: 2nd cursor · Drag: zoom area · Ctrl+wheel: zoom · Right-click names: radix'),
     );
@@ -156,6 +167,41 @@ export class WaveView {
     const x = this.x(target);
     if (x < 0 || x > this.width) this.centerCursor();
     this.render();
+  }
+
+  /** Move the cursor to the next/previous time the selected signal takes the searched value. */
+  findValue(dir: 1 | -1) {
+    const q = this.findInput.value.trim();
+    const e = this.selectedEntry();
+    if (!q || !e) { this.flashFind(!e ? 'Select a signal first' : 'Type a value'); return; }
+    const sig = e.sig;
+    let target: L.Vec | null = null;
+    try { target = parseValue(q, sig.w); } catch { /* compare text only */ }
+    const names = sig.enumNames;
+    const ql = q.toLowerCase();
+    const strip = (s: string) => s.replace(/^0+(?=.)/, '');
+    const match = (v: L.Vec) => {
+      if (names && v.known && names[Number(v.a)]?.toLowerCase() === ql) return true;
+      const txt = L.format(v, e.radix === 'symbolic' && !names ? 'hex' : e.radix).toLowerCase();
+      if (txt === ql || strip(txt) === strip(ql)) return true;
+      return !!target && v.a === target.a && v.b === target.b;
+    };
+    const ts = sig.times, vs = sig.vals;
+    const c = this.cursor ?? (dir > 0 ? -1 : Infinity);
+    let hit: number | undefined;
+    if (dir > 0) { for (let i = 0; i < ts.length; i++) if (ts[i] > c && match(vs[i])) { hit = ts[i]; break; } }
+    else for (let i = ts.length - 1; i >= 0; i--) if (ts[i] < c && match(vs[i])) { hit = ts[i]; break; }
+    if (hit === undefined) { this.flashFind('Not found'); return; }
+    this.cursor = hit;
+    const x = this.x(hit);
+    if (x < 0 || x > this.width) this.centerCursor();
+    this.render();
+  }
+
+  private flashFind(msg: string) {
+    const el = this.findInput;
+    el.classList.add('notfound'); el.title = msg;
+    setTimeout(() => el.classList.remove('notfound'), 900);
   }
 
   deleteSelected() {
