@@ -20,7 +20,9 @@ export type Expr =
   | { k: 'call'; name: string; args: Expr[]; named?: (string | null)[]; loc?: Loc } // function, system function, or (VHDL) ambiguous index
   | { k: 'attr'; base: Expr; attr: string; arg?: Expr; loc?: Loc }   // VHDL x'event
   | { k: 'agg'; others?: Expr; elems: { choice: Expr | null; value: Expr }[]; loc?: Loc } // VHDL aggregate
-  | { k: 'fill'; bit: '0' | '1' | 'x' | 'z'; loc?: Loc };          // SV '0 '1 'x 'z
+  | { k: 'fill'; bit: '0' | '1' | 'x' | 'z'; loc?: Loc }
+  | { k: 'field'; base: Expr; field: string; loc?: Loc }           // VHDL record field of a non-simple name: mem(i).f
+  | { k: 'sized'; e: Expr; w: number; loc?: Loc };                 // internal: evaluate e at exactly w bits          // SV '0 '1 'x 'z
 
 export interface TypeSpec {
   base: 'logic' | 'integer' | 'real' | 'time' | 'bool' | 'enum' | 'named' | 'string';
@@ -91,7 +93,7 @@ export type Item =
   | FuncDecl
   | { k: 'genfor'; v: string; init: Expr; cond: Expr; stepExpr: Expr; name?: string; items: Item[]; vhdl?: { from: Expr; to: Expr; down: boolean }; loc?: Loc }
   | { k: 'genif'; c: Expr; then: Item[]; else?: Item[]; name?: string; loc?: Loc }
-  | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range: [Expr, Expr]; elem: TypeSpec }; loc?: Loc }
+  | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
   | { k: 'use'; pkg: string; loc?: Loc };
 
 export interface Unit {

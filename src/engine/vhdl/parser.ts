@@ -251,7 +251,23 @@ class VhParser {
           items.push({ k: 'typedef', name, type: { base: 'integer', width: 32, signed: true, range: [l, r] }, loc });
           return;
         }
-        if (this.is('record')) this.err('Record types are not supported');
+        if (this.accept('record')) {
+          const fields: { name: string; type: TypeSpec }[] = [];
+          while (!this.is('end')) {
+            const names = [this.ident()];
+            while (this.accept(',')) names.push(this.ident());
+            this.expect(':');
+            const type = this.subtype();
+            this.expect(';');
+            for (const n of names) fields.push({ name: n, type });
+          }
+          this.expect('end'); this.expect('record');
+          if (this.tok.t === 'id') this.pos++;
+          this.expect(';');
+          if (!fields.length) this.err(`Record type '${name}' has no fields`);
+          items.push({ k: 'typedef', name, record: fields, loc });
+          return;
+        }
         this.err(`Unsupported type definition for '${name}'`);
       }
       case 'subtype': {
@@ -897,6 +913,12 @@ class VhParser {
         } else {
           e = { k: 'index', base: e, index: args[0], loc };
         }
+        continue;
+      }
+      if (this.is('.') && this.peek().t === 'id' && e.k !== 'id') {
+        // record field of an indexed/called name: mem(i).field
+        this.pos++;
+        e = { k: 'field', base: e, field: this.ident(), loc };
         continue;
       }
       if (this.is("'")) {

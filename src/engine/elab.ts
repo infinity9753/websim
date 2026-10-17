@@ -7,8 +7,11 @@ import { expandFormat, fmtTime, type FmtArg } from './format';
 
 // ---------------------------------------------------------------- types
 
+export interface RField { name: string; t: RType; off: number }
+
 export interface RType {
-  kind: 'vec' | 'enum' | 'array' | 'real' | 'string';
+  kind: 'vec' | 'enum' | 'array' | 'real' | 'string' | 'record';
+  fields?: RField[];      // record: fields in declaration order, off = bit offset from LSB
   w: number;              // 0 = unconstrained (VHDL)
   msb: number;
   lsb: number;
@@ -385,6 +388,11 @@ export class Elaborator {
   defaultValue(t: RType, isNet = false): Vec {
     const w = t.w || 1;
     if (isNet) return allZ(w);
+    if (t.kind === 'record') {
+      let v = L.zeros(w);
+      for (const f of t.fields!) v = insert(v, f.off, resize(this.defaultValue(f.t), f.t.w));
+      return v;
+    }
     if (t.kind === 'enum' || t.isBool || t.isBit || t.kind === 'real') return L.zeros(w);
     if (t.isInt) {
       if (t.left !== undefined) return fromInt(t.left, w, true);
@@ -421,7 +429,7 @@ export class Elaborator {
         if (!sym || sym.k !== 'type') err(`(vcom-1136) Unknown identifier "${name}".`, loc);
         const base = sym.t;
         const r = range(ts.range);
-        if (base.kind === 'array') return base;
+        if (base.kind === 'array' || base.kind === 'record') return base;
         if (r) {
           if (base.isInt) return { ...base, left: r[0], right: r[1] };
           return { ...base, w: Math.abs(r[0] - r[1]) + 1, msb: r[0], lsb: r[1], scalar: false };
@@ -451,6 +459,15 @@ export class Elaborator {
           break;
         }
         case 'typedef': {
+          if (it.record) {
+            const fs = it.record.map(f => ({ name: f.name, t: this.resolveType(f.type, scope, it.loc) }));
+            for (const f of fs) if (!f.t.w || f.t.kind === 'array' || f.t.kind === 'string') err(`Record field '${f.name}' must have a constrained scalar, vector or record type.`, it.loc);
+            const w = fs.reduce((a, f) => a + f.t.w, 0);
+            let off = w;
+            const fields: RField[] = fs.map(f => { off -= f.t.w; return { name: f.name, t: f.t, off }; });
+            scope.syms.set(it.name, { k: 'type', t: { kind: 'record', w, msb: w - 1, lsb: 0, signed: false, fields } });
+            break;
+          }
           if (it.array) {
             const elem = this.resolveType(it.array.elem, scope, it.loc);
             const lo = this.constInt(it.array.range[0], scope), hi = this.constInt(it.array.range[1], scope);
@@ -568,14 +585,14 @@ export class Elaborator {
         const init = this.defaultValue(et);
         const words: Vec[] = new Array(n).fill(resize(init, w).withSign(et.signed));
         const mem = new Memory(`${scope.path}/${dn.name}`, dn.name, w, lo, hi, et.signed, words, et.msb, et.lsb, et.enumNames);
-        if (dn.init) this.initMemory(mem, dn.init, scope);
+        if (dn.init) this.initMemory(mem, dn.init, scope, et);
         const mt: RType = { kind: 'array', w, msb: et.msb, lsb: et.lsb, signed: et.signed, elem: et, lo, hi, enumNames: et.enumNames };
         scope.syms.set(dn.name, { k: 'mem', mem, t: mt });
         scope.memories.push({ name: dn.name, mem });
         continue;
       }
       if (it.kind === 'const') {
-        const r = this.constEvalFull(dn.init!, scope, t);
+        const r = this.constEvalFull(t.kind === 'record' ? this.recordAgg(dn.init!, t) : dn.init!, scope, t);
         let v = r.v;
         if (t.w) v = resize(v, t.w).withSign(t.signed);
         scope.syms.set(dn.name, { k: 'const', v, t, str: r.str });
@@ -591,7 +608,7 @@ export class Elaborator {
       if (dn.init) {
         const c = this.ctx(scope, 'init');
         c.constOnly = false;
-        const n = this.ex(dn.init, c);
+        const n = this.ex(t.kind === 'record' ? this.recordAgg(dn.init, t) : dn.init, c);
         if (n.cv) init = resize(final(n, t.w || n.w)(), t.w || n.w);
         else {
           // non-constant initializer (Verilog "reg x = y;"): evaluate at time 0
@@ -607,9 +624,9 @@ export class Elaborator {
     }
   }
 
-  initMemory(mem: Memory, e: Expr, scope: Scope) {
+  initMemory(mem: Memory, e: Expr, scope: Scope, et?: RType) {
     const c = this.ctx(scope, 'init');
-    const put = (i: number, x: Expr) => { if (i >= 0 && i < mem.words.length) mem.words[i] = resize(final(this.ex(x, c), mem.w)(), mem.w).withSign(mem.signed); };
+    const put = (i: number, x: Expr) => { if (i >= 0 && i < mem.words.length) mem.words[i] = resize(final(this.ex(this.recordAgg(x, et), c), mem.w)(), mem.w).withSign(mem.signed); };
     if (e.k === 'agg') {
       if (e.others) for (let i = 0; i < mem.words.length; i++) put(i, e.others);
       e.elems.forEach((el, i) => {
@@ -708,7 +725,17 @@ export class Elaborator {
         return constNode(e.s.length ? L.fromString(e.s) : L.zeros(8), { str: e.s });
       }
       case 'fill': return { w: 1, s: false, mk: (W) => { const v = e.bit === '0' ? L.zeros(W) : e.bit === '1' ? new Vec(W, L.mask(W), 0n) : e.bit === 'x' ? allX(W) : allZ(W); return () => v; } };
-      case 'id': return this.idNode(e.name, c, e.loc);
+      case 'id': {
+        const fe = e.name.includes('.') && !this.lookupName(c.scope, e.name) ? this.fieldSelect(e, c) : null;
+        if (fe) return this.withFieldType(this.ex(fe.expr, c), fe.t);
+        return this.idNode(e.name, c, e.loc);
+      }
+      case 'field': {
+        const fe = this.fieldSelect(e, c);
+        if (!fe) err(`'${e.field}' is not a field of this record.`, e.loc);
+        return this.withFieldType(this.ex(fe.expr, c), fe.t);
+      }
+      case 'sized': { const n = this.ex(e.e, c); return leaf(final(n, e.w), e.w, n.s, { enumNames: n.enumNames }); }
       case 'index': case 'range': case 'irange': return this.selectNode(e, c);
       case 'un': return this.unaryNode(e, c);
       case 'bin': return this.binNode(e, c);
@@ -1356,6 +1383,98 @@ export class Elaborator {
     return null;
   }
 
+  // ---------------------------------------------------------- records
+
+  /** Static type of a name-like expression (signals, constants, memory words, record fields). */
+  typeOf(e: Expr, c: Ctx): RType | undefined {
+    switch (e.k) {
+      case 'id': {
+        const sym = this.lookupName(c.scope, e.name);
+        if (sym && (sym.k === 'sig' || sym.k === 'const' || sym.k === 'mem')) return sym.t;
+        if (e.name.includes('.')) return this.fieldSelect(e, c)?.t;
+        return undefined;
+      }
+      case 'index': case 'call': {
+        const base = e.k === 'index' ? e.base : ({ k: 'id', name: e.name } as Expr);
+        const bt = this.typeOf(base, c);
+        return bt?.kind === 'array' ? bt.elem : undefined;
+      }
+      case 'field': return this.fieldSelect(e, c)?.t;
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve a record field access (r.a.b, mem(i).f) into a part-select of the
+   * underlying flat vector, plus the field's type. Returns null if not a field access.
+   */
+  fieldSelect(e: Expr, c: Ctx): { expr: Expr; t: RType } | null {
+    let root: Expr;
+    let fields: string[];
+    if (e.k === 'id') {
+      const parts = e.name.split('.');
+      let i = parts.length - 1;
+      for (; i >= 1; i--) if (this.lookupName(c.scope, parts.slice(0, i).join('.'))) break;
+      if (i < 1) return null;
+      root = { k: 'id', name: parts.slice(0, i).join('.'), loc: e.loc };
+      fields = parts.slice(i);
+    } else if (e.k === 'field') {
+      const chain: string[] = [];
+      let b: Expr = e;
+      while (b.k === 'field') { chain.unshift(b.field); b = b.base; }
+      if (b.k === 'id' && b.name.includes('.')) return this.fieldSelect({ k: 'id', name: [b.name, ...chain].join('.'), loc: e.loc }, c);
+      root = b;
+      fields = chain;
+    } else return null;
+    // memory word in VHDL call syntax -> index form so part-selects can apply to it
+    if (root.k === 'call') {
+      const sym = this.lookupName(c.scope, root.name);
+      if (sym?.k === 'mem' || sym?.k === 'sig') root = this.vhdlIndexExpr(root, sym.k === 'mem');
+    }
+    const rt = this.typeOf(root, c);
+    if (!rt) return null;
+    return this.walkFields(root, rt, fields, c, e.loc);
+  }
+
+  private walkFields(root: Expr, rt: RType, fields: string[], c: Ctx, loc?: Loc): { expr: Expr; t: RType } | null {
+    let t = rt, off = 0;
+    const lsbBase = rt.lsb;
+    for (const f of fields) {
+      if (t.kind !== 'record') return null;
+      const fd = t.fields!.find(x => x.name === f.toLowerCase() || x.name === f);
+      if (!fd) err(`(vcom-1136) '${f}' is not a field of record type.`, loc);
+      off += fd.off; t = fd.t;
+    }
+    void c;
+    const n = (v: number): Expr => ({ k: 'num', v: fromInt(v, 32, true), unsized: true });
+    return { expr: { k: 'range', base: root, msb: n(lsbBase + off + t.w - 1), lsb: n(lsbBase + off), loc }, t };
+  }
+
+  private withFieldType(n: Node, t: RType): Node {
+    const signed = t.signed;
+    if (signed === n.s && !t.enumNames) return n;
+    const f = n.mk(n.w, n.s);
+    return leaf(() => f().withSign(signed), n.w, signed, { enumNames: t.enumNames, isTime: t.isTime });
+  }
+
+  /** Rewrite an aggregate assigned to a record into a sized concatenation in field order. */
+  recordAgg(e: Expr, t: RType | undefined): Expr {
+    if (!t) return e;
+    if (t.kind === 'array' && e.k === 'agg') return e;
+    if (t.kind !== 'record' || e.k !== 'agg') return t.w && e.k === 'agg' ? { k: 'sized', e, w: t.w, loc: e.loc } : e;
+    const fields = t.fields!;
+    const parts: Expr[] = fields.map((f, i) => {
+      let v: Expr | undefined;
+      const named = e.elems.find(el => el.choice && el.choice.k === 'id' && el.choice.name.toLowerCase() === f.name);
+      if (named) v = named.value;
+      else if (e.elems.every(el => !el.choice) && e.elems[i]) v = e.elems[i].value;
+      else v = e.others;
+      if (!v) err(`Record aggregate has no value for field '${f.name}'.`, e.loc);
+      return f.t.kind === 'record' ? this.recordAgg(v, f.t) : { k: 'sized', e: v, w: f.t.w, loc: e.loc };
+    });
+    return { k: 'concat', parts, loc: e.loc };
+  }
+
   // ---------------------------------------------------------- lvalues
 
   getDriver(c: Ctx, sig: Signal, off: number, w: number): Driver | undefined {
@@ -1371,6 +1490,10 @@ export class Elaborator {
   }
 
   lv(e: Expr, c: Ctx): LNode {
+    if (e.k === 'field' || (e.k === 'id' && e.name.includes('.') && !this.lookupName(c.scope, e.name))) {
+      const fe = this.fieldSelect(e, c);
+      if (fe) return this.lv(fe.expr, c);
+    }
     if (e.k === 'call' && c.lang === 'vhdl') {
       const sym = this.lookupName(c.scope, e.name);
       if (sym?.k === 'sig' || sym?.k === 'mem') return this.lv(this.vhdlIndexExpr(e, sym.k === 'mem'), c);
@@ -1784,7 +1907,7 @@ export class Elaborator {
     if (mem && !s.delay && !s.evctl) return this.memAssign(mem, s.rhs, c, nb ? 'nba' : 'now');
     const lc: Ctx = nb && c.lang === 'verilog' ? { ...c, driverMode: false } : { ...c, driverMode: false };
     const Lv = this.lv(s.lhs, lc);
-    const R = final(this.ex(s.rhs, c), Lv.w);
+    const R = final(this.ex(this.recordAgg(s.rhs, this.typeOf(s.lhs, c)), c), Lv.w);
     const self = this;
     if (s.evctl) {
       const wf = this.eventWait(s.evctl, c);
@@ -1819,13 +1942,15 @@ export class Elaborator {
   memValues(mem: Memory, rhs: Expr, c: Ctx): () => Vec[] {
     const n = mem.words.length;
     const fix = (f: Ev) => () => resize(f(), mem.w).withSign(mem.signed);
+    const msym = this.lookupName(c.scope, mem.name);
+    const et = msym?.k === 'mem' ? msym.t.elem : undefined;
     if (rhs.k === 'agg') {
-      const others = rhs.others ? fix(final(this.ex(rhs.others, c), mem.w)) : null;
+      const others = rhs.others ? fix(final(this.ex(this.recordAgg(rhs.others, et), c), mem.w)) : null;
       const per: (Ev | null)[] = new Array(n).fill(others);
       rhs.elems.forEach((el, i) => {
         const idx = el.choice ? this.constInt(el.choice, c.scope) - mem.lo : i;
         if (idx < 0 || idx >= n) err(`Aggregate index out of range for '${mem.name}'.`, rhs.loc);
-        per[idx] = fix(final(this.ex(el.value, c), mem.w));
+        per[idx] = fix(final(this.ex(this.recordAgg(el.value, et), c), mem.w));
       });
       if (per.some(p => !p)) err(`Aggregate does not cover every element of '${mem.name}' (add "others =>").`, rhs.loc);
       return () => per.map(p => p!());
@@ -1863,7 +1988,8 @@ export class Elaborator {
     }
     const k = this.k;
     const Lv = this.lv(s.lhs, c);
-    const waves = s.waves.map(w => ({ R: final(this.ex(w.value, c), Lv.w), D: w.after ? this.delayFn(w.after, c) : null }));
+    const lt = this.typeOf(s.lhs, c);
+    const waves = s.waves.map(w => ({ R: final(this.ex(this.recordAgg(w.value, lt), c), Lv.w), D: w.after ? this.delayFn(w.after, c) : null }));
     const self = this;
     const deferred = c.deferred;
     return {

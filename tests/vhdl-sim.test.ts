@@ -241,3 +241,65 @@ end;`;
     expect(out[0]).toBe('** Note: 00 11 00 03 11');
   });
 });
+
+describe('record types (#7)', () => {
+  it('declares, reads, writes, nests and passes records through ports', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+package types is
+  type hdr_t is record
+    valid : std_logic;
+    tag   : unsigned(3 downto 0);
+  end record;
+  type pkt_t is record
+    hdr  : hdr_t;
+    data : std_logic_vector(7 downto 0);
+    cnt  : integer range 0 to 255;
+  end record;
+  constant EMPTY : pkt_t := (hdr => (valid => '0', tag => (others => '0')), data => x"00", cnt => 0);
+end package;
+
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+use work.types.all;
+entity stage is port (i : in pkt_t; o : out pkt_t); end;
+architecture rtl of stage is begin
+  process (i) begin
+    o <= i;
+    o.data <= not i.data;
+    o.cnt <= i.cnt + 1;
+  end process;
+end;
+
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+use work.types.all;
+entity t is end;
+architecture a of t is
+  signal a, b : pkt_t := EMPTY;
+  type fifo_t is array (0 to 3) of pkt_t;
+  signal fifo : fifo_t := (others => EMPTY);
+begin
+  u : entity work.stage port map (i => a, o => b);
+  process
+    variable p : pkt_t;
+  begin
+    a.hdr.valid <= '1';
+    a.hdr.tag <= x"5";
+    a.data <= x"0F";
+    a.cnt <= 41;
+    wait for 1 ns;
+    p := b;
+    fifo(2) <= p;
+    wait for 1 ns;
+    report std_logic'image(b.hdr.valid) & " " & integer'image(to_integer(b.hdr.tag)) & " " & to_hstring(b.data) & " " & integer'image(b.cnt);
+    report to_hstring(fifo(2).data) & " " & integer'image(fifo(2).cnt) & " " & std_logic'image(fifo(1).hdr.valid);
+    a <= (hdr => (valid => '0', tag => x"A"), data => x"AA", cnt => 7);
+    wait for 1 ns;
+    report integer'image(to_integer(b.hdr.tag)) & " " & to_hstring(b.data);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    const notes = out.filter(l => l.startsWith('**'));
+    expect(notes).toEqual(["** Note: '1' 5 F0 42", "** Note: F0 42 '0'", '** Note: 10 55']);
+  });
+});
