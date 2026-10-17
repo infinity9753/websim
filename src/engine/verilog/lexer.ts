@@ -15,7 +15,9 @@ const KEYWORDS = new Set(`module endmodule macromodule input output inout wire r
 parameter localparam assign always always_ff always_comb always_latch initial begin end if else case casez casex endcase default
 for while repeat forever function endfunction task endtask posedge negedge or and nand nor xor xnor not buf signed unsigned
 generate endgenerate genvar tri tri0 tri1 wand wor supply0 supply1 wait disable automatic typedef enum return specify endspecify
-defparam force release fork join join_any join_none string void struct packed event deassign package endpackage import foreach do inside`.split(/\s+/));
+defparam force release fork join join_any join_none string void struct packed event deassign package endpackage import foreach do inside
+interface endinterface modport assert assume cover property endproperty sequence endsequence clocking endclocking iff final
+class endclass extends new null this super virtual pure extern local protected static rand randc constraint`.split(/\s+/));
 
 export function isKeyword(s: string) { return KEYWORDS.has(s); }
 

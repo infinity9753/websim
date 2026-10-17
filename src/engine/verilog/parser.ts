@@ -1,6 +1,6 @@
 // Verilog (IEEE 1364 subset + common SystemVerilog) recursive-descent parser.
 import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem } from '../ast';
-import { lexVerilog, parseTimescale, preprocess, type Macro, type Token } from './lexer';
+import { isKeyword, lexVerilog, parseTimescale, preprocess, type Macro, type Token } from './lexer';
 import { fromBits } from '../logic';
 
 export interface VerilogParseOptions {
@@ -723,7 +723,7 @@ class VParser {
       }
       this.err(`near "${t.v}": syntax error, unexpected ${t.v}`);
     }
-    if (t.t === 'id' && this.peek().t === 'op' && this.peek().v === ':' && !['default'].includes(t.v)) {
+    if (t.t === 'id' && this.peek().t === 'op' && this.peek().v === ':' && !isKeyword(t.v)) {
       // statement label: name: stmt
       this.pos += 2;
       const inner = this.stmt();
