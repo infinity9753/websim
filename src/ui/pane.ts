@@ -2,7 +2,8 @@
 import { h, icon } from './dom';
 import { t } from './i18n';
 
-interface Tab { id: string; tab: HTMLElement; label: HTMLElement; page: HTMLElement; onClose?: () => boolean | void }
+type CloseHook = () => boolean | void | Promise<boolean>;
+interface Tab { id: string; tab: HTMLElement; label: HTMLElement; page: HTMLElement; onClose?: CloseHook }
 
 export class Pane {
   el: HTMLElement;
@@ -18,7 +19,7 @@ export class Pane {
     this.el = h('section', { class: `pane ${cls}` }, this.tabsEl, this.body);
   }
 
-  add(id: string, title: string, page: HTMLElement, opts: { closable?: boolean; onClose?: () => boolean | void; activate?: boolean; tooltip?: string } = {}) {
+  add(id: string, title: string, page: HTMLElement, opts: { closable?: boolean; onClose?: CloseHook; activate?: boolean; tooltip?: string } = {}) {
     if (this.tabs.has(id)) { if (opts.activate !== false) this.activate(id); return; }
     const label = h('span', {}, title);
     const tab = h('div', { class: 'pane-tab', role: 'tab', title: opts.tooltip ?? title, onclick: () => this.activate(id), onauxclick: (e: MouseEvent) => { if (e.button === 1 && opts.closable) this.close(id); } }, label);
@@ -46,10 +47,12 @@ export class Pane {
     this.onActivate?.(id);
   }
 
-  close(id: string) {
+  /** Close a tab; its onClose hook may veto (false), possibly after asking the user. */
+  async close(id: string) {
     const t = this.tabs.get(id);
     if (!t) return;
-    if (t.onClose && t.onClose() === false) return;
+    if (t.onClose && (await t.onClose()) === false) return;
+    if (!this.tabs.has(id)) return; // closed meanwhile
     t.tab.remove(); t.page.remove();
     this.tabs.delete(id);
     if (this.active === id) {

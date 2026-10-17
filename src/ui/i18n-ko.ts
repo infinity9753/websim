@@ -163,7 +163,6 @@ export const KO: Record<string, string> = {
   'Type "help" for commands. Use File ▸ Load Example to try the bundled designs.': '명령어는 "help" 를 입력하세요. 파일 ▸ 예제 불러오기로 포함된 설계를 실행해 볼 수 있습니다.',
   'Restored library "work" ({0} source file(s) recompiled).': '"work" 라이브러리를 복원했습니다 (소스 파일 {0}개 재컴파일).',
   'Breakpoint (click to remove)': '브레이크포인트 (클릭하면 제거)',
-  'Save changes to {0} before closing?\n\nOK = save, Cancel = discard': '닫기 전에 {0} 의 변경 내용을 저장할까요?\n\n확인 = 저장, 취소 = 버림',
 
   // list window
   'Write the list to list.lst': '리스트를 list.lst 로 저장',
@@ -313,6 +312,10 @@ export const KO: Record<string, string> = {
   'Group': '그룹',
   'Rename group': '그룹 이름 바꾸기',
   'Divider label': '구분선 이름',
+  'Insert divider': '구분선 삽입',
+  'Unsaved changes': '저장되지 않은 변경 내용',
+  'Save changes to {0} before closing?': '닫기 전에 {0} 의 변경 내용을 저장할까요?',
+  "Don't Save": '저장 안 함',
   // palette
   'Default': '기본',
   'Green': '초록',

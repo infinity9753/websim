@@ -833,10 +833,11 @@ export class WaveView {
     this.session.emit('wave');
   }
 
-  private insertDivider(afterId: number) {
-    const i = this.session.waves.findIndex(w => w.id === afterId);
-    const name = prompt(t('Divider label'), t('Group'));
+  private async insertDivider(afterId: number) {
+    const name = await promptText(t('Insert divider'), t('Divider label'), t('Group'));
     if (name === null) return;
+    const i = this.session.waves.findIndex(w => w.id === afterId);
+    if (i < 0) return;
     const ws = this.session.waves;
     ws.splice(i + 1, 0, { id: Date.now() % 1e9, path: '', name, sig: ws[i].sig, radix: 'binary', dividerLabel: name || '-' });
     this.session.emit('wave');

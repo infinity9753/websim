@@ -7,7 +7,7 @@ import { StreamLanguage } from '@codemirror/language';
 import { verilog } from '@codemirror/legacy-modes/mode/verilog';
 import { vhdl } from '@codemirror/legacy-modes/mode/vhdl';
 import { tcl } from '@codemirror/legacy-modes/mode/tcl';
-import { h } from './dom';
+import { h, modal } from './dom';
 import { langOf, type BrowserFS } from './vfs';
 import type { Pane } from './pane';
 import { t } from './i18n';
@@ -138,10 +138,15 @@ export class Editors {
     setTimeout(() => d!.view.focus(), 0);
   }
 
-  private closing(name: string): boolean {
+  private async closing(name: string): Promise<boolean> {
     const d = this.docs.get(name);
-    if (d?.dirty && !confirm(t('Save changes to {0} before closing?\n\nOK = save, Cancel = discard', name))) { /* discard */ }
-    else if (d?.dirty) this.save(name);
+    if (d?.dirty) {
+      const r = await modal(t('Unsaved changes'), h('p', {}, t('Save changes to {0} before closing?', name)), [
+        { label: t('Save'), value: 'save', primary: true }, { label: t("Don't Save"), value: 'discard' }, { label: t('Cancel'), value: 'cancel' },
+      ]);
+      if (r === 'cancel') return false;
+      if (r === 'save') this.save(name);
+    }
     d?.view.destroy();
     this.docs.delete(name);
     this.onChange?.();
@@ -207,11 +212,19 @@ export class Editors {
     this.refreshTitle(name);
   }
 
-  close(name: string) { this.pane.close('file:' + name); }
+  /** Close an editor tab; force discards unsaved edits without asking (file deleted). */
+  close(name: string, force = false) {
+    const d = this.docs.get(name);
+    if (force && d) d.dirty = false;
+    return this.pane.close('file:' + name);
+  }
 
-  rename(from: string, to: string) {
-    if (!this.docs.has(from)) return;
-    this.close(from);
+  /** The file was renamed on disk: reopen it under the new name, keeping unsaved edits. */
+  async rename(from: string, to: string) {
+    const d = this.docs.get(from);
+    if (!d) return;
+    if (d.dirty) { this.fs.write(to, d.view.state.doc.toString()); d.dirty = false; }
+    await this.close(from);
     this.open(to);
   }
 

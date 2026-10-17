@@ -92,6 +92,10 @@ export async function promptText(title: string, label: string, value = ''): Prom
   return r === 'ok' ? inp.value.trim() : null;
 }
 
+export async function alertBox(title: string, msg: string): Promise<void> {
+  await modal(title, h('p', {}, msg), [{ label: t('OK'), value: 'ok', primary: true }]);
+}
+
 export async function confirmBox(title: string, msg: string): Promise<boolean> {
   return (await modal(title, h('p', {}, msg), [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }])) === 'ok';
 }

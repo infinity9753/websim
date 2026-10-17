@@ -1,5 +1,5 @@
 // Application shell: menus, toolbar, panes, dialogs, persistence.
-import { h, icon, modal, promptText, confirmBox, download, clear } from './dom';
+import { h, icon, modal, promptText, confirmBox, alertBox, download, clear } from './dom';
 import { Pane } from './pane';
 import { RemoteSession } from './remote';
 import { BrowserFS, langOf, loadState, saveState } from './vfs';
@@ -285,13 +285,13 @@ export class App {
     this.project.onRename = async (f) => {
       const n = await promptText(t('Rename file'), t('New name'), f);
       if (!n || n === f) return;
-      if (!this.fs.rename(f, n)) { alert(t('A file named "{0}" already exists.', n)); return; }
+      if (!this.fs.rename(f, n)) { await alertBox(t('Rename file'), t('A file named "{0}" already exists.', n)); return; }
       this.editors.rename(f, n);
       this.project.sel = n;
     };
     this.project.onDelete = async (f) => {
       if (!(await confirmBox(t('Remove file'), t('Remove "{0}" from the project? This deletes it from browser storage.', f)))) return;
-      this.editors.close(f);
+      await this.editors.close(f, true);
       this.fs.remove(f);
       s.fileStatus.delete(f);
       this.project.render();
@@ -500,7 +500,7 @@ export class App {
   async resetWorkspace() {
     if (!(await confirmBox(t('Reset workspace'), t('Delete all files and libraries stored in this browser and reload the examples?')))) return;
     await this.session.exec('quit -sim', false);
-    for (const n of this.editors.openNames()) this.editors.close(n);
+    for (const n of this.editors.openNames()) await this.editors.close(n, true);
     this.fs.clear();
     this.session.resetLibraries();
     this.transcript.clear();
