@@ -296,3 +296,40 @@ end;`;
     expect(out.filter(l => l.startsWith('**'))).toEqual(['** Note: 2.250000e+00 23 5.750000e+00', '** Note: 2.250000e+00']);
   });
 });
+
+describe('file I/O and $sformatf (#18)', () => {
+  it('writes, reads and scans files; formats strings', () => {
+    const files2: Record<string, string> = { 'in.txt': 'add 3 4\nmul 6 7\n' };
+    const { out } = simulate({
+      't.v': `module t;
+        integer fo, fi, a, b, n, r;
+        reg [8*8:1] op;
+        reg [8*40:1] line, msg;
+        initial begin
+          fo = $fopen("out.txt", "w");
+          $fdisplay(fo, "x=%0d", 5);
+          $fwrite(fo, "y=%h", 8'hab);
+          $fclose(fo);
+          fi = $fopen("in.txt", "r");
+          while (!$feof(fi)) begin
+            n = $fscanf(fi, "%s %d %d\\n", op, a, b);
+            if (n == 3) begin
+              r = (op == "add") ? a + b : a * b;
+              $display("%0s -> %0d", op, r);
+            end
+          end
+          $fclose(fi);
+          msg = $sformatf("v=%0d h=%h", 42, 4'hc);
+          $display("%0s", msg);
+          $sformat(line, "[%0d]", 7);
+          $display("%0s", line);
+          n = $sscanf("12 ff", "%d %h", a, b);
+          $display("%0d %0d %0d", n, a, b);
+          $fdisplay(1, "to stdout");
+        end
+      endmodule`,
+    }, 't', 1e9, files2);
+    expect(out).toEqual(['add -> 7', 'mul -> 42', 'v=42 h=c', '[7]', '2 12 255', 'to stdout']);
+    expect(files2['out.txt']).toBe('x=5\ny=ab');
+  });
+});

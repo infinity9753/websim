@@ -234,6 +234,9 @@ export class Elaborator {
   pkgScopes = new Map<string, Scope>();
   minPrec = Infinity;
   instDepth = 0;
+  /** Verilog file descriptors opened with $fopen. */
+  vfiles = new Map<number, { name: string; mode: string; out: string; text: string | null; pos: number }>();
+  nextFd = 3;
   /** std.textio line buffers and open files, keyed by their variable. */
   textState = new Map<Signal, TextState>();
   /** "file:line" of every statement that can hold a breakpoint. */
@@ -1376,8 +1379,66 @@ export class Elaborator {
         return leaf(() => { const v = xf(); if (v.b) return L.X1; const a = v.a; const one = a !== 0n && (a & (a - 1n)) === 0n; return L.bool(name === '$onehot' ? one : one || a === 0n); }, 1, false);
       }
       case '$isunknown': { const xf = selfEv(A(0)); return leaf(() => L.bool(xf().b !== 0n), 1, false); }
-      case '$fopen': return constNode(fromInt(0x80000001, 32));
-      case '$feof': return constNode(L.ONE);
+      case '$fopen': {
+        const nameN = this.ex(args[0], c), nf = selfEv(nameN);
+        const modeN = args[1] ? this.ex(args[1], c) : null, mf = modeN ? selfEv(modeN) : null;
+        return leaf(() => {
+          const name = nameN.str ?? L.toAscii(nf());
+          const mode = modeN ? modeN.str ?? L.toAscii(mf!()) : 'w';
+          const host = this.k.host;
+          let text: string | null = null;
+          if (mode.startsWith('r')) { const t = host.readFile?.(name); if (t === undefined) return L.zeros(32); text = t; }
+          const fd = this.nextFd++;
+          const out = mode.startsWith('a') ? host.readFile?.(name) ?? '' : '';
+          this.vfiles.set(fd, { name, mode, out, text, pos: 0 });
+          if (mode.startsWith('w')) host.writeFile?.(name, '');
+          return fromInt(fd | 0x80000000, 32);
+        }, 32, false);
+      }
+      case '$feof': {
+        const fdf = selfEv(A(0));
+        return leaf(() => { const f = this.vfiles.get(Number(fdf().a & 0x7fffffffn)); return L.bool(!f || f.text === null || f.pos >= f.text.length); }, 1, false);
+      }
+      case '$fgets': {
+        // $fgets(str, fd): read one line (including newline) into str, return chars read
+        const lvS = this.lv(args[0], { ...c, driverMode: false });
+        const fdf = selfEv(A(1));
+        return leaf(() => {
+          const f = this.vfiles.get(Number(fdf().a & 0x7fffffffn));
+          if (!f || f.text === null || f.pos >= f.text.length) return L.zeros(32);
+          let e = f.text.indexOf('\n', f.pos);
+          e = e < 0 ? f.text.length : e + 1;
+          const line = f.text.slice(f.pos, e);
+          f.pos = e;
+          this.write(lvS.tg(), resize(L.fromString(line), lvS.w));
+          return fromInt(line.length, 32);
+        }, 32, false);
+      }
+      case '$fscanf': case '$sscanf': {
+        const srcN = this.ex(args[0], c), srcF = selfEv(srcN);
+        const fmtE = args[1];
+        if (fmtE?.k !== 'str') err(`${name}: format must be a string literal`, loc);
+        const outs = args.slice(2).map(a => this.lv(a, { ...c, driverMode: false }));
+        const fmt = fmtE.s;
+        return leaf(() => {
+          let text: string, start = 0;
+          let file: { text: string | null; pos: number } | undefined;
+          if (name === '$fscanf') {
+            file = this.vfiles.get(Number(srcF().a & 0x7fffffffn));
+            if (!file || file.text === null) return fromInt(-1, 32, true);
+            text = file.text; start = file.pos;
+            if (start >= text.length) return fromInt(-1, 32, true);
+          } else text = srcN.str ?? L.toAscii(srcF());
+          const r = scanf(text, start, fmt, outs.map(o => o.w));
+          r.values.forEach((v, i) => this.write(outs[i].tg(), v));
+          if (file) file.pos = r.pos;
+          return fromInt(r.values.length, 32, true);
+        }, 32, true);
+      }
+      case '$sformatf': case '$psprintf': {
+        const { fn } = this.displayFn(args, c);
+        return { w: 8, s: false, str: '', mk: (W) => () => { const t = fn(); return resize(L.fromString(t || '\0'), Math.max(W, t.length * 8)); } };
+      }
       case '$test$plusargs': case '$value$plusargs': return constNode(L.ZERO);
 
     }
@@ -2358,9 +2419,35 @@ export class Elaborator {
         if (nl) return { sync: () => host.print(fn()) };
         return { sync: () => (host as any).write ? (host as any).write(fn()) : host.print(fn()) };
       }
-      case '$fdisplay': case '$fwrite': {
+      case '$fdisplay': case '$fwrite': case '$fstrobe': case '$fmonitor': case '$fdisplayh': case '$fwriteh': case '$fdisplayb': case '$fwriteb': {
+        const fdf = selfEv(this.ex(s.args[0]!, c));
+        const radix = { h: 'h', b: 'b' }[name.slice(-1)] ?? 'd';
+        const { fn } = this.displayFn(s.args.slice(1), c, radix);
+        const nl = name.startsWith('$fdisplay') || name === '$fstrobe' || name === '$fmonitor';
+        const emit = () => {
+          const raw = Number(fdf().a);
+          const text = fn() + (nl ? '\n' : '');
+          if (raw & 0x80000000) {
+            const f = this.vfiles.get(raw & 0x7fffffff);
+            if (!f) return;
+            f.out += text;
+            host.writeFile?.(f.name, f.out);
+          } else {
+            // multichannel descriptor: bit 0 = stdout (transcript)
+            if (raw & 1) for (const l of text.replace(/\n$/, '').split('\n')) host.print(l);
+          }
+        };
+        if (name === '$fstrobe') return { sync: () => k.postponed.push(emit) };
+        return { sync: emit };
+      }
+      case '$fclose': {
+        const fdf = selfEv(this.ex(s.args[0]!, c));
+        return { sync: () => { const fd = Number(fdf().a) & 0x7fffffff; const f = this.vfiles.get(fd); if (f && !f.mode.startsWith('r')) host.writeFile?.(f.name, f.out); this.vfiles.delete(fd); } };
+      }
+      case '$sformat': case '$swrite': {
+        const dest = this.lv(s.args[0]!, { ...c, driverMode: false });
         const { fn } = this.displayFn(s.args.slice(1), c);
-        return { sync: () => host.print(fn()) };
+        return { sync: () => this.write(dest.tg(), resize(L.fromString(fn()), dest.w)) };
       }
       case '$strobe': {
         const { fn } = this.displayFn(s.args, c);
@@ -2455,7 +2542,7 @@ export class Elaborator {
         }
         return { sync: () => { const items = paths.length ? paths.map(p => ({ path: p, levels })) : [{ path: '', levels: 0 }]; k.dumpItems = [...(k.dumpItems ?? []), ...items]; } };
       }
-      case '$dumpon': case '$dumpoff': case '$dumpall': case '$dumpflush': case '$fclose': case '$timeformat': case '$printtimescale': case '$fflush':
+      case '$dumpon': case '$dumpoff': case '$dumpall': case '$dumpflush': case '$timeformat': case '$printtimescale': case '$fflush':
         return { sync: () => {} };
       case '$random': case '$urandom': return { sync: () => { k.random(); } };
     }
@@ -2626,4 +2713,39 @@ export function fmtReal(x: number): string {
 export function vhdlReal(x: number): string {
   if (!Number.isFinite(x)) return String(x);
   return x.toExponential(6).replace(/e([+-])(\d)$/, 'e$10$2');
+}
+
+/** Minimal C-style scanf used by $fscanf / $sscanf. */
+function scanf(text: string, pos: number, fmt: string, widths: number[]): { values: Vec[]; pos: number } {
+  const values: Vec[] = [];
+  let i = 0;
+  while (i < fmt.length) {
+    const fc = fmt[i];
+    if (/\s/.test(fc)) { while (pos < text.length && /\s/.test(text[pos])) pos++; i++; continue; }
+    if (fc !== '%') { if (text[pos] !== fc) break; pos++; i++; continue; }
+    const m = /^%(\*?)(\d*)([dhxbocs])/.exec(fmt.slice(i));
+    if (!m) break;
+    i += m[0].length;
+    const skip = m[1] === '*';
+    const spec = m[3];
+    if (spec !== 'c') while (pos < text.length && /\s/.test(text[pos])) pos++;
+    if (pos >= text.length) break;
+    const w = widths[values.length] ?? 32;
+    let tok: RegExpExecArray | null;
+    const rest = text.slice(pos);
+    let v: Vec | null = null;
+    switch (spec) {
+      case 'd': tok = /^[-+]?\d+/.exec(rest); if (tok) v = fromInt(BigInt(tok[0]), w, true); break;
+      case 'h': case 'x': tok = /^[0-9a-fA-FxXzZ_]+/.exec(rest); if (tok) v = resize(L.fromBits([...tok[0].replace(/_/g, '')].map(ch => /[xX]/.test(ch) ? 'xxxx' : /[zZ]/.test(ch) ? 'zzzz' : parseInt(ch, 16).toString(2).padStart(4, '0')).join('')), w); break;
+      case 'b': tok = /^[01xXzZ_]+/.exec(rest); if (tok) v = resize(L.fromBits(tok[0].replace(/_/g, '')), w); break;
+      case 'o': tok = /^[0-7]+/.exec(rest); if (tok) v = fromInt(BigInt('0o' + tok[0]), w); break;
+      case 'c': tok = /^[\s\S]/.exec(rest); if (tok) v = fromInt(tok[0].charCodeAt(0), w); break;
+      case 's': tok = /^\S+/.exec(rest); if (tok) v = resize(L.fromString(tok[0]), w); break;
+      default: tok = null;
+    }
+    if (!tok || !v) break;
+    pos += tok[0].length;
+    if (!skip) values.push(v);
+  }
+  return { values, pos };
 }
