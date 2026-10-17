@@ -185,3 +185,15 @@ describe('intra-assignment event control (#1)', () => {
     expect(out).toEqual(['t=0 q=0', 't=5 q=0', 't=6 q=1']);
   });
 });
+
+describe('named events (#3)', () => {
+  it('-> e wakes processes waiting on @(e)', () => {
+    const { out } = simulate({
+      't.v': `module t; event go, done_ev; integer n = 0;
+        initial begin #10 -> go; @(done_ev) $display("done at %0t n=%0d", $time, n); #10 -> go; #1 $display("n=%0d", n); end
+        always @(go) begin n = n + 1; #5 -> done_ev; end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['done at 15 n=1', 'n=2']);
+  });
+});

@@ -16,7 +16,7 @@ export function parseVerilog(src: string, file: string, opts: VerilogParseOption
 }
 
 const NET_TYPES = new Set(['wire', 'tri', 'tri0', 'tri1', 'wand', 'wor', 'supply0', 'supply1']);
-const VAR_TYPES = new Set(['reg', 'logic', 'bit', 'integer', 'int', 'byte', 'shortint', 'longint', 'time', 'real', 'realtime', 'genvar', 'string']);
+const VAR_TYPES = new Set(['event', 'reg', 'logic', 'bit', 'integer', 'int', 'byte', 'shortint', 'longint', 'time', 'real', 'realtime', 'genvar', 'string']);
 const GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buf']);
 
 const BIN_PREC: Record<string, number> = {
@@ -145,7 +145,7 @@ class VParser {
     const t: TypeSpec = { base: 'logic' };
     if (this.tok.t === 'id') {
       const v = this.tok.v;
-      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit') { this.pos++; if (this.accept('signed')) t.signed = true; }
+      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit' || v === 'event') { this.pos++; if (this.accept('signed')) t.signed = true; }
       else if (v === 'integer' || v === 'int') { this.pos++; t.base = 'integer'; t.width = 32; t.signed = true; }
       else if (v === 'byte') { this.pos++; t.base = 'integer'; t.width = 8; t.signed = true; }
       else if (v === 'shortint') { this.pos++; t.base = 'integer'; t.width = 16; t.signed = true; }
@@ -283,6 +283,8 @@ class VParser {
           if (isNet) items.push({ k: 'cassign', lhs: { k: 'id', name, loc: nloc }, rhs: init, delay, loc: nloc });
           else dn.init = init;
         }
+        // named events are modelled as a 1-bit variable toggled by "->"; start known so a toggle is a change
+        if (v === 'event') dn.init = num(0);
         names.push(dn);
       } while (this.accept(','));
       this.expect(';');
@@ -489,7 +491,12 @@ class VParser {
         return { k: 'event', items, body: this.stmt(), loc };
       }
       if (t.v === '{') return this.assignStmt(loc, true);
-      if (t.v === '->') { this.pos++; this.ident(); this.expect(';'); return { k: 'null', loc }; }
+      if (t.v === '->') {
+        this.pos++;
+        const ev: Expr = { k: 'id', name: this.hierName(), loc };
+        this.expect(';');
+        return { k: 'assign', lhs: ev, rhs: { k: 'un', op: '~', e: ev }, nb: false, loc };
+      }
       this.err(`near "${t.v}": syntax error, unexpected ${t.v}`);
     }
     switch (t.v) {
