@@ -167,3 +167,21 @@ describe('port collapsing', () => {
     expect(q.vals[0].toString()).toBe('xx');
   });
 });
+
+describe('intra-assignment event control (#1)', () => {
+  it('q <= @(posedge clk) d updates after the event and does not block', () => {
+    const { out } = simulate({
+      't.v': `module t; reg clk = 0, d = 1, q = 0;
+        initial begin
+          q <= @(posedge clk) d;
+          d = 0;
+          $display("t=%0t q=%b", $time, q);
+          #5 $display("t=%0t q=%b", $time, q);
+          clk = 1;
+          #1 $display("t=%0t q=%b", $time, q);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['t=0 q=0', 't=5 q=0', 't=6 q=1']);
+  });
+});

@@ -201,6 +201,16 @@ export class Kernel {
     if (m.listeners) for (const l of [...m.listeners]) l(m);
   }
 
+  /** Run `fn` once, the next time a sensitivity wait is satisfied (no process is suspended). */
+  onceEvent(w: Extract<Wait, { t: 'sens' }>, fn: () => void, nba = false) {
+    const waker: Waker = () => {
+      if (w.test && !w.test()) return;
+      for (const s of w.sigs) this.unlisten(s, waker);
+      if (nba) this.nba.push(fn); else this.activate(fn);
+    };
+    for (const s of w.sigs) this.listen(s, waker);
+  }
+
   listen(s: Signal | Memory, w: Waker) { (s.listeners ??= new Set()).add(w); }
   unlisten(s: Signal | Memory, w: Waker) { s.listeners?.delete(w); }
 

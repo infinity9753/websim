@@ -1744,7 +1744,15 @@ export class Elaborator {
     const self = this;
     if (s.evctl) {
       const wf = this.eventWait(s.evctl, c);
-      if (nb) return { sync: () => { const v = R(); const t = Lv.tg(); const w = wf(); void w; k.nba.push(() => self.write(t, v)); } };
+      if (nb) {
+        // q <= @(ev) d: sample d now, update q in the NBA region after the event, without blocking the process
+        return {
+          sync: () => {
+            const v = R(); const t = Lv.tg(); const w = wf();
+            if (w.t === 'sens') k.onceEvent(w, () => self.write(t, v), true);
+          },
+        };
+      }
       return { gen: function* () { const v = R(); yield wf(); self.write(Lv.tg(), v); } };
     }
     if (s.delay) {
