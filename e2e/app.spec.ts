@@ -95,3 +95,20 @@ test('switches the UI to Korean and back', async ({ page }) => {
   await page.getByText('English', { exact: true }).click();
   await expect(page.getByText('File', { exact: true }).first()).toBeVisible();
 });
+
+test('synthesizes the example with Yosys and simulates the netlist', async ({ page }) => {
+  test.setTimeout(120_000);
+  await fresh(page);
+  await cmd(page, 'quit -sim');
+  await page.getByText('Compile', { exact: true }).first().click();
+  await page.getByText('Synthesize (Yosys)…').click();
+  await page.locator('.synthesis button[title="Synthesize with Yosys"]').click();
+  await expect(page.locator('.synth-status')).toContainText('cells', { timeout: 90_000 });
+  await expect(page.locator('.synth-cells tbody tr').first()).toBeVisible();
+  expect(await page.locator('.syn-node').count()).toBeGreaterThan(5);
+  await page.getByText('Simulate netlist').click();
+  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter.v');
+  await cmd(page, 'vsim work.tb_counter');
+  await cmd(page, 'run -all');
+  await expect(page.locator('.tr-out')).toContainText('$finish');
+});

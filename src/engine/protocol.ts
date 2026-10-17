@@ -39,6 +39,7 @@ export interface PState {
   scope?: string | null;
   waves?: PWave[];
   lists?: PList[];
+  synth?: { top: string; target: string; base: string; ok: boolean; cells: [string, number][]; warnings: number } | null;
   time?: { now: number; delta: number; finished: boolean; procStates: string; histBytes?: number; histEntries?: number };
   hist?: PHist[];
   running?: boolean;

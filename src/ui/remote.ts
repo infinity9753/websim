@@ -59,7 +59,7 @@ export interface MWave {
   groupLabel?: string; collapsed?: boolean; parent?: number;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage' | 'synth';
 
 export class RemoteSession {
   private worker: Worker;
@@ -75,6 +75,7 @@ export class RemoteSession {
   scope: MScope | null = null;
   waves: MWave[] = [];
   lists: MList[] = [];
+  lastSynth: PState['synth'] = null;
   running = false;
   defaultRadix: Radix = 'binary';
   history: string[] = [];
@@ -193,6 +194,7 @@ export class RemoteSession {
           return sig ? [{ id: w.id, path: w.path, name: w.name, sig, radix: w.radix, ...waveAttrs(w) }] : [];
         });
       }
+      if (st.synth !== undefined) this.lastSynth = st.synth;
       if (st.lists) this.lists = st.lists.flatMap(l => { const sig = this.sigs.get(l.sigId); return sig ? [{ path: l.path, name: l.name, sig, radix: l.radix }] : []; });
       if (st.running !== undefined) this.running = st.running;
       if (st.paused !== undefined) this.paused = st.paused;
@@ -203,7 +205,7 @@ export class RemoteSession {
       if (st.history) this.history = st.history;
       if (st.defaultRadix) this.defaultRadix = st.defaultRadix;
       if (st.lastVsim !== undefined) this.lastVsim = st.lastVsim;
-      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'list', 'time', 'running', 'debug', 'zoomfull', 'coverage'];
+      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'list', 'time', 'running', 'debug', 'zoomfull', 'coverage', 'synth'];
       for (const ev of order) if (st.events.includes(ev)) this.emitLocal(ev);
       if (st.hist?.length && !st.events.includes('time')) this.emitLocal('time');
     } finally {

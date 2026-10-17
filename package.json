@@ -27,6 +27,7 @@
     "@codemirror/legacy-modes": "^6.5.5",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.14",
+    "@yowasp/yosys": "^0.70.62-dev.1236",
     "codemirror": "^6.0.2"
   },
   "type": "module"

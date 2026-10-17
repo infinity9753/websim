@@ -17,6 +17,10 @@ specification ([docs/SPEC.md](docs/SPEC.md)) based on public knowledge of how
 such tools behave and on the IEEE 1364 / 1076 standards. It contains no code or
 assets from any commercial simulator and is not affiliated with any vendor.
 
+## Third-party components
+
+- Logic synthesis uses [Yosys](https://github.com/YosysHQ/yosys) through the [YoWASP](https://yowasp.org/) WebAssembly package `@yowasp/yosys` (ISC license). It is downloaded by the browser (about 77 MB) only when `synth` is first used.
+
 ## Quick start
 
 ```bash

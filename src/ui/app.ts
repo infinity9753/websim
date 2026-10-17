@@ -9,6 +9,7 @@ import { Editors, type LineCoverage } from './editor';
 import { WaveView } from './wave';
 import { ListView } from './list';
 import { DataflowView } from './dataflow';
+import { SynthesisView } from './synthesis';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
@@ -41,6 +42,7 @@ export class App {
   wave: WaveView;
   list: ListView;
   dataflow: DataflowView;
+  synthesis: SynthesisView;
   left = new Pane('pane-left');
   mid = new Pane('pane-mid');
   right = new Pane('pane-right');
@@ -74,6 +76,7 @@ export class App {
     this.wave = new WaveView(this.session);
     this.list = new ListView(this.session);
     this.dataflow = new DataflowView(this.session);
+    this.synthesis = new SynthesisView(this.session, this.fs);
     this.project = new ProjectPanel(this.fs, this.session);
     this.library = new LibraryPanel(this.session);
     this.structure = new StructurePanel(this.session);
@@ -100,6 +103,7 @@ export class App {
     this.right.add('wave', t('Wave'), this.wave.el);
     this.right.add('list', t('List'), this.list.el, { activate: false });
     this.right.add('dataflow', t('Dataflow'), this.dataflow.el, { activate: false });
+    this.right.add('synthesis', t('Synthesis'), this.synthesis.el, { activate: false });
     this.bottom.add('transcript', t('Transcript'), this.transcript.el);
 
     const s1 = h('div', { class: 'split-v1', role: 'separator', 'aria-orientation': 'vertical' });
@@ -192,6 +196,7 @@ export class App {
         { label: t('Wave'), action: () => this.right.activate('wave') },
         { label: t('List'), action: () => this.right.activate('list') },
         { label: t('Dataflow'), action: () => this.right.activate('dataflow') },
+        { label: t('Synthesis'), action: () => this.right.activate('synthesis') },
         '-',
         { label: t('Theme: Auto'), action: () => this.setTheme('auto') },
         { label: t('Theme: Light'), action: () => this.setTheme('light') },
@@ -204,6 +209,8 @@ export class App {
         { label: t('Compile Current File'), kbd: 'F7', action: () => this.compileCurrent() },
         { label: t('Compile All'), kbd: 'Shift+F7', action: () => this.compileFiles(this.project.hdlFiles()) },
         { label: t('Compile Selected'), action: () => this.project.sel && this.compileFiles([this.project.sel]) },
+        '-',
+        { label: t('Synthesize (Yosys)…'), action: () => this.right.activate('synthesis') },
         '-',
         { label: t('Clear Library "work"'), action: () => void this.cmd('vdel -lib work -all') },
       ]],
@@ -311,6 +318,8 @@ export class App {
     this.project.onExport = (f) => download(f, this.fs.read(f) ?? '');
     this.project.onRunDo = (f) => void this.cmd(`do ${f}`);
     this.search.onOpen = (f, l) => this.editors.open(f, l);
+    this.synthesis.onOpenFile = (f) => this.editors.open(f);
+    s.on('synth', () => this.right.activate('synthesis'));
     // Dataflow follows the signal selected in Objects or the Wave window and shows values at the wave cursor
     const showDf = (p: string) => { this.dataflow.show(p); this.right.activate('dataflow'); };
     this.dataflow.getTime = () => this.wave.cursor ?? s.now;

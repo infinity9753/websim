@@ -200,6 +200,24 @@ VHDL 은 9값 `std_logic`(U X 0 1 Z W L H -)과 해결 함수를 그대로 따�
 - **VCD 내보내기**: `vcd export wave.vcd` (파형 창 신호) / `vcd export -all all.vcd`. 설계 안의 `$dumpfile`/`$dumpvars` 도 지원합니다.
 - **VCD 가져오기**: 파일 ▸ VCD 파형 열기…, 프로젝트의 `.vcd` 더블 클릭, 또는 `vcd load wave.vcd` (`vsim -view wave.vcd`). 다른 시뮬레이터에서 만든 VCD 를 읽기 전용 데이터셋으로 열어 계층·오브젝트·파형·리스트에서 볼 수 있습니다. `quit -sim` 으로 닫습니다.
 
+### 논리 합성 (Yosys)
+
+오픈소스 합성기 [Yosys](https://github.com/YosysHQ/yosys)(YoWASP WebAssembly 빌드, ISC 라이선스)를 브라우저 안에서 실행합니다. 처음 한 번 약 77MB 를 내려받으며 이후에는 브라우저 캐시를 씁니다.
+
+1. 설계를 컴파일한 뒤 **컴파일 ▸ 합성 (Yosys)…** 로 합성 창을 엽니다(또는 트랜스크립트에서 `synth`).
+2. 최상위 모듈(비우면 자동: 테스트벤치가 아닌 최상위, 또는 테스트벤치가 인스턴스화한 모듈), 타깃(`generic`, `ice40`, `ecp5`, `gowin`, `xilinx`), 평탄화 여부를 고르고 합성 버튼을 누릅니다.
+3. 셀 종류별 개수와 회로도가 표시되고, 결과는 프로젝트의 `synth/` 폴더에 `<top>.v`(넷리스트), `.json`, `.stat`, `.log` 로 저장됩니다(FPGA 타깃은 `<top>_<target>.*`).
+4. **넷리스트 시뮬레이션**: `generic` 결과의 넷리스트를 `work` 에 컴파일해 RTL 모듈을 대체하므로, 같은 테스트벤치로 게이트 레벨 시뮬레이션을 하고 RTL 결과와 비교할 수 있습니다. RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
+
+```tcl
+vlog counter.v tb_counter.v
+synth -flatten                    ;# synth/counter.v ...
+vlog synth/counter.v              ;# 게이트 레벨 넷리스트로 교체
+vsim work.tb_counter; run -all
+```
+
+VHDL 은 아직 합성할 수 없습니다(Yosys 의 Verilog 프런트엔드만 포함).
+
 ## 7. 프로젝트, 폴더, 검색
 
 - **프로젝트**: 파일 ▸ 새 프로젝트… / 프로젝트 열기 / 프로젝트 이름 바꾸기… / 프로젝트 삭제. 프로젝트마다 파일, 컴파일된 라이브러리, 열린 편집기, 브레이크포인트가 따로 저장됩니다(테마와 창 배치는 공통).
@@ -261,6 +279,12 @@ VHDL 은 9값 `std_logic`(U X 0 1 Z W L H -)과 해결 함수를 그대로 따�
 | `mem display [-startaddress a] [-endaddress b] <mem>` | 내용 출력 |
 | `mem save -outfile <f> [-format hex\|bin] <mem>` / `mem load -infile <f> <mem>` | 저장 / 불러오기 |
 | `coverage report [-details] [-file f]` / `coverage clear` | 커버리지 리포트 / 초기화 (`vsim -coverage` 필요) |
+
+### 합성
+
+| 명령 | 설명 |
+|---|---|
+| `synth [-top m] [-target generic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 
 ### 기타
 

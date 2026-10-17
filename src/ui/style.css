@@ -304,3 +304,22 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .cm-cov.hit { color: #1f9d4c; }
 .cm-cov.miss { color: #fff; background: #d63b3b; border-radius: 2px; text-align: center; }
 .cm-cov.partial { color: #000; background: #f5c542; border-radius: 2px; }
+
+/* synthesis (#47) */
+.synthesis { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.synth-opt { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; font-size: 12px; }
+.synth-status { padding: 4px 8px; font-size: 12px; }
+.synth-body { flex: 1; display: flex; min-height: 0; }
+.synth-cells { width: 200px; flex: none; border-right: 1px solid var(--border, #ccc); }
+.synth-cells tr.total td { font-weight: 600; border-top: 1px solid var(--border, #ccc); }
+.synth-schematic { flex: 1; overflow: auto; background: var(--w-bg, #0b0f14); }
+.synth-svg { display: block; font: 10px var(--mono); }
+.syn-edge { fill: none; stroke: #5d7a99; stroke-width: 1; }
+.syn-edge.back { stroke: #c08a2e; stroke-dasharray: 4 3; }
+.syn-edge:hover { stroke: #ffd23f; stroke-width: 2; }
+.syn-cell rect { fill: #1a2433; stroke: #6b8cff; }
+.syn-port { fill: #13291c; stroke: #3fe06a; }
+.syn-out .syn-port { fill: #2a2413; stroke: #ffd23f; }
+.syn-type { fill: #e6edf7; font-weight: 600; }
+.syn-pin { fill: #8fa0b8; font-size: 8px; }
+.synthesis .btn { padding: 2px 8px; font-size: 12px; }

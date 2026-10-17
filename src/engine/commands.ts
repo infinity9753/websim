@@ -10,6 +10,7 @@ import './vhdl';
 import { writeVcd, parseVcd, vcdBits, type VcdVar, type VcdScopeDecl } from './vcd';
 import { listRows, listText } from './list';
 import { aggregate, coverageReport } from './coverage';
+import { synthesize, designFiles, SYNTH_TARGETS, type SynthTarget } from './synth';
 import { fmtReal, vecToReal } from './elab';
 import type { Vec } from './logic';
 
@@ -53,7 +54,7 @@ export function waveAttrs(w: Partial<Record<(typeof WAVE_ATTRS)[number], unknown
   return o as Pick<WaveEntry, (typeof WAVE_ATTRS)[number]>;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage' | 'synth';
 
 export interface ListEntry { path: string; name: string; sig: Signal; radix: Radix }
 
@@ -166,6 +167,7 @@ export class Session {
       case 'now': this.out(this.fmt(this.now)); return;
       case 'vcd': return this.vcd(rest);
       case 'coverage': return this.coverageCmd(rest);
+      case 'synth': return this.synth(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -197,6 +199,7 @@ export class Session {
       '  vsim -coverage ...                 count statement / branch / toggle coverage',
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
+      '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
       '  write list <file>                  save the List window as a text table',
@@ -303,6 +306,8 @@ export class Session {
 
   // ------------------------------------------------------------ simulation
   noSpecify = false;
+  /** Result of the last synth command (for the Synthesis window). */
+  lastSynth: { top: string; target: string; base: string; ok: boolean; cells: [string, number][]; warnings: number } | null = null;
   coverage = false;
 
   vsim(args: string[]) {
@@ -879,6 +884,75 @@ export class Session {
     if (!all && !this.waves.length) throw new Error('vcd: the wave window is empty (use -all to dump every signal)');
     this.fs.write(file, this.vcdText(all));
     this.out(`Wrote ${file}`);
+  }
+
+  /** synth [-top t] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files...] — logic synthesis with Yosys */
+  async synth(args: string[]) {
+    let top: string | undefined, target: SynthTarget = 'generic', flatten = false;
+    const files: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === '-top') top = args[++i];
+      else if (a === '-target') {
+        const t = args[++i] as SynthTarget;
+        if (!SYNTH_TARGETS.includes(t)) throw new Error(`synth: unknown target "${t}" (${SYNTH_TARGETS.join(', ')})`);
+        target = t;
+      } else if (a === '-flatten') flatten = true;
+      else if (a.startsWith('-')) throw new Error(`synth: unknown option ${a}`);
+      else files.push(a);
+    }
+    if (!top) {
+      // the design top: a work top level that is not a testbench, or the unit the last testbench instantiates
+      const isTb = (n: string) => /(^|_)(tb|test|bench)|(tb|test|bench)($|_)/i.test(n);
+      const all = this.libs.topLevels('work');
+      let tops = all.filter(n => !isTb(n));
+      if (!tops.length) {
+        // only testbenches at the top: take what they instantiate
+        const under = new Set<string>();
+        for (const tb of all) for (const it of this.libs.findDesign(tb)?.unit.items ?? []) if (it.k === 'inst') under.add(it.module);
+        tops = [...under];
+      }
+      if (tops.length === 1) top = tops[0];
+      else throw new Error('synth: specify the module to synthesize with -top <module>' + (tops.length ? ` (candidates: ${tops.join(', ')})` : ''));
+    }
+    if (!files.length) {
+      if (!this.libs.findDesign(top)) throw new Error(`synth: module '${top}' is not compiled into a library; compile it first or list the files.`);
+      files.push(...designFiles(this.libs, top));
+    }
+    const src: Record<string, string> = {};
+    for (const f of files) {
+      const t = this.fs.read(f);
+      if (t === undefined) throw new Error(`synth: cannot read "${f}"`);
+      src[f] = t;
+    }
+    this.out(`-- Synthesizing ${top} (${target}) from ${files.join(', ')}`);
+    let shown = 0;
+    const r = await synthesize({ top, target, flatten, files: src }, (done, total) => {
+      const pct = Math.floor((100 * done) / Math.max(1, total));
+      if (pct >= shown + 25 || (pct === 100 && shown < 100)) { shown = pct; this.out(`Loading Yosys ${pct}% (${(total / 1e6).toFixed(0)} MB, first use only)`); }
+    });
+    const base = `synth/${top}${target === 'generic' ? '' : `_${target}`}`;
+    if (this.fs.write) this.fs.write(`${base}.log`, r.log);
+    this.lastSynth = { top, target, base, ok: r.ok, cells: r.cells, warnings: r.log.split('\n').filter(l => /^Warning:/.test(l)).length };
+    if (!r.ok) {
+      this.emit('synth');
+      const errs = r.log.split('\n').filter(l => /ERROR/.test(l));
+      for (const e of errs.length ? errs : ['Yosys failed; see the log.']) this.out(`** Error: (synth) ${e.replace(/^ERROR:\s*/, '')}`, 'err');
+      this.out(`Log: ${base}.log`);
+      return false;
+    }
+    if (this.fs.write) {
+      this.fs.write(`${base}.v`, r.netlist ?? '');
+      this.fs.write(`${base}.json`, r.json ?? '');
+      this.fs.write(`${base}.stat`, r.stat ?? '');
+    }
+    const warn = r.log.split('\n').filter(l => /^Warning:/.test(l));
+    for (const w of warn.slice(0, 20)) this.out(`** Warning: (synth) ${w.replace(/^Warning:\s*/, '')}`, 'warn');
+    const total = r.cells.reduce((s, [, n]) => s + n, 0);
+    this.out(`Cells: ${total}${r.cells.length ? '  (' + r.cells.map(([c, n]) => `${c} ${n}`).join(', ') + ')' : ''}`);
+    this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log`);
+    this.emit('synth');
+    return true;
   }
 
   /** coverage report [-details] [-file f] | coverage clear */
