@@ -10,6 +10,7 @@ export class Signal {
   value: Vec;
   prev: Vec;
   lastEvent = -1;
+  lastStamp = -1;
   drivers: Driver[] | null = null;
   forced: Vec | null = null;
   listeners: Set<Waker> | null = null;
@@ -70,6 +71,8 @@ export type Wait =
   | { t: 'done' };
 
 export class FinishEx { constructor(public code = 0) {} }
+/** Thrown to terminate the current process without ending the simulation. */
+export class StopProcEx { }
 
 export interface ProcInfo { name: string; scope: string; file?: string; line?: number }
 
@@ -123,6 +126,8 @@ export interface KernelHost {
 export class Kernel {
   now = 0;
   deltaCount = 0;
+  /** Increments every delta cycle; used for 'event / rising_edge. */
+  stamp = 0;
   iterationLimit = 10000;
   active: (() => void)[] = [];
   activeHead = 0;
@@ -170,6 +175,7 @@ export class Kernel {
     sig.value = v;
     if (sig.isVar) return;
     sig.lastEvent = this.now;
+    sig.lastStamp = this.stamp;
     const ts = sig.times;
     if (ts.length && ts[ts.length - 1] === this.now) {
       sig.vals[sig.vals.length - 1] = v;
@@ -232,7 +238,9 @@ export class Kernel {
       this.current = null;
       p.done = true;
       if (e instanceof FinishEx) { this.finished = true; return; }
-      throw e;
+      if (e instanceof StopProcEx) return;
+      this.errorMsg = `${(e as Error)?.message ?? String(e)} (process ${p.info.scope}/${p.info.name})`;
+      return;
     }
     this.current = null;
     if (r.done) { p.done = true; return; }
@@ -288,6 +296,7 @@ export class Kernel {
       this.heap.pop();
       this.now = next;
       this.deltaCount = 0;
+      this.stamp++;
       const evs = this.timed.get(next)!;
       this.timed.delete(next);
       for (const e of evs) { if (e.nba) this.nba.push(e.fn); else this.active.push(e.fn); }
@@ -311,6 +320,7 @@ export class Kernel {
           this.errorMsg = `Iteration limit ${this.iterationLimit} reached at time ${this.now} ps.`;
           return 'error';
         }
+        this.stamp++;
         const n = this.nba; this.nba = [];
         for (const f of n) f();
         continue;
