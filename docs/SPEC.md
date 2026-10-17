@@ -61,6 +61,7 @@ A *project* groups source files, their compile order, and the default library.
 | `run [<n> [<unit>]] \| -all \| -continue` | Advance simulation. Default run length 100 ns. |
 | `restart [-f]` | Back to time 0, keep waves. |
 | `quit -sim` | Unload simulation. |
+| `vcd load <file.vcd>` / `vsim -view <file.vcd>` | Open a VCD (from any simulator) as a read-only dataset: its scopes and variables appear in Structure/Objects and can be added to the Wave and List windows; `run`/`force`/`step`/`restart` are refused until `quit -sim`. Also File > Open VCD Waveform… and double-click on a `.vcd` in the Project pane. |
 | `add list [-radix r] [-r] <paths...>` / `delete list <paths>\|*` / `write list <file>` | List window: one row per time step at which any listed signal changes (deltas collapsed), time in simulator-resolution units. |
 | `add wave [-radix r] <paths...>` | Paths are absolute (`/tb/dut/q`) or relative to current scope; `*` wildcard; `-r` recursive. |
 | `delete wave *` | Clear wave window. |

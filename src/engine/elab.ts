@@ -103,6 +103,8 @@ export interface Design {
   warnings: string[];
   allScopes: Scope[];
   execLines: Set<string>;
+  /** A waveform dataset opened for viewing (VCD import): no processes, cannot run. */
+  viewOnly?: boolean;
 }
 
 type Ev = () => Vec;

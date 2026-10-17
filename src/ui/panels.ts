@@ -101,13 +101,14 @@ export class ProjectPanel {
       const row = h('tr', {
         class: this.sel === f ? 'sel' : '',
         onclick: () => { this.sel = f; this.render(); },
-        ondblclick: () => this.onOpen?.(f),
+        ondblclick: () => { if (/\.vcd$/i.test(f)) void this.session.exec(`vcd load ${f}`); else this.onOpen?.(f); },
         oncontextmenu: (e: MouseEvent) => {
           e.preventDefault(); this.sel = f; this.render();
           contextMenu(e.clientX, e.clientY, [
             { label: 'Open', action: () => this.onOpen?.(f) },
             ...(isHdl ? [{ label: 'Compile', action: () => this.onCompile?.([f]) }] : []),
             ...(lang === 'do' ? [{ label: 'Execute script', action: () => this.onRunDo?.(f) }] : []),
+            ...(/\.vcd$/i.test(f) ? [{ label: 'Open as waveform', action: () => { void this.session.exec(`vcd load ${f}`); } }] : []),
             { label: 'Compile all', action: () => this.onCompile?.(this.hdlFiles()) },
             '-',
             { label: 'Rename…', action: () => this.onRename?.(f) },

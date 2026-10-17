@@ -1,6 +1,7 @@
 // Value Change Dump (IEEE 1364 §18) writer and a small reader for round-trip tests.
 import type { Signal } from './kernel';
 import type { Vec } from './logic';
+import { fmtReal, vecToReal } from './elab';
 
 export interface VcdVar { path: string; sig: Signal }
 
@@ -18,6 +19,7 @@ function bits(v: Vec): string {
 }
 
 function valueLine(sig: Signal, v: Vec, id: string): string {
+  if (sig.isReal) return `r${fmtReal(vecToReal(v))} ${id}`;
   if (sig.w === 1) return bits(v) + id;
   // drop redundant leading zeros as allowed by the format
   const b = bits(v).replace(/^0+(?=[01])/, '');
@@ -56,8 +58,8 @@ export function writeVcd(vars: VcdVar[], endTime: number, opts: { date?: string;
   const emit = (n: Node, depth: number) => {
     for (const v of n.vars) {
       const s = v.sig;
-      const range = s.w > 1 || s.msb !== 0 || s.lsb !== 0 ? ` [${s.msb}:${s.lsb}]` : '';
-      const kind = s.drivers?.length ? 'wire' : 'reg';
+      const range = !s.isReal && (s.w > 1 || s.msb !== 0 || s.lsb !== 0) ? ` [${s.msb}:${s.lsb}]` : '';
+      const kind = s.isReal ? 'real' : s.drivers?.length ? 'wire' : 'reg';
       out.push(`${'  '.repeat(depth)}$var ${kind} ${s.w} ${ids.get(s)} ${v.name.replace(/\s/g, '_')}${range} $end`);
     }
     for (const [name, c] of n.children) {
@@ -128,4 +130,106 @@ export function readVcd(text: string): Map<string, [number, string][]> {
     i++;
   }
   return res;
+}
+
+// ---------------------------------------------------------------- full reader (VCD import)
+
+export interface VcdVarDecl { name: string; kind: string; width: number; msb: number; lsb: number; id: string }
+export interface VcdScopeDecl { name: string; kind: string; vars: VcdVarDecl[]; children: VcdScopeDecl[] }
+export interface VcdData {
+  /** femtoseconds per VCD time unit */
+  unit: number;
+  scopes: VcdScopeDecl[];
+  /** changes per identifier code: times in fs and value strings ('b' digits, or 'r' + real) */
+  changes: Map<string, { t: number[]; v: string[] }>;
+  end: number;
+  date?: string;
+  version?: string;
+}
+
+const FS: Record<string, number> = { s: 1e15, ms: 1e12, us: 1e9, ns: 1e6, ps: 1e3, fs: 1 };
+
+/** Parse a VCD file (IEEE 1364 §18). Throws on malformed input. */
+export function parseVcd(text: string): VcdData {
+  const toks = text.split(/\s+/).filter(Boolean);
+  let i = 0;
+  const data: VcdData = { unit: 1e6, scopes: [], changes: new Map(), end: 0 };
+  const stack: VcdScopeDecl[] = [];
+  const untilEnd = () => { const out: string[] = []; while (i < toks.length && toks[i] !== '$end') out.push(toks[i++]); i++; return out; };
+  let t = 0;
+  let dumpOff = false;
+  const ids = new Set<string>();
+  const set = (id: string, v: string) => {
+    let c = data.changes.get(id);
+    if (!c) { c = { t: [], v: [] }; data.changes.set(id, c); }
+    if (c.t.length && c.t[c.t.length - 1] === t) c.v[c.v.length - 1] = v; // last value in a time step wins
+    else { c.t.push(t); c.v.push(v); }
+  };
+  while (i < toks.length) {
+    const k = toks[i++];
+    switch (k) {
+      case '$date': data.date = untilEnd().join(' '); continue;
+      case '$version': data.version = untilEnd().join(' '); continue;
+      case '$comment': untilEnd(); continue;
+      case '$timescale': {
+        const m = /^(\d+)\s*(s|ms|us|ns|ps|fs)$/.exec(untilEnd().join(''));
+        if (!m) throw new Error('VCD: bad $timescale');
+        data.unit = Number(m[1]) * FS[m[2]];
+        continue;
+      }
+      case '$scope': {
+        const [kind, name] = untilEnd();
+        const s: VcdScopeDecl = { name: name ?? 'unnamed', kind: kind ?? 'module', vars: [], children: [] };
+        (stack.length ? stack[stack.length - 1].children : data.scopes).push(s);
+        stack.push(s);
+        continue;
+      }
+      case '$upscope': untilEnd(); stack.pop(); continue;
+      case '$var': {
+        const f = untilEnd();
+        // $var kind width id name [range]
+        const [kind, w, id, name, range] = f;
+        const width = Number(w) || 1;
+        let msb = width - 1, lsb = 0;
+        const m = /^\[(-?\d+)(?::(-?\d+))?\]$/.exec(range ?? '') ?? /\[(-?\d+)(?::(-?\d+))?\]$/.exec(name);
+        if (m) { msb = Number(m[1]); lsb = m[2] !== undefined ? Number(m[2]) : msb; }
+        const nm = range ? name : name.replace(/\[(-?\d+)(?::(-?\d+))?\]$/, '') || name;
+        if (!stack.length) data.scopes.push(stack[0] = { name: 'top', kind: 'module', vars: [], children: [] });
+        stack[stack.length - 1].vars.push({ name: nm, kind, width, msb, lsb, id });
+        ids.add(id);
+        continue;
+      }
+      case '$enddefinitions': untilEnd(); continue;
+      case '$dumpvars': case '$dumpall': case '$end': continue;
+      case '$dumpon': dumpOff = false; continue;
+      case '$dumpoff': {
+        dumpOff = true;
+        // all variables become x while dumping is off; the values that follow restate that
+        continue;
+      }
+    }
+    if (k[0] === '#') {
+      const n = Number(k.slice(1));
+      if (!Number.isFinite(n)) throw new Error(`VCD: bad time "${k}"`);
+      t = Math.round(n * data.unit);
+      if (t > data.end) data.end = t;
+      continue;
+    }
+    if (k[0] === 'b' || k[0] === 'B') { set(toks[i++], k.slice(1).toLowerCase()); continue; }
+    if (k[0] === 'r' || k[0] === 'R') { set(toks[i++], 'r' + k.slice(1)); continue; }
+    if (k[0] === 's' || k[0] === 'S') { i++; continue; } // string values are not supported
+    if (/^[01xzXZuUwWlLhH-]/.test(k)) { set(k.slice(1), k[0].toLowerCase()); continue; }
+    if (k.startsWith('$')) { untilEnd(); continue; }
+    throw new Error(`VCD: unexpected "${k}"`);
+  }
+  void dumpOff;
+  if (!ids.size) throw new Error('VCD: no variables declared');
+  return data;
+}
+
+/** Expand a VCD vector value to `w` bits (left extension: 0/1 -> 0, x -> x, z -> z). */
+export function vcdBits(v: string, w: number): string {
+  if (v.length >= w) return v.slice(v.length - w);
+  const pad = v[0] === 'x' || v[0] === 'z' ? v[0] : '0';
+  return pad.repeat(w - v.length) + v;
 }

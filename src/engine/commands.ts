@@ -1,12 +1,13 @@
 // Transcript command interpreter (simulator command language subset).
 import { LibraryManager } from './library';
-import { Elaborator, type Design, type Scope, type ObjEntry } from './elab';
-import type { Signal, Memory } from './kernel';
+import { Elaborator, Scope, realToVec, type Design, type ObjEntry, type ModInfo, type RType } from './elab';
+import { Kernel, Signal, type Memory } from './kernel';
+import type { Unit } from './ast';
 import { fmtTime, parseTime } from './format';
 import * as L from './logic';
 import type { Radix } from './logic';
 import './vhdl';
-import { writeVcd, type VcdVar } from './vcd';
+import { writeVcd, parseVcd, vcdBits, type VcdVar, type VcdScopeDecl } from './vcd';
 import { listRows, listText } from './list';
 import { fmtReal, vecToReal } from './elab';
 import type { Vec } from './logic';
@@ -97,6 +98,9 @@ export class Session {
 
   private async run1(args: string[]): Promise<boolean | void> {
     const [cmd, ...rest] = args;
+    if (this.design?.viewOnly && ['run', 'force', 'noforce', 'step', 'restart', 'when', 'bp'].includes(cmd.toLowerCase())) {
+      throw new Error(`(vsim-3812) "${cmd}" is not available: the loaded dataset is a read-only waveform view. Use "quit -sim" to close it.`);
+    }
     switch (cmd.toLowerCase()) {
       case 'vlib': return this.vlib(rest);
       case 'vmap': this.out(`Modifying library mapping: ${rest.join(' ')}`); return;
@@ -166,6 +170,7 @@ export class Session {
       '  find signals <pattern>             list signals',
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
+      '  vcd load <file.vcd>                open a VCD as a read-only waveform view',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
       '  write list <file>                  save the List window as a text table',
@@ -270,6 +275,8 @@ export class Session {
   noSpecify = false;
 
   vsim(args: string[]) {
+    const vi = args.indexOf('-view');
+    if (vi >= 0) return this.viewVcd(args[vi + 1] ?? '');
     this.debug = !args.includes('-nodebug');
     this.noSpecify = args.includes('+nospecify');
     let res: number | undefined;
@@ -820,13 +827,75 @@ export class Session {
 
   vcd(args: string[]) {
     const sub = args[0];
-    if (sub !== 'export' && sub !== 'file') throw new Error('Usage: vcd export [-all] [file.vcd]');
+    if (sub === 'load' || sub === 'view' || sub === 'import') return this.viewVcd(args.slice(1).find(a => !a.startsWith('-')) ?? '');
+    if (sub !== 'export' && sub !== 'file') throw new Error('Usage: vcd export [-all] [file.vcd] | vcd load <file.vcd>');
     const all = args.includes('-all');
     const file = args.slice(1).find(a => !a.startsWith('-')) ?? 'wave.vcd';
     if (!this.fs.write) throw new Error('vcd: file system is read-only');
     if (!all && !this.waves.length) throw new Error('vcd: the wave window is empty (use -all to dump every signal)');
     this.fs.write(file, this.vcdText(all));
     this.out(`Wrote ${file}`);
+  }
+
+  /** Open a VCD file as a read-only dataset: its scopes and variables become a design to browse and plot. */
+  viewVcd(file: string) {
+    if (!file) throw new Error('Usage: vcd load <file.vcd>');
+    const text = this.fs.read(file);
+    if (text === undefined) throw new Error(`(vsim-7) Failed to open VCD file "${file}".`);
+    const data = parseVcd(text);
+    if (this.design) this.quitSim(true);
+    const base = file.replace(/^.*\//, '').replace(/\.vcd$/i, '') || 'vcd';
+    const unit: Unit = { kind: 'module', lang: 'verilog', name: base, file, line: 0, params: [], ports: [], items: [] };
+    const mod: ModInfo = { lang: 'verilog', unit, tsUnit: data.unit, tsPrec: data.unit, file, libName: 'vcd' };
+    const k = new Kernel({ print: (s: string) => this.simPrint(s) });
+    const sigs = new Map<string, Signal>();
+    const scopes: Scope[] = [];
+    const mk = (d: VcdScopeDecl, parent: Scope | null): Scope => {
+      const path = parent ? `${parent.path}/${d.name}` : `/${d.name}`;
+      const s = new Scope(d.name, path, null, parent, mod, 'instance');
+      scopes.push(s);
+      if (parent) { parent.children.push(s); parent.syms.set(d.name, { k: 'scope', s }); }
+      for (const v of d.vars) {
+        let sig = sigs.get(v.id);
+        const real = v.kind === 'real' || v.kind === 'realtime';
+        const w = real ? 64 : v.width;
+        if (!sig) {
+          const ch = data.changes.get(v.id) ?? { t: [], v: [] };
+          const vals = ch.v.map(x => (real ? realToVec(parseFloat(x.slice(1))) : L.fromBits(vcdBits(x.startsWith('r') ? 'x' : x, w))));
+          const times = [...ch.t];
+          if (!times.length || times[0] > 0) { times.unshift(0); vals.unshift(real ? realToVec(0) : L.allX(w)); }
+          const last = vals[vals.length - 1];
+          sig = new Signal(`${path}/${v.name}`, v.name, w, real ? 63 : v.msb, real ? 0 : v.lsb, false, last, false);
+          sig.isReal = real;
+          sig.kind = 'internal';
+          sig.times = times;
+          sig.vals = vals;
+          sigs.set(v.id, sig);
+        }
+        const t: RType = { kind: real ? 'real' : 'vec', w, msb: sig.msb, lsb: sig.lsb, signed: false, scalar: w === 1 && !real };
+        s.syms.set(v.name, { k: 'sig', sig, t });
+        s.objects.push({ name: v.name, sig, dir: 'internal', t });
+      }
+      for (const c of d.children) mk(c, s);
+      return s;
+    };
+    const root = data.scopes.length === 1 ? mk(data.scopes[0], null) : mk({ name: base, kind: 'module', vars: [], children: data.scopes }, null);
+    k.signals = [...sigs.values()];
+    k.now = data.end;
+    k.resolution = Math.max(1, data.unit);
+    k.finished = true;
+    this.design = { root, kernel: k, top: root.name, loaded: [file], warnings: [], allScopes: scopes, execLines: new Set(), viewOnly: true };
+    this.scope = root;
+    this.lastVsim = null;
+    this.promptN = 1;
+    this.waves = [];
+    this.lists = [];
+    this.out(`Opened VCD ${file}: ${sigs.size} signal${sigs.size === 1 ? '' : 's'} in ${scopes.length} scope${scopes.length === 1 ? '' : 's'}, end time ${fmtTime(data.end, k.resolution)} (read-only view)`);
+    this.emit('sim');
+    this.emit('wave');
+    this.emit('list');
+    this.emit('time');
+    this.emit('zoomfull');
   }
 
   // ------------------------------------------------------------ hierarchy helpers
@@ -1072,6 +1141,7 @@ export class Session {
 
   fmtSig(sig: Signal, radix?: Radix, time: number | null = null) {
     const v = time === null ? sig.value : sig.valueAt(time);
+    if (sig.isReal) return fmtReal(vecToReal(v));
     return L.format(v, radix ?? this.defaultRadix, radix ? undefined : sig.enumNames);
   }
 

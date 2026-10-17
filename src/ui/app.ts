@@ -149,6 +149,7 @@ export class App {
       ['File', [
         { label: 'New File…', kbd: 'Ctrl+Alt+N', action: () => this.newFile() },
         { label: 'Import Files…', action: () => this.importFiles() },
+        { label: 'Open VCD Waveform…', action: () => this.openVcd() },
         { label: 'Save', kbd: 'Ctrl+S', action: () => { const n = this.editors.activeName; if (n) this.editors.save(n); } },
         { label: 'Save All', action: () => this.editors.saveAll() },
         '-',
@@ -421,7 +422,7 @@ export class App {
   }
 
   importFiles() {
-    const inp = h('input', { type: 'file', multiple: true, accept: '.v,.sv,.vh,.svh,.vhd,.vhdl,.do,.tcl,.hex,.mem,.txt,.json' });
+    const inp = h('input', { type: 'file', multiple: true, accept: '.v,.sv,.vh,.svh,.vhd,.vhdl,.do,.tcl,.hex,.mem,.txt,.json,.vcd' });
     inp.addEventListener('change', async () => {
       for (const f of Array.from(inp.files ?? [])) {
         const text = await f.text();
@@ -432,6 +433,18 @@ export class App {
         this.editors.reload(f.name);
       }
       this.transcript.print(`Imported ${inp.files?.length ?? 0} file(s).`);
+    });
+    inp.click();
+  }
+
+  /** Pick a .vcd from disk, add it to the project and open it as a read-only waveform dataset. */
+  openVcd() {
+    const inp = h('input', { type: 'file', accept: '.vcd' });
+    inp.addEventListener('change', async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      this.fs.write(f.name, await f.text());
+      await this.cmd(`vcd load ${f.name}`);
     });
     inp.click();
   }
