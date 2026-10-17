@@ -67,6 +67,7 @@ export const KO: Record<string, string> = {
   'Delete All': '모두 삭제',
   'Help': '도움말',
   'Command Reference': '명령어 참조',
+  'User Guide': '사용자 가이드',
   'Keyboard Shortcuts': '단축키',
   'About WebSim': 'WebSim 정보',
 

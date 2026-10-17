@@ -27,6 +27,9 @@ interface AppState {
   breakpoints: { file: string; line: number; cond?: string }[];
 }
 
+/** User guide (tutorials, command reference, language support) in the repository. */
+const GUIDE_URL = 'https://github.com/infinity9753/websim/blob/main/docs/GUIDE.md';
+
 const DEFAULT_STATE: AppState = { compiled: [], libs: ['work'], runLength: '100 ns', layout: {}, openFiles: [], seen: false, theme: 'auto', hideLeft: false, hideMid: false, breakpoints: [] };
 
 export class App {
@@ -241,6 +244,7 @@ export class App {
         { label: t('Delete All'), action: () => void this.cmd('delete wave *') },
       ]],
       [t('Help'), [
+        { label: t('User Guide'), action: () => window.open(GUIDE_URL, '_blank', 'noopener') },
         { label: t('Command Reference'), action: () => void this.cmd('help') },
         { label: t('Keyboard Shortcuts'), action: () => this.shortcuts() },
         { label: t('About WebSim'), action: () => this.about() },
