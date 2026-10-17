@@ -36,7 +36,7 @@ export type Sym =
   | { k: 'sig'; sig: Signal; t: RType }
   | { k: 'mem'; mem: Memory; t: RType }
   | { k: 'const'; v: Vec; t?: RType; str?: string }
-  | { k: 'func'; f: FuncDecl; scope: Scope; cache: Map<string, CFunc> }
+  | { k: 'func'; f: FuncDecl; scope: Scope; cache: Map<string, CFunc>; alts?: Extract<Sym, { k: 'func' }>[] }
   | { k: 'type'; t: RType }
   | { k: 'scope'; s: Scope }
   | { k: 'alias'; target: Expr; aMsb?: number; aLsb?: number; tMsb?: number; tLsb?: number };
@@ -552,9 +552,15 @@ export class Elaborator {
         case 'decl': this.elabDecl(it, scope); break;
         case 'func': {
           const existing = scope.syms.get(it.name);
-          // VHDL package body / later declaration with a body overrides a prototype
-          if (existing?.k === 'func' && it.body.k === 'null' && !it.decls.length) break;
-          scope.syms.set(it.name, { k: 'func', f: it, scope, cache: new Map() });
+          const entry: Extract<Sym, { k: 'func' }> = { k: 'func', f: it, scope, cache: new Map() };
+          if (existing?.k !== 'func') { scope.syms.set(it.name, entry); break; }
+          // overloads: same signature replaces (package body after prototype), otherwise add an alternative
+          const key = sigKey(it);
+          const all = [existing, ...(existing.alts ?? [])];
+          const same = all.find(x => sigKey(x.f) === key);
+          const isProto = it.body.k === 'null' && !it.decls.length;
+          if (same) { if (!isProto) { same.f = it; same.scope = scope; same.cache = new Map(); } }
+          else (existing.alts ??= []).push(entry);
           break;
         }
         case 'use': this.importPackage(scope, it.pkg, it.loc); break;
@@ -1102,6 +1108,11 @@ export class Elaborator {
   }
 
   unaryNode(e: Extract<Expr, { k: 'un' }>, c: Ctx): Node {
+    if (c.lang === 'vhdl') {
+      const vop = { '-': '-', '+': '+', '~': 'not', abs: 'abs' }[e.op];
+      const u = vop ? this.userOp(vop, [e.e], c) : null;
+      if (u) return u;
+    }
     const A = this.ex(e.e, c);
     const op = e.op;
     const red = (f: (v: Vec) => Vec, neg = false): Node => {
@@ -1130,6 +1141,11 @@ export class Elaborator {
   }
 
   binNode(e: Extract<Expr, { k: 'bin' }>, c: Ctx): Node {
+    if (c.lang === 'vhdl') {
+      const vop = VHDL_OP_NAMES[e.op];
+      const u = vop ? this.userOp(vop, [e.l, e.r], c) : null;
+      if (u) return u;
+    }
     const A = this.ex(e.l, c), B = this.ex(e.r, c);
     const op = e.op;
     if (A.rf || B.rf) {
@@ -1358,7 +1374,8 @@ export class Elaborator {
     let ret: Signal | null = null;
     if (f.ret) {
       let t = this.resolveType(f.ret, fs, loc);
-      if (t.w === 0) {
+      if (t.kind === 'string' && t.w === 0) t = { ...t, w: 8 * 256, msb: 8 * 256 - 1, lsb: 0 };
+      else if (t.w === 0) {
         const w = Math.max(1, ...argT.filter(x => !x.isInt && !x.scalar).map(x => x.w));
         t = { ...t, w, msb: w - 1, lsb: 0 };
       }
@@ -1385,7 +1402,50 @@ export class Elaborator {
     return cf;
   }
 
+  /** Choose among overloaded subprograms by argument count and static argument types. */
+  pickOverload(sym: Extract<Sym, { k: 'func' }>, args: Expr[], c: Ctx, named?: (string | null)[]): Extract<Sym, { k: 'func' }> | null {
+    const all = [sym, ...(sym.alts ?? [])];
+    if (all.length === 1) return sym;
+    const acts = args.map(a => this.typeOf(a, c));
+    let best: Extract<Sym, { k: 'func' }> | null = null, bestScore = -1;
+    for (const cand of all) {
+      const f = cand.f;
+      if (!named?.some(n => n) && (args.length > f.args.length || f.args.slice(args.length).some(a => !a.def))) continue;
+      let score = 0, ok = true;
+      args.forEach((_, i) => {
+        const formal = f.args[i] ? this.resolveTypeSafe(f.args[i].type, cand.scope) : undefined;
+        const act = acts[i];
+        if (!formal || !act) return;
+        if (formal === act) score += 3;
+        else if (formal.kind === act.kind && (!!formal.isInt === !!act.isInt) && (formal.w === 0 || act.w === 0 || formal.w === act.w) && (formal.kind !== 'record' || formal.fields === act.fields)) score += 1;
+        else ok = false;
+      });
+      if (ok && score > bestScore) { best = cand; bestScore = score; }
+    }
+    return best;
+  }
+
+  resolveTypeSafe(t: TypeSpec, scope: Scope): RType | undefined {
+    try { return this.resolveType(t, scope); } catch { return undefined; }
+  }
+
+  /** VHDL user-defined operator ("+", "and", "=", ...) if one applies to these operands. */
+  userOp(op: string, args: Expr[], c: Ctx): Node | null {
+    const sym = this.lookupName(c.scope, `"${op}"`);
+    if (sym?.k !== 'func') return null;
+    const all = [sym, ...(sym.alts ?? [])].filter(x => x.f.args.length === args.length);
+    if (!all.length) return null;
+    const pick = this.pickOverload({ ...sym, f: all[0].f, scope: all[0].scope, cache: all[0].cache, alts: all.slice(1) }, args, c);
+    if (!pick) return null;
+    // only use it when operand types actually match the formals (otherwise fall back to built-ins)
+    const acts = args.map(a => this.typeOf(a, c));
+    const fit = pick.f.args.every((a, i) => { const ft = this.resolveTypeSafe(a.type, pick.scope); return !!ft && !!acts[i] && (ft === acts[i] || (ft.kind === 'record' && ft.fields === acts[i]!.fields)); });
+    if (!fit) return null;
+    return this.funcCall(pick, args, c);
+  }
+
   funcCall(sym: Extract<Sym, { k: 'func' }>, argExprs: Expr[], c: Ctx, loc?: Loc, named?: (string | null)[]): Node {
+    if (sym.alts?.length) sym = this.pickOverload(sym, argExprs, c, named) ?? err(`No matching overload of '${sym.f.name}' for these arguments.`, loc);
     const f = sym.f;
     if (f.isTask) err(`Task '${f.name}' called as a function.`, loc);
     argExprs = this.orderArgs(f, argExprs, named, loc);
@@ -1412,7 +1472,7 @@ export class Elaborator {
     };
     const rt: RType | undefined = (ret as any).rtype;
     if (ret.isReal) return realNode(() => vecToReal(callFn()));
-    return leaf(callFn, ret.w, ret.signed, { enumNames: ret.enumNames, isTime: rt?.isTime });
+    return leaf(callFn, ret.w, ret.signed, { enumNames: ret.enumNames, isTime: rt?.isTime, str: rt?.kind === 'string' ? '' : undefined });
   }
 
   /** Positional + named association, then default values for omitted parameters. */
@@ -1730,12 +1790,27 @@ export class Elaborator {
         if (e.k === 'call') {
           const ts = this.lookupName(c.scope, e.name);
           if (ts?.k === 'type') return ts.t.w ? ts.t : undefined;
+          if (ts?.k === 'func') {
+            const f = (ts.alts?.length ? this.pickOverload(ts, e.args, c, e.named) : ts) ?? ts;
+            return f.f.ret ? this.resolveTypeSafe(f.f.ret, f.scope) : undefined;
+          }
+          if (c.lang === 'vhdl' && ['to_integer', 'conv_integer'].includes(e.name.toLowerCase())) return VHDL_STD_TYPES.integer;
         }
         const base = e.k === 'index' ? e.base : ({ k: 'id', name: e.name } as Expr);
         const bt = this.typeOf(base, c);
         return bt?.kind === 'array' ? bt.elem : undefined;
       }
       case 'field': return this.fieldSelect(e, c)?.t;
+      case 'num': return e.unsized ? VHDL_STD_TYPES.integer : undefined;
+      case 'real': return VHDL_STD_TYPES.real;
+      case 'time': return VHDL_STD_TYPES.time;
+      case 'str': return c.lang === 'vhdl' ? VHDL_STD_TYPES.string : undefined;
+      case 'bin': {
+        if (['===', '!==', '<', '<=', '>', '>=', '==', '!=', '&&', '||'].includes(e.op)) return VHDL_STD_TYPES.boolean;
+        return this.typeOf(e.l, c) ?? this.typeOf(e.r, c);
+      }
+      case 'un': return ['-', '+', 'abs', '~'].includes(e.op) ? this.typeOf(e.e, c) : undefined;
+      case 'concat': return undefined;
     }
     return undefined;
   }
@@ -2189,7 +2264,7 @@ export class Elaborator {
       case 'return': {
         if (!c.func) { return { sync: () => { throw new DisableEx('__task__'); } }; }
         const ret = c.func.ret;
-        if (s.e && ret) { const R = valueFor(this.ex(s.e, c), ret.w, ret.isReal); return { sync: () => { ret.value = R().withSign(ret.signed); throw RET; } }; }
+        if (s.e && ret) { const R = valueFor(this.ex(this.recordAgg(s.e, (ret as any).rtype), c), ret.w, ret.isReal); return { sync: () => { ret.value = R().withSign(ret.signed); throw RET; } }; }
         return { sync: () => { throw RET; } };
       }
       case 'disable': { const n = s.name; return { sync: () => { throw new DisableEx(n); } }; }
@@ -2864,6 +2939,15 @@ export class Elaborator {
 }
 
 // ---------------------------------------------------------------- helpers
+
+/** Internal operator -> VHDL operator function name. */
+const VHDL_OP_NAMES: Record<string, string> = {
+  '+': '+', '-': '-', '*': '*', '/': '/', '**': '**', mod: 'mod', '%': 'rem',
+  '&': 'and', '|': 'or', '^': 'xor', '~^': 'xnor', '===': '=', '!==': '/=', '<': '<', '<=': '<=', '>': '>', '>=': '>=',
+};
+
+function typeKey(t?: TypeSpec): string { return t ? `${t.base}:${t.name ?? ''}` : 'void'; }
+function sigKey(f: FuncDecl): string { return f.args.map(a => typeKey(a.type)).join(',') + '->' + typeKey(f.ret); }
 
 function asGen(s: SC): () => Gen {
   if (s.gen) return s.gen;

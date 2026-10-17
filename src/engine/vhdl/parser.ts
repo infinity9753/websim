@@ -342,7 +342,7 @@ class VhParser {
     if (!isProc) this.expect('function');
     const t = this.tok;
     let name: string;
-    if (t.t === 'str') { name = t.v.toLowerCase(); this.pos++; this.err('Operator overloading is not supported', loc); }
+    if (t.t === 'str') { name = `"${t.v.toLowerCase()}"`; this.pos++; }
     else name = this.ident();
     const args: FuncDecl['args'] = [];
     if (this.accept('(')) {

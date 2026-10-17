@@ -450,3 +450,39 @@ end;`;
     expect(out.filter(l => l.startsWith('**'))).toEqual(["** Note: '1' A '0' '0'", "** Note: 35 '0'", '** Note: B5']);
   });
 });
+
+describe('operator overloading and overloads (#24)', () => {
+  it('uses user operators for record types and resolves overloaded functions by type', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+package cplx is
+  type complex is record re : integer; im : integer; end record;
+  function "+" (a, b : complex) return complex;
+  function "*" (a, b : complex) return complex;
+  function "=" (a, b : complex) return boolean;
+  function img(x : complex) return string;
+  function img(x : integer) return string;
+end package;
+package body cplx is
+  function "+" (a, b : complex) return complex is begin return (re => a.re + b.re, im => a.im + b.im); end function;
+  function "*" (a, b : complex) return complex is
+  begin return (re => a.re * b.re - a.im * b.im, im => a.re * b.im + a.im * b.re); end function "*";
+  function "=" (a, b : complex) return boolean is begin return a.re = b.re and a.im = b.im; end function;
+  function img(x : complex) return string is begin return integer'image(x.re) & "+" & integer'image(x.im) & "i"; end function;
+  function img(x : integer) return string is begin return "int " & integer'image(x); end function;
+end package body;
+use work.cplx.all;
+entity t is end;
+architecture a of t is begin
+  process
+    variable x : complex := (re => 1, im => 2);
+    variable y : complex := (re => 3, im => -1);
+  begin
+    report img(x + y) & " " & img(x * y) & " " & img(7 + 5) & " " & boolean'image(x = x) & " " & boolean'image(x = y);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out[0]).toBe('** Note: 4+1i 5+5i int 12 true false');
+  });
+});
