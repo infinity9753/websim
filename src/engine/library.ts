@@ -14,6 +14,7 @@ export interface UnitInfo {
   lang: Unit['lang'];
   file: string;
   of?: string;
+  iface?: boolean;
 }
 
 export class Library {
@@ -39,7 +40,7 @@ export class Library {
 
   list(): UnitInfo[] {
     const out: UnitInfo[] = [];
-    for (const u of this.modules.values()) out.push({ name: u.name, kind: u.kind, lang: u.lang, file: u.file });
+    for (const u of this.modules.values()) out.push({ name: u.name, kind: u.kind, lang: u.lang, file: u.file, iface: u.iface });
     for (const [e, as] of this.archs) for (const a of as) out.push({ name: a.name, kind: 'architecture', lang: 'vhdl', file: a.file, of: e });
     for (const u of this.packages.values()) out.push({ name: u.name, kind: 'package', lang: 'vhdl', file: u.file });
     for (const u of this.bodies.values()) out.push({ name: u.name, kind: 'package_body', lang: 'vhdl', file: u.file });
@@ -94,7 +95,7 @@ export class LibraryManager implements DesignResolver {
       for (const u of units) {
         u.source = undefined;
         lib.add(u);
-        log.push(lang === 'verilog' ? `-- Compiling ${u.kind === 'package' ? 'package' : 'module'} ${u.name}` : `-- Compiling ${u.kind.replace('_', ' ')} ${u.name}${u.of ? ` of ${u.of}` : ''}`);
+        log.push(lang === 'verilog' ? `-- Compiling ${u.kind === 'package' ? 'package' : u.iface ? 'interface' : 'module'} ${u.name}` : `-- Compiling ${u.kind.replace('_', ' ')} ${u.name}${u.of ? ` of ${u.of}` : ''}`);
       }
       return { ok: true, units, errors: [], log };
     } catch (e) {

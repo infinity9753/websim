@@ -1,5 +1,5 @@
 // Elaboration: builds the instance hierarchy and compiles processes into closures.
-import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem } from './ast';
+import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
@@ -340,12 +340,13 @@ export class Elaborator {
     const byName = conns.some(c => c.name && c.name !== '*');
     const wildcard = conns.some(c => c.name === '*');
     unit.ports.forEach((port, pi) => {
-      const t = this.resolveType(port.type, scope, port.loc);
       let conn: { name?: string; expr: Expr | null } | undefined;
       if (byName || wildcard) {
         conn = conns.find(c => c.name && c.name !== '*' && !c.sel && eqName(c.name, port.name));
         if (!conn && wildcard) conn = { name: port.name, expr: { k: 'id', name: port.name } };
       } else conn = conns[pi];
+      if (port.iface) { this.bindIfacePort(scope, parent, port, conn?.expr ?? null, loc); return; }
+      const t = this.resolveType(port.type, scope, port.loc);
       const dir = port.dir === 'input' ? 'in' : port.dir === 'output' ? 'out' : 'inout';
       const partial = conns.filter(cn => cn.sel && cn.name && eqName(cn.name, port.name));
       if (partial.length && parent) {
@@ -400,6 +401,19 @@ export class Elaborator {
     for (const [n] of named) err(`(vsim-3150) Parameter/generic '${n}' not found in '${unit.name}'.`, loc);
     this.instDepth--;
     return scope;
+  }
+
+  /** An interface port names the connected interface instance (or the parent's own interface port). */
+  bindIfacePort(scope: Scope, parent: Scope | null, port: PortDecl, e: Expr | null, loc?: Loc) {
+    const want = port.iface!;
+    if (!parent || !e) err(`(vsim-3044) Interface port '${port.name}' of '${scope.mod.unit.name}' must be connected.`, loc);
+    // "bus.master" selects a modport of the instance; modports are not enforced
+    const name = e.k === 'id' ? e.name : '';
+    let sym = name ? this.lookupName(parent, name) : undefined;
+    if (sym?.k !== 'scope' && name.includes('.')) sym = this.lookupName(parent, name.slice(0, name.lastIndexOf('.')));
+    if (sym?.k !== 'scope' || !sym.s.mod.unit.iface) err(`(vsim-3044) Port '${port.name}' expects an instance of interface '${want.name}'.`, loc);
+    if (sym.s.mod.unit.name !== want.name) err(`(vsim-3044) Port '${port.name}' expects interface '${want.name}', not '${sym.s.mod.unit.name}'.`, loc);
+    scope.syms.set(port.name, sym);
   }
 
   importPackage(scope: Scope, pkgPath: string, loc?: Loc) {
@@ -587,10 +601,12 @@ export class Elaborator {
         case 'alias': this.elabAlias(it, scope); break;
       }
     }
-    // pass 2: structure and behaviour
+    // pass 2: structure and behaviour (interface instances first, so ports can bind to them)
+    const isIface = (it: Item) => { if (it.k !== 'inst' || scope.mod.lang !== 'verilog') return false; try { return !!this.lib.findDesign(it.module)?.unit.iface; } catch { return false; } };
+    for (const it of items) if (it.k === 'inst' && isIface(it)) this.elabInst(it, scope);
     for (const it of items) {
       switch (it.k) {
-        case 'inst': this.elabInst(it, scope); break;
+        case 'inst': if (!isIface(it)) this.elabInst(it, scope); break;
         case 'genfor': this.elabGenFor(it, scope); break;
         case 'genif': {
           const c = this.constEval(it.c, scope);

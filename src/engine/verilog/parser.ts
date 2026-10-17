@@ -67,7 +67,7 @@ class VParser {
         this.timescale = parseTimescale(this.tok.v.slice('timescale '.length), this.loc());
         this.pos++; continue;
       }
-      if (this.is('module') || this.is('macromodule')) { units.push(this.parseModule()); continue; }
+      if (this.is('module') || this.is('macromodule') || this.is('interface')) { units.push(this.parseModule()); continue; }
       if (this.is('typedef')) { this.globalItems.push(this.parseTypedef()); continue; }
       if (this.is('package')) { units.push(this.parsePackage()); continue; }
       if (this.is('import')) { this.globalItems.push(...this.parseImport()); continue; }
@@ -82,6 +82,8 @@ class VParser {
     this.pos++;
     const name = this.ident();
     const unit: Unit = { kind: 'module', lang: 'verilog', name, file: this.file, line: startTok.loc.line, params: [], ports: [], items: [...this.globalItems], timescale: this.timescale };
+    const endKw = startTok.v === 'interface' ? 'endinterface' : 'endmodule';
+    if (startTok.v === 'interface') unit.iface = true;
     const savedTypedefs = new Map(this.typedefs);
     // parameter port list
     if (this.accept('#')) {
@@ -116,6 +118,13 @@ class VParser {
             const pname = this.ident();
             const init = this.accept('=') ? this.expr() : undefined;
             unit.ports.push({ name: pname, dir: lastDir, type: t, isVar, init, loc: this.loc() });
+          } else if (this.isIfacePort()) {
+            // interface port: bus_if m  |  bus_if.modport m
+            const iname = this.ident();
+            const modport = this.accept('.') ? this.ident() : undefined;
+            const ploc = this.loc();
+            unit.ports.push({ name: this.ident(), dir: 'inout', type: { base: 'logic' }, iface: { name: iname, modport }, loc: ploc });
+            lastDir = null;
           } else if (lastDir && this.tok.t === 'id' && this.peekNotTypeStart()) {
             const pname = this.ident();
             unit.ports.push({ name: pname, dir: lastDir, type: lastType!, isVar: lastVar, loc: this.loc() });
@@ -129,8 +138,8 @@ class VParser {
     this.expect(';');
     const nonAnsi = new Map<string, PortDecl>();
     for (const h of headerNames) nonAnsi.set(h, { name: h, dir: 'input', type: { base: 'logic' }, loc: this.loc() });
-    while (!this.is('endmodule')) {
-      if (this.tok.t === 'eof') this.err('Unexpected end of file, expecting endmodule');
+    while (!this.is(endKw)) {
+      if (this.tok.t === 'eof') this.err(`Unexpected end of file, expecting ${endKw}`);
       this.parseModuleItem(unit.items, unit, nonAnsi);
     }
     this.pos++;
@@ -139,6 +148,14 @@ class VParser {
     unit.source = this.src;
     this.typedefs = savedTypedefs;
     return unit;
+  }
+
+  /** At "name name" or "name.name name" inside an ANSI port list (an interface port). */
+  isIfacePort(): boolean {
+    const t = this.tok, n = this.peek();
+    if (t.t !== 'id' || this.typedefs.has(t.v) || NET_TYPES.has(t.v) || VAR_TYPES.has(t.v)) return false;
+    if (n.t === 'id') return true;
+    return n.t === 'op' && n.v === '.' && this.peek(2).t === 'id' && this.peek(3).t === 'id';
   }
 
   peekNotTypeStart(): boolean {
@@ -318,6 +335,18 @@ class VParser {
       case 'typedef': items.push(this.parseTypedef()); return;
       case 'import': items.push(...this.parseImport()); return;
       case 'specify': while (!this.accept('endspecify')) this.pos++; return;
+      case 'modport': {
+        // directions are not enforced: modport members are plain references into the interface
+        this.pos++;
+        let depth = 0;
+        while (!(depth === 0 && this.isOp(';'))) {
+          if (this.tok.t === 'eof') this.err('Unexpected end of file in modport');
+          if (this.isOp('(')) depth++; else if (this.isOp(')')) depth--;
+          this.pos++;
+        }
+        this.pos++;
+        return;
+      }
       case 'defparam': {
         this.pos++;
         do {
@@ -672,6 +701,21 @@ class VParser {
     if (t.t === 'id') {
       // task call or assignment
       const nx = this.peek();
+      if (nx.t === 'op' && nx.v === '.') {
+        // hierarchical / interface / object method call: a.b.task(...)
+        const save = this.pos;
+        const name = this.hierName();
+        if (this.isOp('(') || this.isOp(';')) {
+          const args: Expr[] = [];
+          if (this.accept('(')) {
+            if (!this.isOp(')')) { do args.push(this.expr()); while (this.accept(',')); }
+            this.expect(')');
+          }
+          this.expect(';');
+          return { k: 'call', name, args, loc };
+        }
+        this.pos = save;
+      }
       if (nx.t === 'op' && (nx.v === ';')) { this.pos += 2; return { k: 'call', name: t.v, args: [], loc }; }
       if (nx.t === 'op' && nx.v === '(') {
         this.pos += 2;

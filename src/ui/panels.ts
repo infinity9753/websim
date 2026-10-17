@@ -174,7 +174,7 @@ export class LibraryPanel {
           },
         },
           h('td', { style: { paddingLeft: '26px' } }, label),
-          h('td', { class: 'kind' }, kindLabel(u.kind, u.lang)),
+          h('td', { class: 'kind' }, u.iface ? 'Interface' : kindLabel(u.kind, u.lang)),
           h('td', { class: 'kind' }, u.file)));
       }
     }

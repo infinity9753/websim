@@ -72,6 +72,7 @@ export interface PortDecl {
   type: TypeSpec;
   isVar?: boolean;     // Verilog 'output reg'
   init?: Expr;
+  iface?: { name: string; modport?: string };   // SV interface port: bus_if.master m
   loc?: Loc;
 }
 
@@ -114,6 +115,7 @@ export interface Unit {
   items: Item[];
   timescale?: { unit: number; prec: number }; // in ps (may be fractional for fs)
   typedefs?: Record<string, TypeSpec>;          // Verilog package: exported type names
+  iface?: boolean;                              // SystemVerilog interface (kind 'module')
   source?: string;
 }
 
