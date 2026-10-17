@@ -382,18 +382,21 @@ export class Elaborator {
 
   importPackage(scope: Scope, pkgPath: string, loc?: Loc) {
     // pkgPath like "work.my_pkg" or "ieee.std_logic_1164"
-    const parts = pkgPath.toLowerCase().split('.');
+    const vlog = scope.mod.lang === 'verilog';
+    const parts = (vlog ? pkgPath : pkgPath.toLowerCase()).split('.');
     const lib = parts.length > 1 ? parts[0] : undefined;
     const name = parts.length > 1 ? parts[1] : parts[0];
-    if (lib === 'ieee' || lib === 'std' || name === 'env') return;
+    if (!vlog && (lib === 'ieee' || lib === 'std' || name === 'env')) return;
     const key = `${lib ?? 'work'}.${name}`;
     let ps = this.pkgScopes.get(key);
     if (!ps) {
       const found = this.lib.findPackage(name, lib);
       if (!found) err(`(vcom-1598) Library unit "${name}" not found in library "${lib ?? 'work'}".`, loc);
-      const mod: ModInfo = { lang: 'vhdl', unit: found.pkg, tsUnit: 1, tsPrec: 1, file: found.pkg.file, libName: found.libName };
+      const plang = found.pkg.lang;
+      const ts = plang === 'verilog' ? found.pkg.timescale ?? { unit: 1000, prec: 1000 } : { unit: 1, prec: 1 };
+      const mod: ModInfo = { lang: plang, unit: found.pkg, tsUnit: ts.unit, tsPrec: ts.prec, file: found.pkg.file, libName: found.libName };
       ps = new Scope(name, `/${name}`, null, null, mod, 'package');
-      ps.imports.push(this.stdScope);
+      if (plang === 'vhdl') ps.imports.push(this.stdScope);
       this.pkgScopes.set(key, ps);
       for (const it of found.pkg.items) if (it.k === 'use') this.importPackage(ps, it.pkg, it.loc);
       this.elabItems(found.pkg.items, ps);
@@ -468,6 +471,7 @@ export class Elaborator {
         const w = r ? Math.abs(r[0] - r[1]) + 1 : Math.max(1, clog2(BigInt(n)));
         return { kind: 'enum', w, msb: w - 1, lsb: 0, signed: false, enumNames: ts.enumNames };
       }
+      case 'struct': return this.makeRecord(ts.fields!, scope, loc);
       case 'named': {
         const name = ts.name!;
         const sym = scope.lookup(name) ?? this.stdScope.syms.get(name);
@@ -482,6 +486,16 @@ export class Elaborator {
         return base;
       }
     }
+  }
+
+  /** Record / packed struct layout: first field occupies the most significant bits. */
+  makeRecord(defs: { name: string; type: TypeSpec }[], scope: Scope, loc?: Loc): RType {
+    const fs = defs.map(f => ({ name: f.name, t: this.resolveType(f.type, scope, loc) }));
+    for (const f of fs) if (!f.t.w || f.t.kind === 'array' || f.t.kind === 'string') err(`Field '${f.name}' must have a constrained scalar, vector or record type.`, loc);
+    const w = fs.reduce((a, f) => a + f.t.w, 0);
+    let off = w;
+    const fields: RField[] = fs.map(f => { off -= f.t.w; return { name: f.name, t: f.t, off }; });
+    return { kind: 'record', w, msb: w - 1, lsb: 0, signed: false, fields };
   }
 
   // ---------------------------------------------------------- items
@@ -510,12 +524,7 @@ export class Elaborator {
         }
         case 'typedef': {
           if (it.record) {
-            const fs = it.record.map(f => ({ name: f.name, t: this.resolveType(f.type, scope, it.loc) }));
-            for (const f of fs) if (!f.t.w || f.t.kind === 'array' || f.t.kind === 'string') err(`Record field '${f.name}' must have a constrained scalar, vector or record type.`, it.loc);
-            const w = fs.reduce((a, f) => a + f.t.w, 0);
-            let off = w;
-            const fields: RField[] = fs.map(f => { off -= f.t.w; return { name: f.name, t: f.t, off }; });
-            scope.syms.set(it.name, { k: 'type', t: { kind: 'record', w, msb: w - 1, lsb: 0, signed: false, fields } });
+            scope.syms.set(it.name, { k: 'type', t: this.makeRecord(it.record, scope, it.loc) });
             break;
           }
           if (it.array) {
@@ -538,7 +547,7 @@ export class Elaborator {
           scope.syms.set(it.name, { k: 'func', f: it, scope, cache: new Map() });
           break;
         }
-        case 'use': if (scope.mod.lang === 'vhdl') this.importPackage(scope, it.pkg, it.loc); break;
+        case 'use': this.importPackage(scope, it.pkg, it.loc); break;
       }
     }
     // pass 2: structure and behaviour
@@ -734,6 +743,11 @@ export class Elaborator {
   // ---------------------------------------------------------- lookup
 
   lookupName(scope: Scope, name: string): Sym | undefined {
+    if (name.includes('::')) {
+      const [pkg, n] = name.split('::');
+      this.importPackage(scope, pkg);
+      return this.pkgScopes.get(`work.${pkg}`)?.syms.get(n);
+    }
     const lang = scope.mod.lang;
     if (lang === 'vhdl') name = name.toLowerCase();
     const s = scope.lookup(name);
@@ -1883,7 +1897,7 @@ export class Elaborator {
       case 'fork': return s.join !== 'none' && s.branches.some(x => this.hasTiming(x, scope, depth));
       case 'if': return this.hasTiming(s.t, scope, depth) || this.hasTiming(s.f, scope, depth);
       case 'case': return s.items.some(i => this.hasTiming(i.body, scope, depth));
-      case 'for': case 'vfor': case 'while': case 'loop': case 'repeat': case 'forever': return this.hasTiming(s.body, scope, depth);
+      case 'for': case 'vfor': case 'while': case 'loop': case 'repeat': case 'forever': case 'foreach': return this.hasTiming(s.body, scope, depth);
     }
     return false;
   }
@@ -2018,6 +2032,17 @@ export class Elaborator {
       }
       case 'disable': { const n = s.name; return { sync: () => { throw new DisableEx(n); } }; }
       case 'fork': return this.forkStmt(s, c);
+      case 'foreach': {
+        const sym = this.lookupName(c.scope, s.arr);
+        let a: number, b: number;
+        if (sym?.k === 'mem') { a = sym.mem.lo; b = sym.mem.hi; }
+        else if (sym?.k === 'sig') { a = sym.sig.msb; b = sym.sig.lsb; }
+        else err(`foreach: '${s.arr}' is not an array or vector`, s.loc);
+        if (s.vars.length > 1 && s.vars.slice(1).some(v => v)) err('foreach over multiple dimensions is not supported', s.loc);
+        const n = (v: number): Expr => ({ k: 'num', v: fromInt(v, 32, true), unsized: true });
+        if (!s.vars[0]) return this.st(s.body, c);
+        return this.vforStmt({ k: 'vfor', v: s.vars[0], from: n(a), to: n(b), down: a > b, body: s.body, loc: s.loc }, c);
+      }
       case 'disable_fork': {
         const k = this.k;
         return { sync: () => { const p = k.current; for (const ch of (p as any)?.forkChildren ?? []) this.killProcess(ch); } };
@@ -2267,7 +2292,7 @@ export class Elaborator {
 
   vforStmt(s: Extract<Stmt, { k: 'vfor' }>, c: Ctx): SC {
     const sub = new Scope('loop', c.scope.path, c.scope, null, c.scope.mod, 'block');
-    const iv = this.newSignal(sub, s.v.toLowerCase(), VHDL_STD_TYPES.integer, fromInt(0, 32, true), true);
+    const iv = this.newSignal(sub, c.lang === 'vhdl' ? s.v.toLowerCase() : s.v, VHDL_STD_TYPES.integer, fromInt(0, 32, true), true);
     let from: Ev, to: Ev, down = s.down;
     if (s.from.k === 'attr' && (s.from.attr === 'range' || s.from.attr === 'reverse_range')) {
       const hiN = this.attrNode({ ...s.from, attr: 'left' }, c), loN = this.attrNode({ ...s.from, attr: 'right' }, c);

@@ -25,7 +25,8 @@ export type Expr =
   | { k: 'sized'; e: Expr; w: number; loc?: Loc };                 // internal: evaluate e at exactly w bits          // SV '0 '1 'x 'z
 
 export interface TypeSpec {
-  base: 'logic' | 'integer' | 'real' | 'time' | 'bool' | 'enum' | 'named' | 'string';
+  base: 'logic' | 'integer' | 'real' | 'time' | 'bool' | 'enum' | 'named' | 'string' | 'struct';
+  fields?: { name: string; type: TypeSpec }[];   // SV struct packed (first field = MSBs)
   range?: [Expr, Expr];             // packed range, msb..lsb as written ([7:0] / 7 downto 0 / 0 to 7)
   signed?: boolean;
   enumNames?: string[];
@@ -60,6 +61,7 @@ export type Stmt =
   | { k: 'force'; lhs: Expr; rhs?: Expr; release: boolean; loc?: Loc }
   | { k: 'fork'; branches: Stmt[]; join: 'all' | 'any' | 'none'; name?: string; decls?: Item[]; loc?: Loc }
   | { k: 'disable_fork'; loc?: Loc }
+  | { k: 'foreach'; arr: string; vars: string[]; body: Stmt; loc?: Loc }
   | { k: 'null'; loc?: Loc };
 
 export interface DeclName { name: string; init?: Expr; unpacked?: [Expr, Expr][] }
@@ -109,6 +111,7 @@ export interface Unit {
   ports: PortDecl[];
   items: Item[];
   timescale?: { unit: number; prec: number }; // in ps (may be fractional for fs)
+  typedefs?: Record<string, TypeSpec>;          // Verilog package: exported type names
   source?: string;
 }
 

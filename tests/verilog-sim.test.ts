@@ -333,3 +333,38 @@ describe('file I/O and $sformatf (#18)', () => {
     expect(files2['out.txt']).toBe('x=5\ny=ab');
   });
 });
+
+describe('SystemVerilog extensions (#19)', () => {
+  it('packages, imports, struct packed, foreach, do-while, inside', () => {
+    const { out } = simulate({
+      'pkg.sv': `package bus_pkg;
+  localparam int WIDTH = 8;
+  typedef enum logic [1:0] { IDLE, READ, WRITE } op_t;
+  typedef struct packed { op_t op; logic [WIDTH-1:0] addr; logic valid; } req_t;
+  function automatic int dbl(input int x); return x * 2; endfunction
+endpackage`,
+      't.sv': `import bus_pkg::*;
+module t;
+  req_t r;
+  bus_pkg::op_t o;
+  logic [7:0] mem [0:3];
+  int sum, i;
+  initial begin
+    r = 0;
+    r.op = WRITE; r.addr = 8'h3c; r.valid = 1;
+    $display("%b %h %b w=%0d", r.op, r.addr, r.valid, $bits(r));
+    foreach (mem[k]) mem[k] = k * 10;
+    sum = 0;
+    foreach (mem[k]) sum += mem[k];
+    $display("sum=%0d", sum);
+    i = 0;
+    do i++; while (i < 5);
+    $display("i=%0d dbl=%0d W=%0d", i, dbl(i), bus_pkg::WIDTH);
+    o = READ;
+    $display("%0d %0d %0d", 3 inside {1, [2:4]}, 7 inside {1, [2:4]}, o inside {READ, WRITE});
+  end
+endmodule`,
+    }, 't');
+    expect(out).toEqual(['10 3c 1 w=11', 'sum=60', 'i=5 dbl=10 W=8', '1 0 1']);
+  });
+});

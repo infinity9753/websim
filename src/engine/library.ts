@@ -1,5 +1,5 @@
 // Design libraries: hold compiled design units (as parsed ASTs + source snapshots).
-import { CompileError, type Unit } from './ast';
+import { CompileError, type Unit, type TypeSpec } from './ast';
 import type { DesignResolver } from './elab';
 import { parseVerilog } from './verilog/parser';
 import type { Macro } from './verilog/lexer';
@@ -78,7 +78,9 @@ export class LibraryManager implements DesignResolver {
     try {
       let units: Unit[];
       if (lang === 'verilog') {
-        units = parseVerilog(src, file, { defines: new Map(this.defines), include });
+        const pkgTypes = new Map<string, Map<string, TypeSpec>>();
+        for (const l of this.libs.values()) for (const p of l.packages.values()) if (p.lang === 'verilog' && p.typedefs) pkgTypes.set(p.name, new Map(Object.entries(p.typedefs)));
+        units = parseVerilog(src, file, { defines: new Map(this.defines), include, pkgTypes });
       } else {
         if (!vhdlParser) throw new CompileError('VHDL front-end not available');
         units = vhdlParser(src, file);
@@ -92,7 +94,7 @@ export class LibraryManager implements DesignResolver {
       for (const u of units) {
         u.source = undefined;
         lib.add(u);
-        log.push(lang === 'verilog' ? `-- Compiling module ${u.name}` : `-- Compiling ${u.kind.replace('_', ' ')} ${u.name}${u.of ? ` of ${u.of}` : ''}`);
+        log.push(lang === 'verilog' ? `-- Compiling ${u.kind === 'package' ? 'package' : 'module'} ${u.name}` : `-- Compiling ${u.kind.replace('_', ' ')} ${u.name}${u.of ? ` of ${u.of}` : ''}`);
       }
       return { ok: true, units, errors: [], log };
     } catch (e) {

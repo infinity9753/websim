@@ -7,16 +7,20 @@ export interface VerilogParseOptions {
   defines?: Map<string, Macro>;
   include?: (name: string) => string | undefined;
   defaultTimescale?: { unit: number; prec: number };
+  /** Types exported by previously compiled SystemVerilog packages. */
+  pkgTypes?: Map<string, Map<string, TypeSpec>>;
 }
 
 export function parseVerilog(src: string, file: string, opts: VerilogParseOptions = {}): Unit[] {
   const text = preprocess(src, file, { defines: opts.defines, include: opts.include });
   const toks = lexVerilog(text, file);
-  return new VParser(toks, file, src, opts.defaultTimescale).parseSource();
+  const p = new VParser(toks, file, src, opts.defaultTimescale);
+  for (const [k, v] of opts.pkgTypes ?? []) p.pkgTypes.set(k, new Map(v));
+  return p.parseSource();
 }
 
 const NET_TYPES = new Set(['wire', 'tri', 'tri0', 'tri1', 'wand', 'wor', 'supply0', 'supply1']);
-const VAR_TYPES = new Set(['event', 'reg', 'logic', 'bit', 'integer', 'int', 'byte', 'shortint', 'longint', 'time', 'real', 'realtime', 'genvar', 'string']);
+const VAR_TYPES = new Set(['struct', 'event', 'reg', 'logic', 'bit', 'integer', 'int', 'byte', 'shortint', 'longint', 'time', 'real', 'realtime', 'genvar', 'string']);
 const GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buf']);
 
 const BIN_PREC: Record<string, number> = {
@@ -65,6 +69,8 @@ class VParser {
       }
       if (this.is('module') || this.is('macromodule')) { units.push(this.parseModule()); continue; }
       if (this.is('typedef')) { this.globalItems.push(this.parseTypedef()); continue; }
+      if (this.is('package')) { units.push(this.parsePackage()); continue; }
+      if (this.is('import')) { this.globalItems.push(...this.parseImport()); continue; }
       if (this.accept(';')) continue;
       this.err(`near "${this.tok.v}": syntax error, unexpected ${this.tok.v}`);
     }
@@ -152,7 +158,25 @@ class VParser {
       else if (v === 'longint' || v === 'time') { this.pos++; t.base = 'integer'; t.width = 64; t.signed = v !== 'time'; }
       else if (v === 'real' || v === 'realtime') { this.pos++; t.base = 'real'; t.width = 64; }
       else if (v === 'string') { this.pos++; t.base = 'string'; }
+      else if (v === 'struct') {
+        this.pos++;
+        if (!this.accept('packed')) this.err('Only packed structs are supported (struct packed { ... })');
+        this.accept('signed'); this.accept('unsigned');
+        this.expect('{');
+        const fields: { name: string; type: TypeSpec }[] = [];
+        while (!this.accept('}')) {
+          const ft = this.parseDataType();
+          do fields.push({ name: this.ident(), type: ft }); while (this.accept(','));
+          this.expect(';');
+        }
+        return { base: 'struct', fields };
+      }
       else if (this.typedefs.has(v)) { this.pos++; return { ...this.typedefs.get(v)! }; }
+      else if (this.peek().t === 'op' && this.peek().v === '::' && this.pkgTypes.get(v)?.has(this.peek(2).v)) {
+        const t2 = this.pkgTypes.get(v)!.get(this.peek(2).v)!;
+        this.pos += 3;
+        return { ...t2 };
+      }
     }
     if (this.accept('signed')) t.signed = true;
     if (this.accept('unsigned')) t.signed = false;
@@ -168,6 +192,44 @@ class VParser {
   }
 
   globalItems: Item[] = [];
+  pkgTypes = new Map<string, Map<string, TypeSpec>>();
+
+  parsePackage(): Unit {
+    const loc = this.loc();
+    this.expect('package');
+    const name = this.ident();
+    this.expect(';');
+    const saved = new Map(this.typedefs);
+    const items: Item[] = [];
+    while (!this.accept('endpackage')) {
+      if (this.tok.t === 'eof') this.err('Unexpected end of file, expecting endpackage');
+      if (this.is('import')) { items.push(...this.parseImport()); continue; }
+      this.parseModuleItem(items, null, new Map());
+    }
+    if (this.accept(':')) this.ident();
+    const exported = new Map<string, TypeSpec>();
+    for (const [k, v] of this.typedefs) if (saved.get(k) !== v) exported.set(k, v);
+    this.pkgTypes.set(name, exported);
+    this.typedefs = saved;
+    return { kind: 'package', lang: 'verilog', name, file: this.file, line: loc.line, params: [], ports: [], items, timescale: this.timescale, typedefs: Object.fromEntries(exported) };
+  }
+
+  /** import pkg::*; | import pkg::name, other::*; */
+  parseImport(): Item[] {
+    const loc = this.loc();
+    this.expect('import');
+    const out: Item[] = [];
+    do {
+      const pkg = this.ident();
+      this.expect('::');
+      const types = this.pkgTypes.get(pkg);
+      if (this.accept('*')) { for (const [k, v] of types ?? []) this.typedefs.set(k, v); }
+      else { const n = this.ident(); const t = types?.get(n); if (t) this.typedefs.set(n, t); }
+      if (!out.some(i => i.k === 'use' && i.pkg === pkg)) out.push({ k: 'use', pkg, loc });
+    } while (this.accept(','));
+    this.expect(';');
+    return out;
+  }
 
   parseTypedef(): Item {
     const loc = this.loc();
@@ -254,10 +316,11 @@ class VParser {
         return;
       }
       case 'typedef': items.push(this.parseTypedef()); return;
+      case 'import': items.push(...this.parseImport()); return;
       case 'specify': while (!this.accept('endspecify')) this.pos++; return;
       case 'defparam': this.err('defparam is not supported; use #() parameter overrides');
     }
-    if (NET_TYPES.has(v) || VAR_TYPES.has(v) || this.typedefs.has(v)) {
+    if (NET_TYPES.has(v) || VAR_TYPES.has(v) || this.typedefs.has(v) || (this.peek().v === '::' && this.pkgTypes.get(v)?.has(this.peek(2).v))) {
       const isNet = NET_TYPES.has(v);
       this.pos++;
       if (isNet && this.is('reg')) this.pos++;
@@ -559,6 +622,23 @@ class VParser {
         return { k: 'for', init, cond, step, body: this.stmt(), loc };
       }
       case 'while': { this.pos++; this.expect('('); const c = this.expr(); this.expect(')'); return { k: 'while', c, body: this.stmt(), loc }; }
+      case 'do': {
+        this.pos++;
+        const body = this.stmt();
+        this.expect('while'); this.expect('(');
+        const c = this.expr();
+        this.expect(')'); this.expect(';');
+        return { k: 'block', stmts: [body, { k: 'while', c, body, loc }], loc };
+      }
+      case 'foreach': {
+        this.pos++; this.expect('(');
+        const arr = this.hierName();
+        this.expect('[');
+        const vars: string[] = [];
+        do { if (this.tok.t === 'id') vars.push(this.ident()); else vars.push(''); } while (this.accept(','));
+        this.expect(']'); this.expect(')');
+        return { k: 'foreach', arr, vars, body: this.stmt(), loc };
+      }
       case 'repeat': { this.pos++; this.expect('('); const n = this.expr(); this.expect(')'); return { k: 'repeat', n, body: this.stmt(), loc }; }
       case 'forever': this.pos++; return { k: 'forever', body: this.stmt(), loc };
       case 'wait': {
@@ -717,6 +797,24 @@ class VParser {
     let l = this.unary();
     for (;;) {
       const t = this.tok;
+      if (t.t === 'id' && t.v === 'inside' && minPrec <= 7) {
+        // a inside {v, [lo:hi], ...}  ->  (a == v) || (a >= lo && a <= hi) || ...
+        this.pos++;
+        this.expect('{');
+        const subj = l;
+        let acc: Expr | null = null;
+        do {
+          let term: Expr;
+          if (this.accept('[')) {
+            const lo = this.expr(); this.expect(':'); const hi = this.expr(); this.expect(']');
+            term = { k: 'bin', op: '&&', l: { k: 'bin', op: '>=', l: subj, r: lo }, r: { k: 'bin', op: '<=', l: subj, r: hi } };
+          } else term = { k: 'bin', op: '==', l: subj, r: this.expr() };
+          acc = acc ? { k: 'bin', op: '||', l: acc, r: term } : term;
+        } while (this.accept(','));
+        this.expect('}');
+        l = acc!;
+        continue;
+      }
       if (t.t !== 'op') break;
       const p = BIN_PREC[t.v];
       if (p === undefined || p < minPrec) break;
@@ -792,7 +890,7 @@ class VParser {
         this.expect(')');
         return { k: 'call', name, args, loc };
       }
-      if (this.isOp('::')) { this.pos++; return this.selects({ k: 'id', name: this.ident(), loc }); }
+      if (this.isOp('::')) { this.pos++; return this.selects({ k: 'id', name: `${name}::${this.ident()}`, loc }); }
       return this.selects({ k: 'id', name, loc });
     }
     this.err(`near "${t.v}": syntax error, unexpected ${t.t === 'eof' ? 'end of file' : t.v}`);
