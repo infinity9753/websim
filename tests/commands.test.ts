@@ -77,3 +77,19 @@ describe('transcript commands', () => {
     expect(toBin(parseValue('10', 2))).toBe('10');
   });
 });
+
+describe('wave format save/restore (#12)', () => {
+  it('writes a do-file that rebuilds the wave window', async () => {
+    const fs: Record<string, string> = { ...files };
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, () => {});
+    await s.exec('vlog counter.v tb.v; vsim tb');
+    await s.exec('add wave /tb/clk; add wave -divider Counter; add wave -radix hex /tb/q');
+    await s.exec('write format wave w.do');
+    expect(fs['w.do']).toContain('add wave -noupdate -divider {Counter}');
+    expect(fs['w.do']).toContain('add wave -noupdate -radix hex /tb/q');
+    await s.exec('delete wave *');
+    expect(s.waves.length).toBe(0);
+    await s.exec('do w.do');
+    expect(s.waves.map(w => w.dividerLabel ?? `${w.path}:${w.radix}`)).toEqual(['/tb/clk:binary', 'Counter', '/tb/q:hex']);
+  });
+});

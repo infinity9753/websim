@@ -188,6 +188,9 @@ export class App {
         { label: 'Center on Cursor', kbd: 'C', action: () => this.wave.centerCursor() },
         '-',
         { label: 'Add All Signals (recursive)', action: () => void this.cmd('add wave -r /*') },
+        { label: 'Save Format…', action: () => void this.saveWaveFormat() },
+        { label: 'Load Format…', action: () => void this.loadWaveFormat() },
+        '-',
         { label: 'Export VCD (wave signals)…', action: () => void this.exportVcd(false) },
         { label: 'Export VCD (all signals)…', action: () => void this.exportVcd(true) },
         { label: 'Delete Selected', kbd: 'Del', action: () => this.wave.deleteSelected() },
@@ -407,6 +410,21 @@ export class App {
       this.transcript.print(`Imported ${inp.files?.length ?? 0} file(s).`);
     });
     inp.click();
+  }
+
+  async saveWaveFormat() {
+    if (!this.session.design) { this.transcript.print('** Error: No design is loaded.', 'err'); return; }
+    const n = await promptText('Save Wave Format', 'File name', 'wave.do');
+    if (n) await this.cmd(`write format wave ${n}`);
+  }
+
+  async loadWaveFormat() {
+    const dos = this.fs.list().filter(f => langOf(f) === 'do');
+    if (!dos.length) { this.transcript.print('** Error: No .do files in the project.', 'err'); return; }
+    const sel = h('select', { class: 'field' }, dos.map(d => h('option', { value: d, selected: d === 'wave.do' }, d)));
+    if ((await modal('Load Wave Format', h('label', { class: 'form-row' }, h('span', {}, 'Format file'), sel))) !== 'ok') return;
+    await this.cmd('delete wave *');
+    await this.cmd(`do ${sel.value}`);
   }
 
   async exportVcd(all: boolean) {

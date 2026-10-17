@@ -115,7 +115,7 @@ export class Session {
       case 'radix': this.radix(rest); return;
       case 'wave': if (rest[0] === 'zoom' || rest[0] === 'zoomfull') this.emit('zoomfull'); return;
       case 'view': return;
-      case 'log': case 'transcript': case 'onfinish': case 'onbreak': case 'onerror': case 'set': case 'configure': case 'update': return;
+      case 'log': case 'transcript': case 'onfinish': case 'onbreak': case 'onerror': case 'set': case 'configure': case 'update': case 'quietly': case 'TreeUpdate': case 'WaveRestoreCursors': case 'WaveRestoreZoom': return;
       case 'bp': return this.bp(rest);
       case 'bd': return this.bd(rest);
       case 'step': return this.step(rest);
@@ -125,6 +125,7 @@ export class Session {
       case 'find': return this.find(rest);
       case 'now': this.out(this.fmt(this.now)); return;
       case 'vcd': return this.vcd(rest);
+      case 'write': return this.writeCmd(rest);
     }
     throw new Error(`invalid command name "${cmd}"`);
   }
@@ -150,6 +151,7 @@ export class Session {
       '  find signals <pattern>             list signals',
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
+      '  write format wave <file.do>        save the wave window setup (restore with "do")',
       '  bp [<file> <line> [{cond}]]        set / list breakpoints;  bd <id>|<file> <line>|all',
       '  step [-over]                       execute one statement (step into / over)',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
@@ -547,6 +549,27 @@ export class Session {
     if (!this.fs.write) return;
     const text = writeVcd(this.dumpVars(k.dumpItems!), k.now);
     this.fs.write(k.dumpFile, text);
+  }
+
+  /** Wave window setup as a re-runnable do-file. */
+  waveFormat(): string {
+    const lines = ['# WebSim wave format', 'onerror {resume}', 'quietly WaveActivateNextPane {} 0'];
+    for (const w of this.waves) {
+      if (w.dividerLabel !== undefined) lines.push(`add wave -noupdate -divider {${w.dividerLabel}}`);
+      else lines.push(`add wave -noupdate${w.radix !== this.defaultRadix ? ` -radix ${w.radix}` : ''} ${w.path}`);
+    }
+    lines.push('update', 'wave zoom full');
+    return lines.join('\n') + '\n';
+  }
+
+  writeCmd(args: string[]) {
+    // write format wave [-window ...] <file>
+    if (args[0] !== 'format' || args[1] !== 'wave') throw new Error('Usage: write format wave <file.do>');
+    const rest = args.slice(2);
+    const file = rest.filter((a, i) => !a.startsWith('-') && rest[i - 1] !== '-window').pop() ?? 'wave.do';
+    if (!this.fs.write) throw new Error('write: file system is read-only');
+    this.fs.write(file, this.waveFormat());
+    this.out(`Saved wave format to ${file}`);
   }
 
   vcd(args: string[]) {
