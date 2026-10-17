@@ -32,6 +32,7 @@ export interface TypeSpec {
   enumNames?: string[];
   name?: string;                    // named type reference (resolved during elaboration)
   width?: number;                   // fixed width for builtin int types
+  twoState?: boolean;               // SV bit/int/byte/shortint/longint: default 0
 }
 
 export interface SensItem { edge: 'pos' | 'neg' | 'any'; expr: Expr }
@@ -42,7 +43,7 @@ export type Stmt =
   | { k: 'vsigassign'; lhs: Expr; waves: { value: Expr; after?: Expr }[]; transport?: boolean; reject?: Expr; loc?: Loc }  // VHDL signal assignment
   | { k: 'if'; c: Expr; t: Stmt; f?: Stmt; loc?: Loc }
   | { k: 'case'; kind: 'case' | 'casez' | 'casex'; expr: Expr; items: { labels: Expr[] | null; body: Stmt }[]; loc?: Loc }
-  | { k: 'for'; init?: Stmt; cond?: Expr; step?: Stmt; body: Stmt; loc?: Loc }
+  | { k: 'for'; init?: Stmt; initType?: TypeSpec; cond?: Expr; step?: Stmt; body: Stmt; loc?: Loc }
   | { k: 'vfor'; v: string; from: Expr; to: Expr; down: boolean; body: Stmt; label?: string; loc?: Loc }
   | { k: 'while'; c: Expr; body: Stmt; label?: string; loc?: Loc }
   | { k: 'loop'; body: Stmt; label?: string; loc?: Loc }           // VHDL plain loop
@@ -91,11 +92,14 @@ export interface FuncDecl {
   args: { name: string; dir: 'input' | 'output' | 'inout'; type: TypeSpec; vsig?: boolean; def?: Expr }[];
   decls: Item[];
   body: Stmt;
+  virtual?: boolean;   // SV class method
+  isStatic?: boolean;
   loc?: Loc;
 }
 
 export type Item =
-  | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; fileMode?: 'read' | 'write' | 'append'; loc?: Loc }
+  | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; fileMode?: 'read' | 'write' | 'append'; isStatic?: boolean; loc?: Loc }
+  | { k: 'class'; name: string; ext?: string; superArgs?: Expr[]; items: Item[]; loc?: Loc }
   | ({ k: 'param' } & ParamDecl)
   | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; loc?: Loc }
   | { k: 'process'; kind: 'always' | 'initial' | 'always_comb' | 'always_ff' | 'always_latch' | 'vproc'; body: Stmt; sens?: Expr[] | 'all'; name?: string; loc?: Loc }

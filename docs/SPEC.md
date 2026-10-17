@@ -90,6 +90,9 @@ Messages:
 - 4-state logic (0, 1, X, Z), Verilog sizing and sign rules.
 - System tasks: `$display $write $strobe $monitor $finish $stop $time $stime $realtime $random $urandom $signed $unsigned $clog2 $readmemh $readmemb $dumpfile $dumpvars(no-op)`.
 - Compiler directives: `` `timescale `define `undef `ifdef `ifndef `else `elsif `endif `include ``.
+- SystemVerilog interfaces: `interface ... endinterface`, interface ports (`bus_if m`, `bus_if.mp m`), `modport` (parsed, directions not enforced), tasks/functions called as `m.task()`.
+- SystemVerilog classes: properties (incl. struct and handle types, initializers), `static` members (`C::x`), constructors with default arguments, `extends`, `super.new`/`super.m()`, `virtual`/`pure virtual` methods with dynamic dispatch, `this`, `null`, time-consuming tasks. Objects are stored per property, indexed by a 32-bit object id; calling a method through a null handle is a fatal error.
+- Assertions: immediate `assert/assume/cover` with action blocks; concurrent `assert/assume/cover property` with clocking event, `disable iff`, `|->`, `|=>`, `##N`, `##[m:n]`, `##[m:$]`, `[*n]`, `[*m:n]`, `not`, named `sequence`/`property`, `default clocking`, `$past $rose $fell $stable $changed`. Failures print `** Error: Assertion error.` with time, attempt start time, scope and line.
 
 ### 4.2 VHDL (IEEE 1076-1993/2008 subset)
 - `library`/`use` (ieee.std_logic_1164, numeric_std, std_logic_unsigned built in).

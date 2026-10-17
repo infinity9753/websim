@@ -118,3 +118,100 @@ describe('SystemVerilog assertions (#32)', () => {
     expect(out.filter(l => l.includes('changed'))).toEqual(['65 a changed']);
   });
 });
+
+describe('SystemVerilog classes (#32)', () => {
+  it('objects, constructors, properties, methods and null handles', () => {
+    const { out } = simulate({
+      't.sv': `module t;
+        class Counter;
+          int count;
+          string name;
+          int step = 1;
+          static int made = 0;
+          function new(string n, int s = 1);
+            name = n; step = s; made++;
+          endfunction
+          function void bump(); count += step; endfunction
+          function int get(); return count; endfunction
+          task automatic tick(int n); repeat (n) begin #1 bump(); end endtask
+        endclass
+        Counter a, b, z;
+        initial begin
+          a = new("a");
+          b = new("b", 5);
+          a.bump(); b.bump(); b.bump();
+          $display("%s=%0d %s=%0d made=%0d", a.name, a.get(), b.name, b.count, Counter::made);
+          b.count = 100;
+          a.tick(3);
+          $display("t=%0t a=%0d b=%0d null=%0d", $time, a.count, b.get(), z == null);
+          z = a; z.bump();
+          $display("shared %0d", a.count);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['a=1 b=10 made=2', 't=3 a=4 b=100 null=1', 'shared 5']);
+  });
+
+  it('inheritance, super, virtual dispatch and linked objects', () => {
+    const { out } = simulate({
+      't.sv': `module t;
+        class Shape;
+          int id;
+          Shape next;
+          function new(int i); id = i; endfunction
+          virtual function int area(); return 0; endfunction
+          function string kind(); return "shape"; endfunction
+          virtual task show(); $display("%0d: %s area=%0d", id, kind(), area()); endtask
+        endclass
+        class Rect extends Shape;
+          int w, h;
+          function new(int i, int w_, int h_); super.new(i); w = w_; h = h_; endfunction
+          virtual function int area(); return w * h; endfunction
+          function string kind(); return "rect"; endfunction
+        endclass
+        class Square extends Rect;
+          function new(int i, int s); super.new(i, s, s); endfunction
+          virtual task show(); $display("square:"); super.show(); endtask
+        endclass
+        initial begin
+          Shape head = null, s;
+          Rect r;
+          Square q;
+          s = new(1); r = new(2, 3, 4); q = new(3, 5);
+          s.next = r; r.next = q;
+          head = s;
+          for (Shape p = head; p != null; p = p.next) p.show();
+          s = q;
+          $display("via base: %0d next-null=%0d", s.area(), s.next == null);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['1: shape area=0', '2: shape area=12', 'square:', '3: shape area=25', 'via base: 25 next-null=1']);
+  });
+
+  it('reports a method call through a null handle', () => {
+    expect(() => simulate({
+      't.sv': `module t; class C; function void f(); endfunction endclass
+        C h; initial h.f(); endmodule`,
+    }, 't')).toThrow(/Null object access: method 'f'/);
+  });
+
+  it('classes in packages and the compilation unit, struct and handle properties', () => {
+    const { out } = simulate({
+      'p.sv': `package pk;
+        class Item; int v; function new(int x = 7); v = x; endfunction endclass
+      endpackage`,
+      't.sv': `class Glob; bit [3:0] n = 4'hA; endclass
+      module t; import pk::*;
+        typedef struct packed { logic [3:0] hi, lo; } pair_t;
+        class Holder; pair_t p; Item it; endclass
+        initial begin
+          Item i = new; Glob g = new; Holder h = new;
+          h.it = i; h.p = 8'h5c;
+          $display("%0d %h %h %0d", i.v, g.n, h.p.lo, h.it.v);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['7 a c 7']);
+  });
+});

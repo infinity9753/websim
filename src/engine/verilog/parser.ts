@@ -69,6 +69,7 @@ class VParser {
       }
       if (this.is('module') || this.is('macromodule') || this.is('interface')) { units.push(this.parseModule()); continue; }
       if (this.is('typedef')) { this.globalItems.push(this.parseTypedef()); continue; }
+      if (this.is('class') || (this.is('virtual') && this.peek().v === 'class')) { this.globalItems.push(this.parseClass()); continue; }
       if (this.is('package')) { units.push(this.parsePackage()); continue; }
       if (this.is('import')) { this.globalItems.push(...this.parseImport()); continue; }
       if (this.accept(';')) continue;
@@ -256,11 +257,11 @@ class VParser {
     const t: TypeSpec = { base: 'logic' };
     if (this.tok.t === 'id') {
       const v = this.tok.v;
-      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit' || v === 'event') { this.pos++; if (this.accept('signed')) t.signed = true; }
-      else if (v === 'integer' || v === 'int') { this.pos++; t.base = 'integer'; t.width = 32; t.signed = true; }
-      else if (v === 'byte') { this.pos++; t.base = 'integer'; t.width = 8; t.signed = true; }
-      else if (v === 'shortint') { this.pos++; t.base = 'integer'; t.width = 16; t.signed = true; }
-      else if (v === 'longint' || v === 'time') { this.pos++; t.base = 'integer'; t.width = 64; t.signed = v !== 'time'; }
+      if (NET_TYPES.has(v) || v === 'reg' || v === 'logic' || v === 'bit' || v === 'event') { this.pos++; if (v === 'bit') t.twoState = true; if (this.accept('signed')) t.signed = true; }
+      else if (v === 'integer' || v === 'int') { this.pos++; t.base = 'integer'; t.width = 32; t.signed = true; if (v === 'int') t.twoState = true; }
+      else if (v === 'byte') { this.pos++; t.base = 'integer'; t.width = 8; t.signed = true; t.twoState = true; }
+      else if (v === 'shortint') { this.pos++; t.base = 'integer'; t.width = 16; t.signed = true; t.twoState = true; }
+      else if (v === 'longint' || v === 'time') { this.pos++; t.base = 'integer'; t.width = 64; t.signed = v !== 'time'; if (v === 'longint') t.twoState = true; }
       else if (v === 'real' || v === 'realtime') { this.pos++; t.base = 'real'; t.width = 64; }
       else if (v === 'string') { this.pos++; t.base = 'string'; }
       else if (v === 'struct') {
@@ -336,9 +337,66 @@ class VParser {
     return out;
   }
 
+  /** class [extends Base[(args)]]; properties, methods ... endclass */
+  parseClass(): Item {
+    const loc = this.loc();
+    this.accept('virtual');
+    this.expect('class');
+    const name = this.ident();
+    if (this.isOp('#')) this.err('Parameterized classes are not supported');
+    let ext: string | undefined, superArgs: Expr[] | undefined;
+    if (this.accept('extends')) {
+      ext = this.ident();
+      if (this.accept('(')) { superArgs = []; if (!this.isOp(')')) { do superArgs.push(this.expr()); while (this.accept(',')); } this.expect(')'); }
+    }
+    this.expect(';');
+    this.typedefs.set(name, { base: 'named', name });
+    const items: Item[] = [];
+    while (!this.accept('endclass')) {
+      if (this.tok.t === 'eof') this.err('Unexpected end of file, expecting endclass');
+      let isVirtual = false, isStatic = false, pure = false;
+      for (;;) {
+        const m = this.tok.v;
+        if (this.tok.t !== 'id') break;
+        if (m === 'virtual') isVirtual = true;
+        else if (m === 'static') isStatic = true;
+        else if (m === 'pure') pure = true;
+        else if (m === 'extern') this.err('extern methods are not supported; define the method inside the class');
+        else if (!['local', 'protected', 'rand', 'randc', 'const', 'automatic'].includes(m)) break;
+        this.pos++;
+      }
+      if (this.is('function') || this.is('task')) {
+        const f = this.parseFunc(this.is('task'), pure);
+        f.virtual = isVirtual || pure || undefined;
+        f.isStatic = isStatic || undefined;
+        items.push(f);
+        continue;
+      }
+      if (this.accept('constraint')) {
+        this.ident();
+        this.expect('{');
+        for (let d = 1; d > 0; this.pos++) { if (this.isOp('{')) d++; else if (this.isOp('}')) d--; else if (this.pos >= this.toks.length - 1) this.err('Unexpected end of file in constraint'); }
+        continue;
+      }
+      if (this.accept(';')) continue;
+      const before = items.length;
+      this.parseModuleItem(items, null, new Map());
+      if (isStatic) for (let i = before; i < items.length; i++) { const it = items[i]; if (it.k === 'decl') it.isStatic = true; }
+    }
+    if (this.accept(':')) this.ident();
+    return { k: 'class', name, ext, superArgs, items, loc };
+  }
+
   parseTypedef(): Item {
     const loc = this.loc();
     this.expect('typedef');
+    if (this.accept('class')) {
+      // forward declaration
+      const name = this.ident();
+      this.expect(';');
+      this.typedefs.set(name, { base: 'named', name });
+      return { k: 'typedef', name, loc };
+    }
     let t: TypeSpec;
     if (this.accept('enum')) {
       let base: TypeSpec = { base: 'logic' };
@@ -454,6 +512,8 @@ class VParser {
         return;
       }
       case 'typedef': items.push(this.parseTypedef()); return;
+      case 'class': items.push(this.parseClass()); return;
+      case 'virtual': if (this.peek().v === 'class') { items.push(this.parseClass()); return; } break;
       case 'import': items.push(...this.parseImport()); return;
       case 'specify': while (!this.accept('endspecify')) this.pos++; return;
       case 'modport': {
@@ -634,13 +694,14 @@ class VParser {
     return { k: 'genif', c, then: t.items, else: e, name: t.name, loc };
   }
 
-  parseFunc(isTask: boolean): FuncDecl {
+  parseFunc(isTask: boolean, protoOnly = false): FuncDecl {
     const loc = this.loc();
     this.pos++;
     this.accept('automatic'); this.accept('static');
     let ret: TypeSpec | undefined;
     if (!isTask) {
       if (this.is('void')) { this.pos++; ret = undefined; }
+      else if (this.is('new')) ret = undefined; // class constructor
       else {
         const nameNext = this.tok.t === 'id' && (this.peek().v === ';' || this.peek().v === '(') && !VAR_TYPES.has(this.tok.v) && !this.typedefs.has(this.tok.v);
         ret = nameNext ? { base: 'logic' } : this.parseDataType();
@@ -656,12 +717,14 @@ class VParser {
         do {
           if (this.is('input') || this.is('output') || this.is('inout')) { dir = this.tok.v as any; this.pos++; type = this.parseDataType(); }
           else if (!this.peekNotTypeStart() || this.isOp('[')) type = this.parseDataType();
-          args.push({ name: this.ident(), dir, type });
+          const an = this.ident();
+          args.push({ name: an, dir, type, def: this.accept('=') ? this.expr() : undefined });
         } while (this.accept(','));
       }
       this.expect(')');
     }
     this.expect(';');
+    if (protoOnly) return { k: 'func', name, isTask, ret, args, decls, body: { k: 'null' }, loc };
     const stmts: Stmt[] = [];
     const end = isTask ? 'endtask' : 'endfunction';
     while (!this.is(end)) {
@@ -791,9 +854,9 @@ class VParser {
       }
       case 'for': {
         this.pos++; this.expect('(');
-        let init: Stmt | undefined;
+        let init: Stmt | undefined, initType: TypeSpec | undefined;
         if (!this.isOp(';')) {
-          if (this.tok.t === 'id' && (VAR_TYPES.has(this.tok.v))) this.parseDataType();
+          if (this.tok.t === 'id' && (VAR_TYPES.has(this.tok.v) || this.typedefs.has(this.tok.v))) initType = this.parseDataType();
           init = this.simpleAssign();
         }
         this.expect(';');
@@ -801,7 +864,7 @@ class VParser {
         this.expect(';');
         const step = this.isOp(')') ? undefined : this.simpleAssign();
         this.expect(')');
-        return { k: 'for', init, cond, step, body: this.stmt(), loc };
+        return { k: 'for', init, initType, cond, step, body: this.stmt(), loc };
       }
       case 'while': { this.pos++; this.expect('('); const c = this.expr(); this.expect(')'); return { k: 'while', c, body: this.stmt(), loc }; }
       case 'do': {

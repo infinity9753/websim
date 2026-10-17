@@ -30,7 +30,25 @@ export interface RType {
   hi?: number;
   left?: number;          // VHDL integer range left bound
   right?: number;
+  cls?: ClassInfo;        // SV class handle (32-bit object id, 0 = null)
 }
+
+/** SV class: properties live in one memory per property, indexed by object id. */
+export interface ClassInfo {
+  id: number;
+  name: string;
+  base?: ClassInfo;
+  scope: Scope;
+  ht: RType;
+  props: Map<string, ClassProp>;           // including inherited ones
+  methods: Map<string, FuncDecl>;          // own non-static methods
+  derived: ClassInfo[];
+  superArgs?: Expr[];
+  impls: Map<string, Extract<Sym, { k: 'func' }>>;
+  filled: boolean;
+}
+interface ClassProp { mem: Memory; t: RType; hid: string; init?: Expr; initEv?: () => Vec; owner: ClassInfo; def: Vec }
+interface MethodRef { cls: ClassInfo; hExpr: Expr; m: string; isSuper: boolean }
 
 export type Sym =
   | { k: 'sig'; sig: Signal; t: RType }
@@ -246,6 +264,15 @@ export class Elaborator {
   textState = new Map<Signal, TextState>();
   /** "file:line" of every statement that can hold a breakpoint. */
   execLines = new Set<string>();
+  /** Internal names (prefixed '@') for class property memories and temporaries. */
+  hidden = new Map<string, Sym>();
+  classes = new Map<Item, ClassInfo>();
+  classSeq = 0;
+  objSeq = 0;
+  objCls: (ClassInfo | undefined)[] = [];
+  tmpSeq = 0;
+  /** Set while elaborating a procedural block's declarations: class-handle initializers run at block entry. */
+  deferredInits: Stmt[] | null = null;
 
   constructor(public lib: DesignResolver, host: KernelHost, public opts: ElabOptions = {}) {
     this.k = new Kernel(host);
@@ -494,13 +521,14 @@ export class Elaborator {
     switch (ts.base) {
       case 'logic': case 'bool': {
         const r = range(ts.range);
-        if (!r) return { kind: 'vec', w: 1, msb: 0, lsb: 0, signed: !!ts.signed, scalar: true };
-        return { kind: 'vec', w: Math.abs(r[0] - r[1]) + 1, msb: r[0], lsb: r[1], signed: !!ts.signed };
+        const bit = ts.twoState ? { isBit: true } : {};
+        if (!r) return { kind: 'vec', w: 1, msb: 0, lsb: 0, signed: !!ts.signed, scalar: true, ...bit };
+        return { kind: 'vec', w: Math.abs(r[0] - r[1]) + 1, msb: r[0], lsb: r[1], signed: !!ts.signed, ...bit };
       }
       case 'integer': {
         const w = ts.width ?? 32;
         const r = range(ts.range);
-        return { kind: 'vec', w, msb: w - 1, lsb: 0, signed: ts.signed ?? true, isInt: true, left: r ? r[0] : undefined };
+        return { kind: 'vec', w, msb: w - 1, lsb: 0, signed: ts.signed ?? true, isInt: true, left: r ? r[0] : undefined, ...(ts.twoState ? { isBit: true } : {}) };
       }
       case 'real': return { kind: 'real', w: 64, msb: 63, lsb: 0, signed: true };
       case 'time': return { ...VHDL_STD_TYPES.time };
@@ -542,9 +570,11 @@ export class Elaborator {
   // ---------------------------------------------------------- items
 
   elabItems(items: Item[], scope: Scope) {
+    for (const it of items) if (it.k === 'class') this.declareClass(it, scope);
     // pass 1: declarations
     for (const it of items) {
       switch (it.k) {
+        case 'class': this.fillClass(it, scope); break;
         case 'param': {
           let ov: Expr | undefined;
           if (!it.local && scope.overrides) {
@@ -564,6 +594,7 @@ export class Elaborator {
           break;
         }
         case 'typedef': {
+          if (!it.type && !it.record && !it.array) break; // forward "typedef class C;"
           if (it.record) {
             scope.syms.set(it.name, { k: 'type', t: this.makeRecord(it.record, scope, it.loc) });
             break;
@@ -798,7 +829,12 @@ export class Elaborator {
         continue;
       }
       let init: Vec | undefined;
-      if (dn.init) {
+      if (t.cls && dn.init) {
+        // "C h = new(...)": run as an assignment (at block entry, or at time 0 for static variables)
+        const asg: Stmt = { k: 'assign', lhs: { k: 'id', name: dn.name, loc: it.loc }, rhs: dn.init, nb: false, loc: it.loc };
+        if (this.deferredInits) this.deferredInits.push(asg);
+        else this.pending.push(() => { const sc = this.st(asg, this.ctx(scope, 'init')); this.k.activate(() => sc.sync!()); });
+      } else if (dn.init) {
         const c = this.ctx(scope, 'init');
         c.constOnly = false;
         const n = this.ex(t.kind === 'record' ? this.recordAgg(dn.init, t) : dn.init, c);
@@ -863,11 +899,269 @@ export class Elaborator {
     return Number(v.toBigInt());
   }
 
+  // ---------------------------------------------------------- classes
+
+  declareClass(it: Extract<Item, { k: 'class' }>, scope: Scope) {
+    if (this.classes.has(it)) return;
+    const cs = new Scope(it.name, scope.path, scope, null, scope.mod, 'block');
+    const ht: RType = { kind: 'vec', w: 32, msb: 31, lsb: 0, signed: false, isBit: true }; // handles start null
+    const cls: ClassInfo = { id: ++this.classSeq, name: it.name, scope: cs, ht, props: new Map(), methods: new Map(), derived: [], impls: new Map(), superArgs: it.superArgs, filled: false };
+    ht.cls = cls;
+    scope.syms.set(it.name, { k: 'type', t: ht });
+    cs.syms.set('@this', { k: 'type', t: ht });
+    this.classes.set(it, cls);
+  }
+
+  fillClass(it: Extract<Item, { k: 'class' }>, scope: Scope) {
+    const cls = this.classes.get(it)!;
+    if (cls.filled) return;
+    if (it.ext) {
+      const bs = scope.lookup(it.ext);
+      if (bs?.k !== 'type' || !bs.t.cls) err(`(vlog-2164) Base class '${it.ext}' of '${it.name}' not found.`, it.loc);
+      const base = bs.t.cls;
+      if (!base.filled) err(`Base class '${base.name}' must be declared before '${it.name}'.`, it.loc);
+      cls.base = base;
+      base.derived.push(cls);
+      for (const [n, p] of base.props) cls.props.set(n, p);
+    }
+    const cs = cls.scope;
+    for (const m of it.items) {
+      switch (m.k) {
+        case 'decl': {
+          if (m.isStatic) { this.elabDecl({ ...m, kind: 'var' }, cs); break; }
+          const t = this.resolveType(m.type, cs, m.loc);
+          for (const dn of m.names) {
+            if (dn.unpacked) err(`Unpacked array property '${dn.name}' is not supported.`, m.loc);
+            if (t.kind === 'real') err(`real property '${dn.name}' is not supported.`, m.loc);
+            const pt: RType = t.kind === 'string' ? { kind: 'vec', w: 2048, msb: 2047, lsb: 0, signed: false } : t;
+            const w = pt.w || 1;
+            const def = resize(this.defaultValue(pt), w).withSign(pt.signed);
+            const mem = new Memory(`${scope.path}/${it.name}::${dn.name}`, dn.name, w, 0, 0x7fffffff, pt.signed, [def], pt.msb, pt.lsb, pt.enumNames);
+            const hid = `@${cls.id}.${dn.name}`;
+            this.hidden.set(hid, { k: 'mem', mem, t: { kind: 'array', w, msb: pt.msb, lsb: pt.lsb, signed: pt.signed, elem: pt, lo: 0, hi: 0x7fffffff, enumNames: pt.enumNames } });
+            cls.props.set(dn.name, { mem, t: pt, hid, init: dn.init, owner: cls, def });
+          }
+          break;
+        }
+        case 'func':
+          if (m.isStatic) this.elabItems([m], cs);
+          else cls.methods.set(m.name, m);
+          break;
+        case 'param': case 'typedef': case 'class': this.elabItems([m], cs); break;
+        default: err(`This item is not supported inside a class.`, m.loc);
+      }
+    }
+    cls.filled = true;
+  }
+
+  /** Allocate an object: default property values, then property initializers (base class first). */
+  alloc(cls: ClassInfo): number {
+    const id = ++this.objSeq;
+    this.objCls[id] = cls;
+    for (const p of cls.props.values()) p.mem.words[id] = p.def;
+    for (const p of cls.props.values()) {
+      if (!p.init) continue;
+      p.initEv ??= valueFor(this.ex(p.init, this.ctx(p.owner.scope, 'init')), p.mem.w, false);
+      p.mem.words[id] = resize(p.initEv(), p.mem.w).withSign(p.mem.signed);
+    }
+    return id;
+  }
+
+  /** h.a.b where h is a class handle -> property memory reads indexed by the object id. */
+  handlePath(name: string, c: Ctx): { expr: Expr; t?: RType } | null {
+    const parts = name.split('.');
+    if (parts.length < 2) return null;
+    const sym = this.lookupName(c.scope, parts[0]);
+    if (sym?.k !== 'sig' || !sym.t.cls) return null;
+    let expr: Expr = { k: 'id', name: parts[0] };
+    let t: RType | undefined = sym.t;
+    for (let i = 1; i < parts.length; i++) {
+      const cls: ClassInfo | undefined = t?.cls;
+      if (!cls) {
+        // remaining parts select fields of a packed struct property
+        for (const f of parts.slice(i)) expr = { k: 'field', base: expr, field: f };
+        return { expr, t: this.typeOf(expr, c) };
+      }
+      const p = cls.props.get(parts[i]);
+      if (!p) {
+        const st = cls.scope.syms.get(parts[i]);
+        if (st?.k === 'sig' && i === parts.length - 1) {
+          const hid = `@s${cls.id}.${parts[i]}`;
+          this.hidden.set(hid, st);
+          return { expr: { k: 'id', name: hid }, t: st.t };
+        }
+        err(`'${parts[i]}' is not a property of class '${cls.name}'.`);
+      }
+      expr = { k: 'index', base: { k: 'id', name: p.hid }, index: expr };
+      t = p.t;
+    }
+    return { expr, t };
+  }
+
+  rwHandle(e: Expr, c: Ctx): Expr {
+    if (e.k === 'id') {
+      if (!e.name.includes('.')) return e;
+      const r = this.handlePath(e.name, c);
+      return r ? { ...r.expr, loc: e.loc } : e;
+    }
+    if (e.k === 'index' || e.k === 'range' || e.k === 'irange') {
+      const b = this.rwHandle(e.base, c);
+      return b === e.base ? e : { ...e, base: b };
+    }
+    return e;
+  }
+
+  findMethod(cls: ClassInfo, m: string): ClassInfo | null {
+    for (let k: ClassInfo | undefined = cls; k; k = k.base) if (k.methods.has(m)) return k;
+    return null;
+  }
+
+  /** "h.m" / "a.b.m" / "super.m" naming a method of a class handle. */
+  methodRef(name: string, c: Ctx): MethodRef | null {
+    const i = name.lastIndexOf('.');
+    if (i < 0) return null;
+    const pre = name.slice(0, i), m = name.slice(i + 1);
+    if (pre === 'super') {
+      const ts = this.lookupName(c.scope, 'this');
+      const base = ts?.k === 'sig' ? ts.t.cls?.base : undefined;
+      if (!base) err(`'super' is only allowed in methods of a derived class.`);
+      return { cls: base, hExpr: { k: 'id', name: 'this' }, m, isSuper: true };
+    }
+    let hExpr: Expr, t: RType | undefined;
+    if (!pre.includes('.')) {
+      const sym = this.lookupName(c.scope, pre);
+      if (sym?.k !== 'sig' || !sym.t.cls) return null;
+      hExpr = { k: 'id', name: pre }; t = sym.t;
+    } else {
+      const r = this.handlePath(pre, c);
+      if (!r?.t?.cls) return null;
+      hExpr = r.expr; t = r.t;
+    }
+    const cls = t.cls!;
+    if (cls.props.has(m)) return null;
+    if (!this.findMethod(cls, m)) {
+      if (cls.scope.syms.get(m)?.k === 'sig') return null; // static property
+      err(`'${m}' is not a method of class '${cls.name}'.`);
+    }
+    return { cls, hExpr, m, isSuper: false };
+  }
+
+  /** Method body compiled as a subprogram with an implicit first argument "this". */
+  implSym(def: ClassInfo, m: string): Extract<Sym, { k: 'func' }> {
+    let sym = def.impls.get(m);
+    if (sym) return sym;
+    const f = def.methods.get(m)!;
+    const locals = new Set<string>([f.name, ...f.args.map(a => a.name)]);
+    const collect = (x: any) => {
+      if (Array.isArray(x)) { x.forEach(collect); return; }
+      if (!x || typeof x !== 'object' || x instanceof Vec) return;
+      if (x.k === 'decl') for (const n of x.names) locals.add(n.name);
+      for (const key of Object.keys(x)) if (key !== 'loc') collect(x[key]);
+    };
+    collect(f.decls); collect(f.body);
+    const isMember = (n: string) => !locals.has(n) && (def.props.has(n) || !!this.findMethod(def, n));
+    const walk = (x: any): any => {
+      if (Array.isArray(x)) return x.map(walk);
+      if (!x || typeof x !== 'object' || x instanceof Vec) return x;
+      const o: any = {};
+      for (const key of Object.keys(x)) o[key] = key === 'loc' ? x[key] : walk(x[key]);
+      if ((o.k === 'id' || o.k === 'call') && typeof o.name === 'string') {
+        const head = o.name.split('.')[0];
+        if (head !== 'this' && head !== 'super' && isMember(head)) o.name = `this.${o.name}`;
+      }
+      return o;
+    };
+    let body: Stmt = walk(f.body);
+    if (m === 'new' && def.base) {
+      let explicit = false;
+      const find = (x: any) => { if (Array.isArray(x)) x.forEach(find); else if (x && typeof x === 'object' && !(x instanceof Vec)) { if (x.k === 'call' && x.name === 'super.new') explicit = true; for (const k2 of Object.keys(x)) if (k2 !== 'loc') find(x[k2]); } };
+      find(f.body);
+      if (!explicit) body = { k: 'block', stmts: [{ k: 'call', name: 'super.new', args: def.superArgs ?? [], loc: f.loc }, body] };
+    }
+    const synth: FuncDecl = { ...f, args: [{ name: 'this', dir: 'input', type: { base: 'named', name: '@this' } }, ...f.args], body, decls: walk(f.decls) };
+    sym = { k: 'func', f: synth, scope: def.scope, cache: new Map() };
+    def.impls.set(m, sym);
+    return sym;
+  }
+
+  /** Implementations to call per runtime class (virtual methods) or a single static one. */
+  dispatch(ref: MethodRef, loc?: Loc): Map<number, Extract<Sym, { k: 'func' }>> | Extract<Sym, { k: 'func' }> {
+    const def = this.findMethod(ref.cls, ref.m);
+    if (!def) err(`'${ref.m}' is not a method of class '${ref.cls.name}'.`, loc);
+    let virt = false;
+    for (let k: ClassInfo | undefined = ref.cls; k; k = k.base) if (k.methods.get(ref.m)?.virtual) virt = true;
+    if (ref.isSuper || !virt) return this.implSym(def, ref.m);
+    const table = new Map<number, Extract<Sym, { k: 'func' }>>();
+    const visit = (k: ClassInfo) => { table.set(k.id, this.implSym(this.findMethod(k, ref.m)!, ref.m)); k.derived.forEach(visit); };
+    visit(ref.cls);
+    return table;
+  }
+
+  /** Runtime class of the object a handle expression refers to (fatal on null). */
+  objOf(ref: MethodRef, c: Ctx, loc?: Loc): () => ClassInfo {
+    const H = selfEv(this.ex(ref.hExpr, c));
+    const objs = this.objCls;
+    const m = ref.m;
+    return () => {
+      const v = H();
+      const o = v.known ? objs[Number(v.a)] : undefined;
+      if (!o) throw new CompileError(`(SIM-8109) Null object access: method '${m}' called through a null class handle.`, loc);
+      return o;
+    };
+  }
+
+  methodCallNode(ref: MethodRef, args: Expr[], c: Ctx, loc?: Loc): Node {
+    const d = this.dispatch(ref, loc);
+    const all = d instanceof Map ? [...new Set(d.values())] : [d];
+    const nodes = new Map(all.map(sym => [sym, this.funcCall(sym, [ref.hExpr, ...args], c, loc)]));
+    const first = nodes.get(all[0])!;
+    const obj = this.objOf(ref, c, loc);
+    if (first.rf) {
+      const fs = new Map([...nodes].map(([k2, n]) => [k2, numOf(n)]));
+      return realNode(() => { const o = obj(); return fs.get(d instanceof Map ? d.get(o.id)! : d)!(); });
+    }
+    const evs = new Map([...nodes].map(([k2, n]) => [k2, n.mk(first.w, first.s)]));
+    return leaf(() => { const o = obj(); return evs.get(d instanceof Map ? d.get(o.id)! : d)!(); }, first.w, first.s, { enumNames: first.enumNames, str: first.str });
+  }
+
+  methodCallStmt(ref: MethodRef, args: Expr[], c: Ctx, loc?: Loc): SC {
+    if (ref.m === 'new') {
+      if (!ref.isSuper) err(`Call new() through an assignment: h = new(...).`, loc);
+      return { sync: this.ctorCall(ref.cls, ref.hExpr, args, c, loc) };
+    }
+    const d = this.dispatch(ref, loc);
+    const all = d instanceof Map ? [...new Set(d.values())] : [d];
+    const scs = new Map(all.map(sym => [sym, sym.f.isTask ? this.taskInline(sym, [ref.hExpr, ...args], c, loc) : { sync: this.funcCallVoid(sym, [ref.hExpr, ...args], c, loc) } as SC]));
+    const obj = this.objOf(ref, c, loc);
+    const pick = (o: ClassInfo) => scs.get(d instanceof Map ? d.get(o.id)! : d)!;
+    if ([...scs.values()].every(x => x.sync)) return { sync: () => pick(obj()).sync!() };
+    return { gen: function* () { const sc = pick(obj()); if (sc.sync) sc.sync(); else yield* sc.gen!(); } };
+  }
+
+  /** Constructor chain for an object already allocated (its id is the value of hExpr). */
+  ctorCall(cls: ClassInfo, hExpr: Expr, args: Expr[], c: Ctx, loc?: Loc): () => void {
+    if (cls.methods.has('new')) return this.funcCallVoid(this.implSym(cls, 'new'), [hExpr, ...args], c, loc);
+    if (args.length) err(`Class '${cls.name}' has no constructor that takes arguments.`, loc);
+    if (cls.base) return this.ctorCall(cls.base, hExpr, cls.superArgs ?? [], c, loc);
+    return () => {};
+  }
+
+  newNode(cls: ClassInfo, args: Expr[], c: Ctx, loc?: Loc): Node {
+    const tmp = new Signal('@new', '@new', 32, 31, 0, false, L.zeros(32), true);
+    const tn = `@new${++this.tmpSeq}`;
+    this.hidden.set(tn, { k: 'sig', sig: tmp, t: cls.ht });
+    const ctor = this.ctorCall(cls, { k: 'id', name: tn }, args, c, loc);
+    return leaf(() => { const v = fromInt(this.alloc(cls), 32); tmp.value = v; ctor(); return v; }, 32, false);
+  }
+
   // ---------------------------------------------------------- lookup
 
   lookupName(scope: Scope, name: string): Sym | undefined {
+    if (name.charCodeAt(0) === 64) return this.hidden.get(name);
     if (name.includes('::')) {
       const [pkg, n] = name.split('::');
+      const cs = scope.lookup(pkg);
+      if (cs?.k === 'type' && cs.t.cls) return cs.t.cls.scope.syms.get(n);
       this.importPackage(scope, pkg);
       return this.pkgScopes.get(`work.${pkg}`)?.syms.get(n);
     }
@@ -914,6 +1208,11 @@ export class Elaborator {
     if (c.lang === 'vhdl' && (e.k === 'id' || e.k === 'call' || e.k === 'index' || e.k === 'range' || e.k === 'field')) {
       const d = this.deAlias(e, c);
       if (d !== e) return this.ex(d, c);
+    }
+    if (this.classSeq && c.lang === 'verilog') {
+      if (e.k === 'id' && e.name.includes('.')) { const m = this.methodRef(e.name, c); if (m) return this.methodCallNode(m, [], c, e.loc); }
+      const r = this.rwHandle(e, c);
+      if (r !== e) return this.ex(r, c);
     }
     switch (e.k) {
       case 'num': {
@@ -1000,6 +1299,7 @@ export class Elaborator {
 
   idNode(name: string, c: Ctx, loc?: Loc): Node {
     const sym = this.lookupName(c.scope, name);
+    if (!sym && c.lang === 'verilog' && name === 'null') return constNode(L.zeros(32));
     if (!sym) {
       if (c.lang === 'vhdl' && (name === 'now')) return this.vhdlBuiltin('now', [], c, loc)!;
       err(c.lang === 'vhdl' ? `(vcom-1136) Unknown identifier "${name}".` : `(vlog-2110) Undefined variable: '${name}'.`, loc);
@@ -1352,6 +1652,8 @@ export class Elaborator {
   callNode(e: Extract<Expr, { k: 'call' }>, c: Ctx): Node {
     const name = c.lang === 'vhdl' ? e.name.toLowerCase() : e.name;
     if (name.startsWith('$')) return this.sysFunc(name, e.args, c, e.loc);
+    if (this.classSeq && c.lang === 'verilog' && name.includes('.')) { const m = this.methodRef(name, c); if (m) return this.methodCallNode(m, e.args, c, e.loc); }
+    if (name === 'new' && c.lang === 'verilog') err('new() is only supported as the right-hand side of an assignment to a class handle.', e.loc);
     let sym = this.lookupName(c.scope, name);
     if (sym && sym.k !== 'func' && c.lang === 'verilog') {
       // Verilog name(...) is always a call; skip the function's own return variable
@@ -1838,6 +2140,7 @@ export class Elaborator {
   /** Static type of a name-like expression (signals, constants, memory words, record fields). */
   typeOf(e: Expr, c: Ctx): RType | undefined {
     if (c.lang === 'vhdl') { const d = this.deAlias(e, c); if (d !== e) return d.k === 'range' ? undefined : this.typeOf(d, c); }
+    if (this.classSeq && c.lang === 'verilog') { const r = this.rwHandle(e, c); if (r !== e) return this.typeOf(r, c); }
     switch (e.k) {
       case 'id': {
         const sym = this.lookupName(c.scope, e.name);
@@ -1965,6 +2268,7 @@ export class Elaborator {
 
   lv(e: Expr, c: Ctx): LNode {
     if (c.lang === 'vhdl') { const d = this.deAlias(e, c); if (d !== e) return this.lv(d, c); }
+    if (this.classSeq && c.lang === 'verilog') { const r = this.rwHandle(e, c); if (r !== e) return this.lv(r, c); }
     if (e.k === 'field' || (e.k === 'id' && e.name.includes('.') && !this.lookupName(c.scope, e.name))) {
       const fe = this.fieldSelect(e, c);
       if (fe) return this.lv(fe.expr, c);
@@ -2262,6 +2566,7 @@ export class Elaborator {
         const n = scope.mod.lang === 'vhdl' ? s.name.toLowerCase() : s.name;
         if (scope.mod.lang === 'vhdl' && /(^|\.)(stop)$/.test(n)) return true;
         const sym = this.lookupName(scope, n);
+        if (!sym && this.classSeq && n.includes('.')) return true; // class method: resolved per object, assume it can wait
         return sym?.k === 'func' && sym.f.isTask && this.hasTiming(sym.f.body, sym.scope, depth + 1);
       }
       case 'block': return s.stmts.some(x => this.hasTiming(x, scope, depth));
@@ -2308,7 +2613,7 @@ export class Elaborator {
         if (s.init && s.init.k === 'assign' && s.init.lhs.k === 'id' && !this.lookupName(c.scope, s.init.lhs.name)) {
           // SV "for (int i = 0; ...)": implicit loop variable
           const sub = new Scope('for', c.scope.path, c.scope, null, c.scope.mod, 'block');
-          this.newSignal(sub, s.init.lhs.name, VHDL_STD_TYPES.integer, undefined, true);
+          this.newSignal(sub, s.init.lhs.name, s.initType ? this.resolveType(s.initType, c.scope, s.loc) : VHDL_STD_TYPES.integer, undefined, true);
           fc = { ...c, scope: sub };
         }
         const I = s.init ? this.st(s.init, fc) : null;
@@ -2604,15 +2909,20 @@ export class Elaborator {
 
   blockStmt(s: Extract<Stmt, { k: 'block' }>, c: Ctx): SC {
     let bc = c;
+    let stmts = s.stmts;
     if (s.decls?.length) {
       const sub = new Scope(s.name ?? 'block', c.scope.path, c.scope, null, c.scope.mod, 'block');
+      const saved = this.deferredInits;
+      this.deferredInits = [];
       for (const d of s.decls) {
         if (d.k === 'decl') this.elabDecl({ ...d, kind: 'variable' }, sub);
         else this.elabItems([d], sub);
       }
+      if (this.deferredInits.length) stmts = [...this.deferredInits, ...stmts];
+      this.deferredInits = saved;
       bc = { ...c, scope: sub };
     }
-    const parts = s.stmts.map(x => this.st(x, bc));
+    const parts = stmts.map(x => this.st(x, bc));
     const name = s.name;
     if (parts.every(p => p.sync)) {
       const fs = parts.map(p => p.sync!);
@@ -2639,7 +2949,15 @@ export class Elaborator {
     if (mem && !s.delay && !s.evctl) return this.memAssign(mem, s.rhs, c, nb ? 'nba' : 'now');
     const lc: Ctx = nb && c.lang === 'verilog' ? { ...c, driverMode: false } : { ...c, driverMode: false };
     const Lv = this.lv(s.lhs, lc);
-    const R = valueFor(this.ex(this.recordAgg(s.rhs, this.typeOf(s.lhs, c)), c), Lv.w, this.isRealTarget(s.lhs, c));
+    const rhs = s.rhs;
+    const isNew = c.lang === 'verilog' && ((rhs.k === 'call' || rhs.k === 'id') && rhs.name === 'new');
+    let rn: Node;
+    if (isNew) {
+      const lt = this.typeOf(s.lhs, c);
+      if (!lt?.cls) err('new: the assignment target is not a class handle.', s.loc);
+      rn = this.newNode(lt.cls, rhs.k === 'call' ? rhs.args : [], c, s.loc);
+    } else rn = this.ex(this.recordAgg(rhs, this.typeOf(s.lhs, c)), c);
+    const R = valueFor(rn, Lv.w, this.isRealTarget(s.lhs, c));
     const self = this;
     if (s.evctl) {
       const wf = this.eventWait(s.evctl, c);
@@ -3155,6 +3473,7 @@ export class Elaborator {
       };
     }
     if (name.startsWith('$')) return this.sysTask({ k: 'sys', name, args: s.args, loc: s.loc }, c);
+    if (this.classSeq && c.lang === 'verilog' && name.includes('.')) { const m = this.methodRef(name, c); if (m) return this.methodCallStmt(m, s.args, c, s.loc); }
     const sym = this.lookupName(c.scope, name);
     if (!sym && c.lang === 'vhdl' && isTextioProc(name)) return compileTextio(this, name, s.args, c, s.loc)!;
     if (!sym || sym.k !== 'func') err(c.lang === 'vhdl' ? `(vcom-1136) Unknown identifier "${s.name}".` : `(vlog-2164) Task '${s.name}' not found.`, s.loc);
@@ -3164,8 +3483,15 @@ export class Elaborator {
       const n = this.funcCallVoid(sym, s.args, c, s.loc, s.named);
       return { sync: n };
     }
+    return this.taskInline(sym, s.args, c, s.loc, s.named);
+  }
+
+  /** Tasks are compiled inline at each call site (so they may suspend in the calling process). */
+  taskInline(sym: Extract<Sym, { k: 'func' }>, rawArgs: Expr[], c: Ctx, loc?: Loc, named?: (string | null)[]): SC {
+    const f = sym.f;
+    const s = { loc };
     if (c.depth > 16) err(`Task '${f.name}' recursion too deep (tasks are inlined per call site).`, s.loc);
-    const args = this.orderArgs(f, s.args, s.named, s.loc);
+    const args = this.orderArgs(f, rawArgs, named, s.loc);
     if (args.length !== f.args.length) err(`Wrong number of arguments in call to task '${f.name}'.`, s.loc);
     const ts = new Scope(f.name, sym.scope.path, sym.scope, null, sym.scope.mod, 'func');
     const ins: { sig: Signal; ev: Ev }[] = [];
@@ -3220,11 +3546,17 @@ export class Elaborator {
     // output args of VHDL procedures / SV functions
     const outs: { sig: Signal; lv: LNode }[] = [];
     f.args.forEach((a, i) => { if (a.dir !== 'input' && args[i]) outs.push({ sig: cf.args[i], lv: this.lv(args[i], c) }); });
+    const frame = [...cf.args, ...cf.locals, ...(cf.ret ? [cf.ret] : [])];
+    let depth = 0;
     return () => {
       const vals = argEvs.map(f => f());
-      vals.forEach((v, i) => { cf.args[i].value = v; });
-      try { cf.body(); } catch (x) { if (x !== RET) throw x; }
+      const saved = depth > 0 ? frame.map(s => s.value) : null;
+      if (++depth > 1000) { depth = 0; throw new CompileError(`Recursion too deep in '${f.name}'`, loc); }
+      vals.forEach((v, i) => { cf.args[i].value = v.withSign(cf.args[i].signed); });
+      try { cf.body(); } catch (x) { if (x !== RET) { depth--; throw x; } }
       for (const o of outs) this.write(o.lv.tg(), o.sig.value);
+      depth--;
+      if (saved) frame.forEach((s, i) => { s.value = saved[i]; });
     };
   }
 }

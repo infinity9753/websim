@@ -57,10 +57,9 @@ run -all
 
 ## Known limitations
 
-- No SystemVerilog classes, interfaces, packages, assertions, `fork/join` with multiple branches, or arrays of instances.
-- VHDL records, unconstrained array types, operator overloading, configurations and block statements are not supported; std_logic's 9 values are mapped onto 0/1/X/Z.
-- Real numbers are only partially supported (literals in delays and expressions are rounded).
-- No breakpoints / single stepping yet; no code coverage; no VCD/WLF export.
+- SystemVerilog: interfaces (modports not enforced), basic classes (no parameterized classes, randomization, constraints, queues or dynamic arrays) and a subset of SVA (no `throughout/within/intersect`, `[->]`/`[=]` repetition or property arguments).
+- VHDL configurations and block statements are not supported.
+- No code coverage; no WLF export.
 
 ## Project layout
 
