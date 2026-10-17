@@ -23,7 +23,11 @@ export interface PDesign { top: string; loaded: string[]; resolution: number; ro
 export interface PHist { id: number; from: number; t: number[]; v: PVec[]; forced: boolean; value: PVec }
 
 export interface PList { path: string; name: string; sigId: number; radix: Radix }
-export interface PWave { id: number; path: string; name: string; sigId: number; radix: Radix; dividerLabel?: string }
+export interface PWave {
+  id: number; path: string; name: string; sigId: number; radix: Radix; dividerLabel?: string;
+  color?: string; format?: 'literal' | 'analog-step' | 'analog-interp'; height?: number; min?: number; max?: number;
+  groupLabel?: string; collapsed?: boolean; parent?: number;
+}
 
 export interface PState {
   events: string[];

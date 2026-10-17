@@ -1,5 +1,5 @@
 // Simulation worker: runs the Session off the UI thread and streams state to it.
-import { Session } from './commands';
+import { Session, isMarker, waveAttrs } from './commands';
 import type { Scope } from './elab';
 import type { Signal } from './kernel';
 import type { Vec } from './logic';
@@ -116,7 +116,7 @@ function flush() {
   // these are also edited on the UI side: only send them when they changed here
   const simEv = st.events.includes('sim');
   if (simEv || ev.includes('scope')) st.scope = session.scope?.path ?? null;
-  if (simEv || ev.includes('wave')) st.waves = session.waves.map(w => ({ id: w.id, path: w.path, name: w.name, sigId: w.sig?.id ?? 0, radix: w.radix, dividerLabel: w.dividerLabel }));
+  if (simEv || ev.includes('wave')) st.waves = session.waves.map(w => ({ id: w.id, path: w.path, name: w.name, sigId: w.sig?.id ?? 0, radix: w.radix, ...waveAttrs(w) }));
   if (simEv || ev.includes('debug')) st.breakpoints = session.breakpoints;
   if (simEv || ev.includes('list')) st.lists = session.lists.map(l => ({ path: l.path, name: l.name, sigId: l.sig.id, radix: l.radix }));
   st.defaultRadix = session.defaultRadix;
@@ -127,10 +127,10 @@ function flush() {
 const methods: Record<string, (...a: any[]) => unknown> = {
   setScope: (path: string) => { const s = session.findScope(path); if (s) session.setScope(s); },
   addWavePaths: (paths: string[]) => session.addWavePaths(paths),
-  setWaves: (ws: { id: number; path: string; name: string; radix: never; dividerLabel?: string }[]) => {
+  setWaves: (ws: { id: number; path: string; name: string; radix: never; dividerLabel?: string; groupLabel?: string }[]) => {
     const fallback = session.design?.kernel.signals[0];
     session.waves = ws.flatMap(w => {
-      const sig = w.dividerLabel !== undefined ? fallback : session.findSignal(w.path)?.obj.sig;
+      const sig = isMarker(w) ? fallback : session.findSignal(w.path)?.obj.sig;
       return sig ? [{ ...w, sig }] : [];
     });
     session.emit('wave');

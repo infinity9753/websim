@@ -8,7 +8,7 @@ import type { FromWorker, PScope, PState, PVec, ToWorker } from '../engine/proto
 import { fmtTime } from '../engine/format';
 import { fmtReal, vecToReal } from '../engine/elab';
 import * as L from '../engine/logic';
-import { globRe } from '../engine/commands';
+import { globRe, isMarker, waveAttrs } from '../engine/commands';
 import type { BrowserFS } from './vfs';
 
 const vec = (p: PVec) => new Vec(p.w, p.a, p.b, p.s, p.u ?? 0n, p.k ?? 0n);
@@ -51,7 +51,11 @@ export interface MDesign {
   kernel: { now: number; resolution: number; deltaCount: number; finished: boolean; signals: MSignal[]; histBytes?: number };
 }
 export interface MList { path: string; name: string; sig: MSignal; radix: Radix }
-export interface MWave { id: number; path: string; name: string; sig: MSignal; radix: Radix; dividerLabel?: string; expanded?: boolean }
+export interface MWave {
+  id: number; path: string; name: string; sig: MSignal; radix: Radix; dividerLabel?: string; expanded?: boolean;
+  color?: string; format?: 'literal' | 'analog-step' | 'analog-interp'; height?: number; min?: number; max?: number;
+  groupLabel?: string; collapsed?: boolean; parent?: number;
+}
 
 type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
 
@@ -106,7 +110,7 @@ export class RemoteSession {
   on(ev: Ev, f: () => void) { (this.listeners.get(ev) ?? this.listeners.set(ev, new Set()).get(ev)!).add(f); return () => this.listeners.get(ev)!.delete(f); }
   emit(ev: Ev) {
     // UI-side wave edits (reorder, radix, delete, dividers) are pushed to the worker
-    if (ev === 'wave' && !this.applying) void this.call('setWaves', this.waves.map(w => ({ id: w.id, path: w.path, name: w.name, radix: w.radix, dividerLabel: w.dividerLabel })));
+    if (ev === 'wave' && !this.applying) void this.call('setWaves', this.waves.map(w => ({ id: w.id, path: w.path, name: w.name, radix: w.radix, ...waveAttrs(w) })));
     for (const f of this.listeners.get(ev) ?? []) f();
   }
 
@@ -182,8 +186,8 @@ export class RemoteSession {
       if (st.scope !== undefined) this.scope = st.scope && this.design ? this.findScope(st.scope) : this.design?.root ?? null;
       if (st.waves) {
         this.waves = st.waves.flatMap(w => {
-          const sig = this.sigs.get(w.sigId) ?? (w.dividerLabel !== undefined ? [...this.sigs.values()][0] : undefined);
-          return sig ? [{ id: w.id, path: w.path, name: w.name, sig, radix: w.radix, dividerLabel: w.dividerLabel }] : [];
+          const sig = this.sigs.get(w.sigId) ?? (isMarker(w) ? [...this.sigs.values()][0] : undefined);
+          return sig ? [{ id: w.id, path: w.path, name: w.name, sig, radix: w.radix, ...waveAttrs(w) }] : [];
         });
       }
       if (st.lists) this.lists = st.lists.flatMap(l => { const sig = this.sigs.get(l.sigId); return sig ? [{ path: l.path, name: l.name, sig, radix: l.radix }] : []; });

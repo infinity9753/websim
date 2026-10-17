@@ -92,6 +92,24 @@ describe('wave format save/restore (#12)', () => {
     await s.exec('do w.do');
     expect(s.waves.map(w => w.dividerLabel ?? `${w.path}:${w.radix}`)).toEqual(['/tb/clk:binary', 'Counter', '/tb/q:hex']);
   });
+
+  it('keeps analog format, colour, height, range and groups (#37)', async () => {
+    const fs: Record<string, string> = { ...files };
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, () => {});
+    await s.exec('vlog counter.v tb.v; vsim tb');
+    await s.exec('add wave -group Ctl /tb/clk; add wave -format Analog-Step -height 80 -min 0 -max 15 -color Gold /tb/q; add wave -group Ctl -color red /tb/rst');
+    // rst joins the existing group right after clk
+    expect(s.waves.map(w => w.groupLabel ?? w.path)).toEqual(['Ctl', '/tb/clk', '/tb/rst', '/tb/q']);
+    const hdr = s.waves[0];
+    expect(s.waves.filter(w => w.parent === hdr.id).map(w => w.path)).toEqual(['/tb/clk', '/tb/rst']);
+    const q = s.waves[3];
+    expect([q.format, q.height, q.min, q.max, q.color]).toEqual(['analog-step', 80, 0, 15, 'Gold']);
+    await s.exec('write format wave g.do');
+    expect(fs['g.do']).toContain('add wave -noupdate -group {Ctl} -color red /tb/rst');
+    expect(fs['g.do']).toContain('add wave -noupdate -color Gold -format Analog-Step -height 80 -min 0 -max 15 /tb/q');
+    await s.exec('delete wave *; do g.do');
+    expect(s.waves.map(w => w.groupLabel ?? `${w.path}:${w.format ?? 'literal'}:${w.color ?? ''}`)).toEqual(['Ctl', '/tb/clk:literal:', '/tb/rst:literal:red', '/tb/q:analog-step:Gold']);
+  });
 });
 
 describe('memory commands (#14)', () => {

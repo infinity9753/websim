@@ -303,8 +303,8 @@ export class ObjectsPanel {
     if (!objs.length && !mems.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No objects in this region.'))); return; }
     // cells of rows scrolled out of view are dropped from the update map
     this.valueCells = new Map();
+    // rows are built before they are attached, so detached cells are pruned in updateValues(), not here
     this.vr.set(objs.length + mems.length, (i) => {
-      for (const [cell] of this.valueCells) if (!cell.isConnected) this.valueCells.delete(cell);
       if (i >= objs.length) {
         const m = mems[i - objs.length];
         return h('tr', { title: `${s.path}/${m.name}` },

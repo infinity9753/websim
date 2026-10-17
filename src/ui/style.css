@@ -87,6 +87,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .menu-item.disabled:hover { background: none; color: var(--text-dim); }
 .menu-item .kbd { margin-left: auto; padding-left: 24px; opacity: .65; font-size: 11px; }
 .menu-check { width: 16px; text-align: center; }
+.menu-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.3); }
+.menu-arrow { margin-left: auto; padding-left: 16px; opacity: .7; }
+.menu-item.has-sub { display: flex; align-items: center; }
 .menu-sep { height: 1px; background: var(--border-soft); margin: 4px 0; }
 .menu-sub { position: relative; }
 .menu-sub > .menu-drop { display: none; left: 100%; top: -5px; }
@@ -195,6 +198,8 @@ tr.sel .kind { color: inherit; opacity: .85; }
 .wave-row { height: 22px; display: flex; align-items: center; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #0f141a; cursor: default; }
 .wave-row.sel { background: var(--w-sel); }
 .wave-row.divider { color: #9ad1ff; font-style: italic; }
+.wave-row.group { color: #cfe3ff; font-weight: 600; background: rgba(90,140,220,0.12); }
+.wave-row.group .wave-exp { cursor: pointer; }
 .wave-exp { display: inline-block; width: 14px; flex: none; color: #8fb3d9; cursor: pointer; text-align: center; }
 .wave-names .wave-row.bitrow { color: #a9b8c8; padding-left: 26px; }
 .wave-names .wave-row { color: #d8e4f0; }

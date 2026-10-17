@@ -29,6 +29,27 @@ export interface WaveEntry {
   color?: string;
   expanded?: boolean;
   dividerLabel?: string;
+  /** Display format: literal (logic/bus) or an analog plot of the numeric value. */
+  format?: WaveFormat;
+  height?: number;
+  min?: number;
+  max?: number;
+  /** Group header row (like a divider, but its members can be collapsed). */
+  groupLabel?: string;
+  collapsed?: boolean;
+  /** Id of the group header this signal belongs to. */
+  parent?: number;
+}
+
+export type WaveFormat = 'literal' | 'analog-step' | 'analog-interp';
+/** Rows that are not signals (dividers, group headers). */
+export function isMarker(w: { dividerLabel?: string; groupLabel?: string }) { return w.dividerLabel !== undefined || w.groupLabel !== undefined; }
+/** Display attributes that travel with a wave entry between the worker and the UI. */
+export const WAVE_ATTRS = ['color', 'format', 'height', 'min', 'max', 'groupLabel', 'collapsed', 'parent', 'dividerLabel'] as const;
+export function waveAttrs(w: Partial<Record<(typeof WAVE_ATTRS)[number], unknown>>) {
+  const o: Record<string, unknown> = {};
+  for (const k of WAVE_ATTRS) if (w[k] !== undefined) o[k] = w[k];
+  return o as Pick<WaveEntry, (typeof WAVE_ATTRS)[number]>;
 }
 
 type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
@@ -323,7 +344,7 @@ export class Session {
     this.lastVsim = o;
     this.promptN = 1;
     // rebind existing waves by path (restart)
-    this.waves = this.waves.map(w => { if (w.dividerLabel !== undefined) return { ...w, sig: d.kernel.signals[0] ?? w.sig }; const s = this.findSignal(w.path); return s ? { ...w, sig: s.obj.sig } : null; }).filter((w): w is WaveEntry => !!w);
+    this.waves = this.waves.map(w => { if (isMarker(w)) return { ...w, sig: d.kernel.signals[0] ?? w.sig }; const s = this.findSignal(w.path); return s ? { ...w, sig: s.obj.sig } : null; }).filter((w): w is WaveEntry => !!w);
     this.lists = this.lists.flatMap(l => { const s = this.findSignal(l.path); return s ? [{ ...l, sig: s.obj.sig }] : []; });
     this.emit('sim');
     this.emit('wave');
@@ -671,7 +692,7 @@ export class Session {
     const d = this.requireDesign();
     const vars: VcdVar[] = all
       ? this.dumpVars([{ path: '', levels: 0 }])
-      : this.waves.filter(w => w.dividerLabel === undefined).map(w => ({ path: w.path, sig: w.sig }));
+      : this.waves.filter(w => !isMarker(w)).map(w => ({ path: w.path, sig: w.sig }));
     return writeVcd(vars, d.kernel.now);
   }
 
@@ -799,9 +820,21 @@ export class Session {
   /** Wave window setup as a re-runnable do-file. */
   waveFormat(): string {
     const lines = ['# WebSim wave format', 'onerror {resume}', 'quietly WaveActivateNextPane {} 0'];
+    const label = (id?: number) => this.waves.find(g => g.id === id)?.groupLabel;
     for (const w of this.waves) {
-      if (w.dividerLabel !== undefined) lines.push(`add wave -noupdate -divider {${w.dividerLabel}}`);
-      else lines.push(`add wave -noupdate${w.radix !== this.defaultRadix ? ` -radix ${w.radix}` : ''} ${w.path}`);
+      if (w.dividerLabel !== undefined) { lines.push(`add wave -noupdate -divider {${w.dividerLabel}}`); continue; }
+      if (w.groupLabel !== undefined) continue; // recreated by its members' -group option
+      const g = label(w.parent);
+      const opts = [
+        g !== undefined ? `-group {${g}}` : '',
+        w.radix !== this.defaultRadix ? `-radix ${w.radix}` : '',
+        w.color ? `-color ${w.color}` : '',
+        w.format && w.format !== 'literal' ? `-format ${w.format === 'analog-step' ? 'Analog-Step' : 'Analog-Interpolated'}` : '',
+        w.height ? `-height ${w.height}` : '',
+        w.min !== undefined ? `-min ${w.min}` : '',
+        w.max !== undefined ? `-max ${w.max}` : '',
+      ].filter(Boolean).join(' ');
+      lines.push(`add wave -noupdate${opts ? ' ' + opts : ''} ${w.path}`);
     }
     lines.push('update', 'wave zoom full');
     return lines.join('\n') + '\n';
@@ -957,13 +990,26 @@ export class Session {
     let radix: Radix | undefined;
     let recursive = false;
     let divider: string | null = null;
+    let group: string | undefined;
+    const style: Partial<WaveEntry> = {};
     const pats: string[] = [];
+    const num = (s: string | undefined, opt: string) => { const n = Number(s); if (!Number.isFinite(n)) throw new Error(`add wave: ${opt} expects a number`); return n; };
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       if (a === '-radix') { radix = parseRadix(args[++i]); continue; }
       if (a === '-r' || a === '-recursive') { recursive = true; continue; }
       if (a === '-divider') { divider = args[i + 1] && !args[i + 1].startsWith('-') ? args[++i] : ''; continue; }
-      if (a === '-position' || a === '-color' || a === '-label' || a === '-height' || a === '-group') { i++; continue; }
+      if (a === '-group') { group = args[++i]; continue; }
+      if (a === '-color') { style.color = args[++i]; continue; }
+      if (a === '-height') { style.height = Math.max(16, Math.min(400, Math.round(num(args[++i], a)))); continue; }
+      if (a === '-min') { style.min = num(args[++i], a); continue; }
+      if (a === '-max') { style.max = num(args[++i], a); continue; }
+      if (a === '-format') {
+        const f = (args[++i] ?? '').toLowerCase();
+        style.format = f.startsWith('analog-int') || f === 'analog' ? 'analog-interp' : f.startsWith('analog') ? 'analog-step' : 'literal';
+        continue;
+      }
+      if (a === '-position' || a === '-label') { i++; continue; }
       if (a.startsWith('-')) continue;
       pats.push(a);
     }
@@ -975,6 +1021,12 @@ export class Session {
     }
     if (!pats.length) pats.push('*');
     let n = 0;
+    // -group: members go right after the group's last member (the header is created on first use)
+    let hdr: WaveEntry | undefined;
+    if (group !== undefined) {
+      hdr = this.waves.find(w => w.groupLabel === group);
+      if (!hdr) { hdr = { id: this.waveSeq++, path: '', name: group, sig: this.waves[0]?.sig ?? this.design!.kernel.signals[0], radix: 'binary', groupLabel: group }; this.waves.push(hdr); }
+    }
     const have = new Set(this.waves.map(w => w.path));
     for (const p of pats) {
       const found = this.matchSignals(p, recursive);
@@ -983,7 +1035,13 @@ export class Session {
         const path = `${f.scope.path}/${f.obj.name}`;
         if (have.has(path)) continue;
         have.add(path);
-        this.waves.push({ id: this.waveSeq++, path, name: path, sig: f.obj.sig, radix: radix ?? (f.obj.sig.enumNames ? 'symbolic' : this.defaultRadix) });
+        const e: WaveEntry = { id: this.waveSeq++, path, name: path, sig: f.obj.sig, radix: radix ?? (f.obj.sig.enumNames ? 'symbolic' : this.defaultRadix), ...style };
+        if (hdr) {
+          e.parent = hdr.id;
+          let at = this.waves.indexOf(hdr);
+          while (at + 1 < this.waves.length && this.waves[at + 1].parent === hdr.id) at++;
+          this.waves.splice(at + 1, 0, e);
+        } else this.waves.push(e);
         n++;
       }
     }

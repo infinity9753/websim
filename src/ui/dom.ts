@@ -96,12 +96,29 @@ export async function confirmBox(title: string, msg: string): Promise<boolean> {
 }
 
 let ctxMenu: HTMLElement | null = null;
-export function contextMenu(x: number, y: number, items: ({ label: string; action: () => void; disabled?: boolean; checked?: boolean } | '-')[]) {
+export type CtxItem = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; sub?: CtxItem[]; swatch?: string } | '-';
+
+export function contextMenu(x: number, y: number, items: CtxItem[]) {
   ctxMenu?.remove();
   const menu = h('div', { class: 'ctx-menu', role: 'menu' },
     items.map(it => it === '-' ? h('div', { class: 'menu-sep' }) :
-      h('div', { class: 'menu-item' + (it.disabled ? ' disabled' : ''), role: 'menuitem', onclick: () => { if (it.disabled) return; menu.remove(); ctxMenu = null; it.action(); } },
-        h('span', { class: 'menu-check' }, it.checked ? '✓' : ''), it.label)));
+      h('div', {
+        class: 'menu-item' + (it.disabled ? ' disabled' : '') + (it.sub ? ' has-sub' : ''), role: 'menuitem',
+        onclick: (e: MouseEvent) => {
+          if (it.disabled) return;
+          if (it.sub) {
+            // open the submenu next to this item (replaces the current menu)
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            e.stopPropagation();
+            contextMenu(r.right, r.top, it.sub);
+            return;
+          }
+          menu.remove(); ctxMenu = null; it.action?.();
+        },
+      },
+        h('span', { class: 'menu-check' }, it.checked ? '✓' : ''),
+        it.swatch ? h('span', { class: 'menu-swatch', style: { background: it.swatch } }) : '',
+        it.label, it.sub ? h('span', { class: 'menu-arrow' }, '▸') : '')));
   document.body.appendChild(menu);
   const r = menu.getBoundingClientRect();
   menu.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px';
