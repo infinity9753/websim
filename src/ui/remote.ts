@@ -50,9 +50,10 @@ export interface MDesign {
   top: string; loaded: string[]; root: MScope; allScopes: MScope[];
   kernel: { now: number; resolution: number; deltaCount: number; finished: boolean; signals: MSignal[]; histBytes?: number };
 }
+export interface MList { path: string; name: string; sig: MSignal; radix: Radix }
 export interface MWave { id: number; path: string; name: string; sig: MSignal; radix: Radix; dividerLabel?: string; expanded?: boolean }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
 
 export class RemoteSession {
   private worker: Worker;
@@ -67,6 +68,7 @@ export class RemoteSession {
   design: MDesign | null = null;
   scope: MScope | null = null;
   waves: MWave[] = [];
+  lists: MList[] = [];
   running = false;
   defaultRadix: Radix = 'binary';
   history: string[] = [];
@@ -184,6 +186,7 @@ export class RemoteSession {
           return sig ? [{ id: w.id, path: w.path, name: w.name, sig, radix: w.radix, dividerLabel: w.dividerLabel }] : [];
         });
       }
+      if (st.lists) this.lists = st.lists.flatMap(l => { const sig = this.sigs.get(l.sigId); return sig ? [{ path: l.path, name: l.name, sig, radix: l.radix }] : []; });
       if (st.running !== undefined) this.running = st.running;
       if (st.paused !== undefined) this.paused = st.paused;
       if (st.locals) this.locals = st.locals.map(l => ({ ...l, value: vec(l.value) }));
@@ -193,7 +196,7 @@ export class RemoteSession {
       if (st.history) this.history = st.history;
       if (st.defaultRadix) this.defaultRadix = st.defaultRadix;
       if (st.lastVsim !== undefined) this.lastVsim = st.lastVsim;
-      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'time', 'running', 'debug', 'zoomfull'];
+      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'list', 'time', 'running', 'debug', 'zoomfull'];
       for (const ev of order) if (st.events.includes(ev)) this.emitLocal(ev);
       if (st.hist?.length && !st.events.includes('time')) this.emitLocal('time');
     } finally {

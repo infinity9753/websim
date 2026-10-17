@@ -61,6 +61,7 @@ A *project* groups source files, their compile order, and the default library.
 | `run [<n> [<unit>]] \| -all \| -continue` | Advance simulation. Default run length 100 ns. |
 | `restart [-f]` | Back to time 0, keep waves. |
 | `quit -sim` | Unload simulation. |
+| `add list [-radix r] [-r] <paths...>` / `delete list <paths>\|*` / `write list <file>` | List window: one row per time step at which any listed signal changes (deltas collapsed), time in simulator-resolution units. |
 | `add wave [-radix r] <paths...>` | Paths are absolute (`/tb/dut/q`) or relative to current scope; `*` wildcard; `-r` recursive. |
 | `delete wave *` | Clear wave window. |
 | `force [-deposit] <sig> <val> [<time>]` | Override a signal value. |

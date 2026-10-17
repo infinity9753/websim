@@ -130,4 +130,24 @@ describe('history limits and logging (#28)', () => {
     await s.exec('simstats');
     expect(lines.at(-1)).toMatch(/Signals: 2 \(1 logged\)/);
   });
+
+  it('add list / write list / delete list (#35)', async () => {
+    const written: Record<string, string> = {};
+    const lines: string[] = [];
+    const s = new Session({ read: (n) => files[n], list: () => Object.keys(files), write: (n, t) => { written[n] = t; } }, (m) => lines.push(m));
+    await s.exec('vlib work');
+    await s.exec('vlog counter.v tb.v');
+    await s.exec('vsim work.tb');
+    await s.exec('add list -radix unsigned /tb/q /tb/rst');
+    await s.exec('run 50 ns');
+    await s.exec('write list out.lst');
+    const t = written['out.lst'].split('\n');
+    expect(t[0].trim().split(/\s+/)).toEqual(['ps', '/tb/q', '/tb/rst']); // times are in the simulator resolution (1 ps)
+    // q is X until the first clock with rst, then counts once rst drops at 20 ns
+    expect(t.slice(1, 6).map(l => l.trim().split(/\s+/))).toEqual([['0', 'x', '1'], ['5000', '0', '1'], ['20000', '0', '0'], ['25000', '1', '0'], ['35000', '2', '0']]);
+    await s.exec('delete list /tb/rst');
+    expect(s.lists.map(l => l.path)).toEqual(['/tb/q']);
+    await s.exec('restart -f');
+    expect(s.lists.map(l => l.path)).toEqual(['/tb/q']);
+  });
 });

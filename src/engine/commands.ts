@@ -7,6 +7,9 @@ import * as L from './logic';
 import type { Radix } from './logic';
 import './vhdl';
 import { writeVcd, type VcdVar } from './vcd';
+import { listRows, listText } from './list';
+import { fmtReal, vecToReal } from './elab';
+import type { Vec } from './logic';
 
 export interface VFS {
   read(name: string): string | undefined;
@@ -27,7 +30,9 @@ export interface WaveEntry {
   dividerLabel?: string;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
+
+export interface ListEntry { path: string; name: string; sig: Signal; radix: Radix }
 
 export interface Breakpoint { id: number; file: string; line: number; cond?: string; enabled: boolean }
 
@@ -38,6 +43,7 @@ export class Session {
   design: Design | null = null;
   scope: Scope | null = null;
   waves: WaveEntry[] = [];
+  lists: ListEntry[] = [];
   runLength = 100e6; // fs (100 ns)
   defaultRadix: Radix = 'binary';
   history: string[] = [];
@@ -160,6 +166,9 @@ export class Session {
       '  find signals <pattern>             list signals',
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
+      '  add list [-radix r] <paths>        show signals in the List window',
+      '  delete list <paths>|*              remove signals from the List window',
+      '  write list <file>                  save the List window as a text table',
       '  write format wave <file.do>        save the wave window setup (restore with "do")',
       '  log|nolog [-r] <paths>|-all        choose which signals record waveforms;  log -cap <n>',
       '  simstats                           history size / memory estimate',
@@ -282,7 +291,7 @@ export class Session {
     if (m) { lib = m[1]; top = m[2]; }
     const sameTop = this.lastVsim?.top === top;
     if (this.design) this.quitSim(true);
-    if (!sameTop) this.waves = [];
+    if (!sameTop) { this.waves = []; this.lists = []; }
     this.load({ top, lib, generics, res });
   }
 
@@ -308,8 +317,10 @@ export class Session {
     this.promptN = 1;
     // rebind existing waves by path (restart)
     this.waves = this.waves.map(w => { if (w.dividerLabel !== undefined) return { ...w, sig: d.kernel.signals[0] ?? w.sig }; const s = this.findSignal(w.path); return s ? { ...w, sig: s.obj.sig } : null; }).filter((w): w is WaveEntry => !!w);
+    this.lists = this.lists.flatMap(l => { const s = this.findSignal(l.path); return s ? [{ ...l, sig: s.obj.sig }] : []; });
     this.emit('sim');
     this.emit('wave');
+    this.emit('list');
     this.emit('time');
   }
 
@@ -327,9 +338,10 @@ export class Session {
     this.scope = null;
     for (const t of this.forceTimers) t.cancelled = true;
     this.forceTimers = [];
-    if (!silent) this.waves = [];
+    if (!silent) { this.waves = []; this.lists = []; }
     this.emit('sim');
     this.emit('wave');
+    this.emit('list');
     this.emit('time');
   }
 
@@ -789,8 +801,16 @@ export class Session {
   }
 
   writeCmd(args: string[]) {
-    // write format wave [-window ...] <file>
-    if (args[0] !== 'format' || args[1] !== 'wave') throw new Error('Usage: write format wave <file.do>');
+    // write list <file> | write format wave [-window ...] <file>
+    if (args[0] === 'list') {
+      const file = args.slice(1).filter(a => !a.startsWith('-')).pop() ?? 'list.lst';
+      if (!this.lists.length) throw new Error('write list: the list window is empty (use "add list")');
+      if (!this.fs.write) throw new Error('write: file system is read-only');
+      this.fs.write(file, this.listText());
+      this.out(`Wrote ${file}`);
+      return;
+    }
+    if (args[0] !== 'format' || args[1] !== 'wave') throw new Error('Usage: write format wave <file.do> | write list <file>');
     const rest = args.slice(2);
     const file = rest.filter((a, i) => !a.startsWith('-') && rest[i - 1] !== '-window').pop() ?? 'wave.do';
     if (!this.fs.write) throw new Error('write: file system is read-only');
@@ -862,6 +882,7 @@ export class Session {
   add(args: string[]) {
     const what = args[0];
     if (what !== 'wave' && what !== 'log' && what !== 'list') throw new Error(`add: unknown target "${what}" (use "add wave")`);
+    if (what === 'list') return this.addList(args.slice(1));
     if (what !== 'wave') return;
     this.requireDesign();
     let radix: Radix | undefined;
@@ -912,8 +933,52 @@ export class Session {
     this.emit('wave');
   }
 
+  /** add list [-radix r] [-r] <paths...> */
+  addList(args: string[]) {
+    this.requireDesign();
+    let radix: Radix | undefined, recursive = false;
+    const pats: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === '-radix') { radix = parseRadix(args[++i]); continue; }
+      if (a === '-r' || a === '-recursive') { recursive = true; continue; }
+      if (a === '-label' || a === '-width' || a === '-window') { i++; continue; }
+      if (a.startsWith('-')) continue;
+      pats.push(a);
+    }
+    if (!pats.length) pats.push('*');
+    const have = new Set(this.lists.map(l => l.path));
+    let n = 0;
+    for (const p of pats) {
+      const found = this.matchSignals(p, recursive);
+      if (!found.length) this.out(`** Warning: (vsim-WLF-5000) No objects found matching '${p}'.`, 'warn');
+      for (const f of found) {
+        const path = `${f.scope.path}/${f.obj.name}`;
+        if (have.has(path)) continue;
+        have.add(path);
+        this.lists.push({ path, name: path, sig: f.obj.sig, radix: radix ?? (f.obj.sig.enumNames ? 'symbolic' : this.defaultRadix) });
+        n++;
+      }
+    }
+    this.emit('list');
+    return n > 0;
+  }
+
+  listText(): string {
+    const d = this.requireDesign();
+    const rows = listRows(this.lists.map(l => ({ times: l.sig.times, at: (i: number) => l.sig.valAt(i) })), d.kernel.now);
+    return listText(this.lists.map(l => ({ name: l.name, fmt: (v: Vec) => (l.sig.isReal ? fmtReal(vecToReal(v)) : L.format(v, l.radix, l.radix === 'symbolic' ? l.sig.enumNames : undefined)) })), rows, d.kernel.resolution);
+  }
+
   del(args: string[]) {
-    if (args[0] !== 'wave') throw new Error('delete: use "delete wave <paths>|*"');
+    if (args[0] === 'list') {
+      const pats = args.slice(1).filter(a => !a.startsWith('-'));
+      if (!pats.length || pats.includes('*')) this.lists = [];
+      else { const res = pats.map(p => globRe(p)); this.lists = this.lists.filter(l => !res.some(r => r.test(l.path) || r.test(l.path.split('/').pop()!))); }
+      this.emit('list');
+      return;
+    }
+    if (args[0] !== 'wave') throw new Error('delete: use "delete wave|list <paths>|*"');
     const pats = args.slice(1).filter(a => !a.startsWith('-'));
     if (!pats.length || pats.includes('*')) this.waves = [];
     else {

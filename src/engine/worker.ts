@@ -25,7 +25,7 @@ let scheduled = false;
 let sent = new Map<number, number>(); // signal id -> history length already sent
 let designRef: unknown = null;
 
-for (const ev of ['library', 'sim', 'time', 'wave', 'zoomfull', 'scope', 'running', 'compiled', 'debug']) {
+for (const ev of ['library', 'sim', 'time', 'wave', 'zoomfull', 'scope', 'running', 'compiled', 'debug', 'list']) {
   session.on(ev as never, () => { pending.add(ev); schedule(); });
 }
 
@@ -118,6 +118,7 @@ function flush() {
   if (simEv || ev.includes('scope')) st.scope = session.scope?.path ?? null;
   if (simEv || ev.includes('wave')) st.waves = session.waves.map(w => ({ id: w.id, path: w.path, name: w.name, sigId: w.sig?.id ?? 0, radix: w.radix, dividerLabel: w.dividerLabel }));
   if (simEv || ev.includes('debug')) st.breakpoints = session.breakpoints;
+  if (simEv || ev.includes('list')) st.lists = session.lists.map(l => ({ path: l.path, name: l.name, sigId: l.sig.id, radix: l.radix }));
   st.defaultRadix = session.defaultRadix;
   post({ type: 'state', state: st });
 }

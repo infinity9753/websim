@@ -334,6 +334,7 @@ export class ObjectsPanel {
           if (!this.sel.has(path)) { this.sel = new Set([path]); this.render(); }
           contextMenu(e.clientX, e.clientY, [
             { label: 'Add to Wave', action: () => this.session.addWavePaths([...this.sel]) },
+            { label: 'Add to List', action: () => { void this.session.exec(`add list ${[...this.sel].join(' ')}`); } },
             { label: 'Force…', action: () => this.onForce?.(path) },
             { label: 'NoForce', action: () => { void this.session.exec(`noforce ${path}`); }, disabled: !o.sig.forced },
             { label: 'Examine', action: () => { void this.session.exec(`examine ${path}`); } },

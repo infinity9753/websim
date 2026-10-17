@@ -6,6 +6,7 @@ import { BrowserFS, langOf, loadState, saveState } from './vfs';
 import { Transcript } from './transcript';
 import { Editors } from './editor';
 import { WaveView } from './wave';
+import { ListView } from './list';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
@@ -31,6 +32,7 @@ export class App {
   transcript: Transcript;
   editors: Editors;
   wave: WaveView;
+  list: ListView;
   left = new Pane('pane-left');
   mid = new Pane('pane-mid');
   right = new Pane('pane-right');
@@ -61,6 +63,7 @@ export class App {
     sink = (m, k) => this.transcript.print(m, k);
     this.editors = new Editors(this.right, this.fs);
     this.wave = new WaveView(this.session);
+    this.list = new ListView(this.session);
     this.project = new ProjectPanel(this.fs, this.session);
     this.library = new LibraryPanel(this.session);
     this.structure = new StructurePanel(this.session);
@@ -84,6 +87,7 @@ export class App {
     this.mid.add('locals', 'Locals', this.locals.el, { activate: false });
     this.mid.onActivate = (id) => { if (id === 'memory') this.memory.show(); };
     this.right.add('wave', 'Wave', this.wave.el);
+    this.right.add('list', 'List', this.list.el, { activate: false });
     this.bottom.add('transcript', 'Transcript', this.transcript.el);
 
     const s1 = h('div', { class: 'split-v1', role: 'separator', 'aria-orientation': 'vertical' });
@@ -165,6 +169,7 @@ export class App {
         { label: 'Processes', action: () => { this.showMid(); this.mid.activate('processes'); } },
         { label: 'Memory', action: () => { this.showMid(); this.mid.activate('memory'); } },
         { label: 'Wave', action: () => this.right.activate('wave') },
+        { label: 'List', action: () => this.right.activate('list') },
         '-',
         { label: 'Theme: Auto', action: () => this.setTheme('auto') },
         { label: 'Theme: Light', action: () => this.setTheme('light') },
@@ -301,6 +306,8 @@ export class App {
     s.on('sim', () => { if (s.design) { this.left.activate('sim'); this.right.activate('wave'); } this.updateStatus(); });
     let waveCount = 0;
     s.on('wave', () => { if (s.design && s.waves.length > waveCount) this.right.activate('wave'); waveCount = s.waves.length; });
+    let listCount = 0;
+    s.on('list', () => { if (s.design && s.lists.length > listCount) this.right.activate('list'); listCount = s.lists.length; });
     s.on('time', () => this.updateStatus());
     s.on('scope', () => this.updateStatus());
     s.on('running', () => this.updateStatus());

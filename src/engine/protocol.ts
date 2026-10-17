@@ -22,6 +22,7 @@ export interface PDesign { top: string; loaded: string[]; resolution: number; ro
 /** History update for one signal: drop entries from `from` onward, then append. */
 export interface PHist { id: number; from: number; t: number[]; v: PVec[]; forced: boolean; value: PVec }
 
+export interface PList { path: string; name: string; sigId: number; radix: Radix }
 export interface PWave { id: number; path: string; name: string; sigId: number; radix: Radix; dividerLabel?: string }
 
 export interface PState {
@@ -32,6 +33,7 @@ export interface PState {
   design?: PDesign | null;
   scope?: string | null;
   waves?: PWave[];
+  lists?: PList[];
   time?: { now: number; delta: number; finished: boolean; procStates: string; histBytes?: number; histEntries?: number };
   hist?: PHist[];
   running?: boolean;

@@ -146,6 +146,7 @@ table.grid tr { cursor: default; }
 table.grid tbody tr:hover { background: var(--accent-soft); }
 table.grid tr.sel, table.grid tr.sel:hover { background: var(--sel); color: var(--sel-text); }
 table.grid td.mono { font-family: var(--mono); }
+table.grid td.num, table.grid th.num { text-align: right; font-family: var(--mono); }
 table.grid.vt tbody tr:not(.vpad) { height: 21px; }
 table.grid.vt tbody td { overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
 .tree-toggle { display: inline-block; width: 14px; text-align: center; color: var(--text-dim); cursor: pointer; }
