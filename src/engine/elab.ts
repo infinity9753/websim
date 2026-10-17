@@ -1,5 +1,5 @@
 // Elaboration: builds the instance hierarchy and compiles processes into closures.
-import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl } from './ast';
+import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
 import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
@@ -117,6 +117,8 @@ interface Ctx {
   depth: number;
   /** Inlined task/procedure call chain (for the call-stack view). */
   stack?: string[];
+  /** Inside a concurrent assertion: sampled-value functions register per-tick updates here. */
+  sva?: { tick: (() => void)[] };
 }
 
 type Tgt = { k: 'sig'; sig: Signal; off: number; w: number; drv?: Driver } | { k: 'mem'; mem: Memory; idx: number; off: number; w: number };
@@ -620,6 +622,7 @@ export class Elaborator {
           break;
         }
         case 'process': this.pending.push(() => this.compileProcess(it, scope)); break;
+        case 'sva': this.pending.push(() => this.compileSva(it, scope)); break;
         case 'cassign': this.pending.push(() => this.compileCassign(it.lhs, it.rhs, it.delay, scope, scope, `assign@${it.loc?.line ?? 0}`)); break;
       }
     }
@@ -1565,6 +1568,24 @@ export class Elaborator {
           return fromInt(l + ((k.random() >>> 0) % (h - l + 1)), 32);
         }, 32, false);
       }
+      case '$past': case '$rose': case '$fell': case '$stable': case '$changed': {
+        if (!c.sva) err(`${name} is only supported inside concurrent assertions.`, loc);
+        const X = A(0);
+        const xf = selfEv(X);
+        const depthN = name === '$past' && args[1] ? this.constInt(args[1], c.scope) : 1;
+        if (depthN < 1) err(`${name}: number of ticks must be at least 1`, loc);
+        // value sampled at each of the previous depthN clock ticks (oldest first)
+        let buf: Vec[] | null = null;
+        const past = () => buf ? buf[0] : xf();
+        c.sva.tick.push(() => { const v = xf(); if (!buf) buf = new Array(depthN).fill(v); else { buf.push(v); buf.shift(); } });
+        if (name === '$past') return leaf(past, X.w, X.s);
+        const lsb = (v: Vec) => v.bit(0);
+        const test = name === '$rose' ? () => lsb(xf()) === '1' && lsb(past()) !== '1'
+          : name === '$fell' ? () => lsb(xf()) === '0' && lsb(past()) !== '0'
+          : name === '$stable' ? () => xf().equals(past())
+          : () => !xf().equals(past());
+        return leaf(() => (test() ? L.ONE : L.ZERO), 1, false);
+      }
       case '$signed': case '$unsigned': {
         const X = A(0);
         const xf = X.mk(X.w, X.s);
@@ -2382,6 +2403,7 @@ export class Elaborator {
       }
       case 'disable': { const n = s.name; return { sync: () => { throw new DisableEx(n); } }; }
       case 'fork': return this.forkStmt(s, c);
+      case 'assert': return this.immediateAssert(s, c);
       case 'foreach': {
         const sym = this.lookupName(c.scope, s.arr);
         let a: number, b: number;
@@ -2454,6 +2476,125 @@ export class Elaborator {
         void self;
       },
     };
+  }
+
+  /** Default action for a failed assertion (like Questa's "Assertion error."). */
+  assertFailMsg(kind: string, label: string, c: Ctx, loc?: Loc, started?: number): () => void {
+    const k = this.k, host = k.host;
+    const scope = `${c.scope.dotted}.${label}`;
+    return () => {
+      host.print(`** Error: ${kind === 'assume' ? 'Assumption' : 'Assertion'} error.`);
+      const st = started !== undefined ? ` Started: ${fmtTime(started, k.resolution)} ` : '  ';
+      host.print(`   Time: ${fmtTime(k.now, k.resolution)}${st}Scope: ${scope} File: ${loc?.file} Line: ${loc?.line}`);
+    };
+  }
+
+  immediateAssert(s: Extract<Stmt, { k: 'assert' }>, c: Ctx): SC {
+    const C = selfEv(this.ex(s.c, c));
+    const label = s.label ?? `immed__${s.loc?.line ?? 0}`;
+    const pass = s.pass ? this.st(s.pass, c) : null;
+    const fail = s.fail ? this.st(s.fail, c) : s.kind === 'cover' ? null : { sync: this.assertFailMsg(s.kind, label, c, s.loc) };
+    // assert/assume: X or Z counts as failure; cover: only a true condition is a hit
+    const ok = () => L.truth(C()) === 1;
+    if ((!pass || pass.sync) && (!fail || fail.sync)) {
+      const p = pass?.sync, f = fail?.sync;
+      return { sync: () => { if (ok()) p?.(); else f?.(); } };
+    }
+    const pg = pass ? asGen(pass) : null, fg = fail ? asGen(fail) : null;
+    return { gen: function* () { if (ok()) { if (pg) yield* pg(); } else if (fg) yield* fg(); } };
+  }
+
+  /**
+   * Concurrent assertion: on every clock tick start an attempt and advance all pending ones.
+   * Sequences are matched with a set of threads (one per pending alternative of ## ranges / [*] repeats).
+   */
+  compileSva(it: Extract<Item, { k: 'sva' }>, scope: Scope) {
+    const p = it.prop;
+    const line = it.loc?.line ?? 0;
+    const label = it.label ?? `assert__${line}`;
+    const owner = `${scope.path}/${label}#${++this.procSeq}`;
+    const c = this.ctx(scope, owner);
+    c.proc = { name: label, scope: scope.path, file: it.loc?.file, line };
+    const sva = { tick: [] as (() => void)[] };
+    const sc: Ctx = { ...c, sva };
+    type El = { f: () => boolean; dmin: number; dmax: number; rmin: number; rmax: number };
+    const elems = (seq: SeqElem[], extra = 0): El[] => seq.map((x, i) => {
+      const n = selfEv(this.ex(x.e, sc));
+      const dmin = this.constInt(x.delay[0], scope) + (i === 0 ? extra : 0);
+      const dmax = x.delay[1] === null ? Infinity : this.constInt(x.delay[1], scope) + (i === 0 ? extra : 0);
+      const rmin = this.constInt(x.rep[0], scope), rmax = x.rep[1] === null ? Infinity : this.constInt(x.rep[1], scope);
+      if (dmin < 0 || dmax < dmin) err('Invalid ## delay range', it.loc);
+      if (rmin < 1 || rmax < rmin) err('Invalid [*] repetition range (must be at least 1)', it.loc);
+      return { f: () => L.truth(n()) === 1, dmin, dmax, rmin, rmax };
+    });
+    const A = elems(p.seq);
+    const C = p.cons ? elems(p.cons, p.impl === '|=>' ? 1 : 0) : null;
+    const dis = p.disable ? selfEv(this.ex(p.disable, c)) : null;
+    type Th = { i: number; r: number; wmin: number; wmax: number };
+    const seed = (E: El[]): Th[] => [{ i: 0, r: 0, wmin: E[0].dmin, wmax: E[0].dmax }];
+    // advance threads by one tick; returns surviving threads and whether the sequence matched now
+    const step = (E: El[], ths: Th[]): { next: Th[]; matched: boolean } => {
+      const work = [...ths], next: Th[] = [], seen = new Set<string>();
+      let matched = false;
+      const keep = (t: Th) => { const key = `${t.i},${t.r},${t.wmin},${t.wmax}`; if (!seen.has(key)) { seen.add(key); next.push(t); } };
+      while (work.length) {
+        const t = work.pop()!;
+        if (t.wmin > 0) { keep({ ...t, wmin: t.wmin - 1, wmax: t.wmax - 1 }); continue; }
+        const el = E[t.i];
+        if (t.r === 0 && t.wmax > 0) keep({ i: t.i, r: 0, wmin: 0, wmax: t.wmax - 1 }); // later chance within the ## window
+        if (!el.f()) continue;
+        const r = t.r + 1;
+        if (r < el.rmax) keep({ i: t.i, r, wmin: 0, wmax: 0 });                     // keep repeating on the next tick
+        if (r >= el.rmin) {
+          if (t.i + 1 === E.length) matched = true;
+          else { const n = E[t.i + 1]; work.push({ i: t.i + 1, r: 0, wmin: n.dmin, wmax: n.dmax }); }
+        }
+      }
+      return { next, matched };
+    };
+    const k = this.k;
+    const pass = it.pass ? asGen(this.st(it.pass, c)) : null;
+    const fail = it.fail ? asGen(this.st(it.fail, c)) : null;
+    const kind = it.kind;
+    const failMsg = (started: number) => this.assertFailMsg(kind, label, c, it.loc, started);
+    const neg = !!p.not;
+    let antes: { start: number; th: Th[] }[] = [];
+    let conses: { start: number; th: Th[] }[] = [];
+    const wait = this.eventWait(p.clock!, c);
+    const tick = function* (): Gen {
+      const now = k.now;
+      if (dis && L.truth(dis()) === 1) { antes = []; conses = []; for (const u of sva.tick) u(); return; }
+      if (C) {
+        antes.push({ start: now, th: seed(A) });
+        const keepA: typeof antes = [];
+        const live = new Set<string>(); // a thread already pending in an older attempt adds nothing new
+        for (const a of antes) {
+          const r = step(A, a.th);
+          if (r.matched) conses.push({ start: a.start, th: seed(C) });
+          const th = r.next.filter(t => { const key = `${t.i},${t.r},${t.wmin},${t.wmax}`; if (live.has(key)) return false; live.add(key); return true; });
+          if (th.length) keepA.push({ start: a.start, th });
+        }
+        antes = keepA;
+      } else conses.push({ start: now, th: seed(A) });
+      const E = C ?? A;
+      const keepC: typeof conses = [];
+      const outcomes: [boolean, number][] = [];
+      for (const a of conses) {
+        const r = step(E, a.th);
+        if (r.matched) outcomes.push([!neg, a.start]);
+        else if (!r.next.length) outcomes.push([neg, a.start]);
+        else keepC.push({ start: a.start, th: r.next });
+      }
+      conses = keepC;
+      for (const u of sva.tick) u();
+      for (const [ok, started] of outcomes) {
+        if (ok) { if (pass) yield* pass(); }
+        else if (kind !== 'cover') { if (fail) yield* fail(); else failMsg(started)(); }
+      }
+    };
+    const proc = new Process(k, c.proc, function* () { for (;;) { yield wait(); yield* tick(); } });
+    scope.procs.push(proc);
+    k.addProcess(proc);
   }
 
   killProcess(p: Process) {

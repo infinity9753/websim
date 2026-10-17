@@ -62,7 +62,12 @@ export type Stmt =
   | { k: 'fork'; branches: Stmt[]; join: 'all' | 'any' | 'none'; name?: string; decls?: Item[]; loc?: Loc }
   | { k: 'disable_fork'; loc?: Loc }
   | { k: 'foreach'; arr: string; vars: string[]; body: Stmt; loc?: Loc }
+  | { k: 'assert'; kind: 'assert' | 'assume' | 'cover'; c: Expr; pass?: Stmt; fail?: Stmt; label?: string; loc?: Loc }  // SV immediate assertion
   | { k: 'null'; loc?: Loc };
+
+/** One element of an SVA sequence: wait `delay` clock ticks (##), then `e` holds `rep` consecutive ticks ([*]). */
+export interface SeqElem { delay: [Expr, Expr | null]; e: Expr; rep: [Expr, Expr | null] }  // null = $ (unbounded)
+export interface PropSpec { clock?: SensItem[]; disable?: Expr; seq: SeqElem[]; impl?: '|->' | '|=>'; cons?: SeqElem[]; not?: boolean }
 
 export interface DeclName { name: string; init?: Expr; unpacked?: [Expr, Expr][] }
 
@@ -101,7 +106,8 @@ export type Item =
   | { k: 'genfor'; v: string; init: Expr; cond: Expr; stepExpr: Expr; name?: string; items: Item[]; vhdl?: { from: Expr; to: Expr; down: boolean }; loc?: Loc }
   | { k: 'genif'; c: Expr; then: Item[]; else?: Item[]; name?: string; loc?: Loc }
   | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range?: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
-  | { k: 'use'; pkg: string; loc?: Loc };
+  | { k: 'use'; pkg: string; loc?: Loc }
+  | { k: 'sva'; kind: 'assert' | 'assume' | 'cover'; prop: PropSpec; pass?: Stmt; fail?: Stmt; label?: string; loc?: Loc };  // concurrent assertion
 
 export interface Unit {
   kind: 'module' | 'entity' | 'architecture' | 'package' | 'package_body';

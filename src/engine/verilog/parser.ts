@@ -1,5 +1,5 @@
 // Verilog (IEEE 1364 subset + common SystemVerilog) recursive-descent parser.
-import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName } from '../ast';
+import { CompileError, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem } from '../ast';
 import { lexVerilog, parseTimescale, preprocess, type Macro, type Token } from './lexer';
 import { fromBits } from '../logic';
 
@@ -158,6 +158,94 @@ class VParser {
     return n.t === 'op' && n.v === '.' && this.peek(2).t === 'id' && this.peek(3).t === 'id';
   }
 
+  // ---------- assertions ----------
+  seqDecls = new Map<string, SeqElem[]>();
+  propDecls = new Map<string, PropSpec>();
+  defaultClock?: SensItem[];
+
+  /** [label:] assert|assume|cover property ( spec ) action_block */
+  parseConcurrent(label?: string): Item {
+    const loc = this.loc();
+    const kind = this.ident() as 'assert' | 'assume' | 'cover';
+    this.expect('property');
+    this.expect('(');
+    let prop: PropSpec;
+    if (this.tok.t === 'id' && this.propDecls.has(this.tok.v) && this.peek().v === ')') prop = { ...this.propDecls.get(this.ident())! };
+    else prop = this.parsePropSpec();
+    this.expect(')');
+    prop.clock ??= this.defaultClock;
+    if (!prop.clock) this.err('Concurrent assertion needs a clock: @(posedge clk) or default clocking', loc);
+    const { pass, fail } = this.actionBlock();
+    return { k: 'sva', kind, prop, pass, fail, label, loc };
+  }
+
+  actionBlock(): { pass?: Stmt; fail?: Stmt } {
+    if (this.accept(';')) return {};
+    let pass: Stmt | undefined;
+    if (!this.is('else')) pass = this.stmt();
+    const fail = this.accept('else') ? this.stmt() : undefined;
+    return { pass, fail };
+  }
+
+  parsePropSpec(): PropSpec {
+    let clock: SensItem[] | undefined, disable: Expr | undefined;
+    if (this.accept('@')) clock = this.eventControl() as SensItem[];
+    if (this.accept('disable')) { this.expect('iff'); this.expect('('); disable = this.expr(); this.expect(')'); }
+    if (this.tok.t === 'id' && this.propDecls.has(this.tok.v) && (this.peek().v === ')' || this.peek().v === ';')) {
+      const p = this.propDecls.get(this.ident())!;
+      return { ...p, clock: clock ?? p.clock, disable: disable ?? p.disable };
+    }
+    const not = this.accept('not');
+    const seq = this.parseSeq();
+    let impl: PropSpec['impl'], cons: SeqElem[] | undefined;
+    if (this.isOp('|->') || this.isOp('|=>')) { impl = this.tok.v as PropSpec['impl']; this.pos++; cons = this.parseSeq(); }
+    return { clock, disable, seq, impl, cons, not: not || undefined };
+  }
+
+  parseSeq(): SeqElem[] {
+    const out: SeqElem[] = [];
+    const zero = num(0), one = num(1);
+    for (let first = true; ; first = false) {
+      let delay: [Expr, Expr | null] = [zero, zero];
+      if (this.accept('##')) {
+        if (this.accept('[')) {
+          const lo = this.expr();
+          this.expect(':');
+          const hi = this.tok.v === '$' ? (this.pos++, null) : this.expr();
+          this.expect(']');
+          delay = [lo, hi];
+        } else { const d = this.primary(); delay = [d, d]; }
+      } else if (!first) break;
+      // a parenthesised sub-sequence or a named sequence is spliced in
+      let sub: SeqElem[] | null = null;
+      if (this.isOp('(')) {
+        const save = this.pos;
+        this.pos++;
+        try { const inner = this.parseSeq(); if (inner.length > 1 && this.accept(')')) sub = inner; else this.pos = save; } catch { this.pos = save; }
+      } else if (this.tok.t === 'id' && this.seqDecls.has(this.tok.v) && !(this.peek().t === 'op' && ['(', '.', '['].includes(this.peek().v))) {
+        sub = this.seqDecls.get(this.ident())!;
+      }
+      if (sub) {
+        const [h, ...rest] = sub;
+        const add = (a: Expr, b: Expr | null): Expr | null => (b === null ? null : { k: 'bin', op: '+', l: a, r: b });
+        out.push({ ...h, delay: [add(delay[0], h.delay[0])!, delay[1] && h.delay[1] ? add(delay[1], h.delay[1]) : null] }, ...rest);
+        continue;
+      }
+      const e = this.expr();
+      let rep: [Expr, Expr | null] = [one, one];
+      if (this.isOp('[') && this.peek().v === '*') {
+        this.pos += 2;
+        const lo = this.expr();
+        let hi: Expr | null = lo;
+        if (this.accept(':')) hi = this.tok.v === '$' ? (this.pos++, null) : this.expr();
+        this.expect(']');
+        rep = [lo, hi];
+      }
+      out.push({ delay, e, rep });
+    }
+    return out;
+  }
+
   peekNotTypeStart(): boolean {
     const t = this.tok;
     return !(NET_TYPES.has(t.v) || VAR_TYPES.has(t.v) || t.v === 'signed' || this.typedefs.has(t.v));
@@ -276,7 +364,40 @@ class VParser {
     if (this.accept(';')) return;
     const v = t.v;
     if (t.t !== 'id') this.err(`near "${t.v}": syntax error, unexpected ${t.v}`);
+    if (this.peek().t === 'op' && this.peek().v === ':' && ['assert', 'assume', 'cover'].includes(this.peek(2).v)) {
+      this.pos += 2;
+      items.push(this.parseConcurrent(v));
+      return;
+    }
+    if ((v === 'assert' || v === 'assume' || v === 'cover') && this.peek().v === 'property') { items.push(this.parseConcurrent()); return; }
     switch (v) {
+      case 'property': case 'sequence': {
+        this.pos++;
+        const name = this.ident();
+        if (this.isOp('(')) this.err(`${v} arguments are not supported`);
+        this.expect(';');
+        const p = this.parsePropSpec();
+        this.accept(';');
+        this.expect(v === 'property' ? 'endproperty' : 'endsequence');
+        if (this.accept(':')) this.ident();
+        if (v === 'sequence') {
+          if (p.impl || p.not) this.err('A sequence cannot contain an implication', loc);
+          this.seqDecls.set(name, p.seq);
+        } else this.propDecls.set(name, p);
+        return;
+      }
+      case 'default':
+        if (this.peek().v === 'clocking') {
+          this.pos += 2;
+          if (this.tok.t === 'id') this.ident();
+          this.expect('@');
+          this.defaultClock = this.eventControl() as SensItem[];
+          this.expect(';');
+          this.expect('endclocking');
+          if (this.accept(':')) this.ident();
+          return;
+        }
+        break;
       case 'input': case 'output': case 'inout': {
         this.pos++;
         const isVar = this.tok.t === 'id' && VAR_TYPES.has(this.tok.v);
@@ -602,6 +723,27 @@ class VParser {
       }
       this.err(`near "${t.v}": syntax error, unexpected ${t.v}`);
     }
+    if (t.t === 'id' && this.peek().t === 'op' && this.peek().v === ':' && !['default'].includes(t.v)) {
+      // statement label: name: stmt
+      this.pos += 2;
+      const inner = this.stmt();
+      if (inner.k === 'assert') inner.label = t.v;
+      else if ((inner.k === 'block' || inner.k === 'fork') && !inner.name) inner.name = t.v;
+      return inner;
+    }
+    if ((t.v === 'assert' || t.v === 'assume' || t.v === 'cover') && t.t === 'id') {
+      const nx = this.peek();
+      if (nx.v === '(' || nx.v === 'final' || nx.v === '#') {
+        this.pos++;
+        if (!this.accept('final') && this.accept('#')) this.primary(); // deferred: #0
+        this.expect('(');
+        const c = this.expr();
+        this.expect(')');
+        const { pass, fail } = this.actionBlock();
+        return { k: 'assert', kind: t.v as 'assert', c, pass, fail, loc };
+      }
+      if (nx.v === 'property') this.err('Concurrent assertions inside procedural code are not supported; place them at module level');
+    }
     switch (t.v) {
       case 'begin': case 'fork': {
         this.pos++;
@@ -823,7 +965,7 @@ class VParser {
   }
 
   selects(e: Expr): Expr {
-    while (this.isOp('[')) {
+    while (this.isOp('[') && !(this.peek().t === 'op' && (this.peek().v === '*' || this.peek().v === '='))) {
       const loc = this.loc();
       this.pos++;
       const a = this.expr();
