@@ -66,7 +66,8 @@ function histDeltas(): PHist[] {
   const out: PHist[] = [];
   for (const s of d.kernel.signals) {
     const n = s.times.length;
-    const was = sent.get(s.id) ?? 0;
+    let was = sent.get(s.id) ?? 0;
+    if (epochs.get(s.id) !== s.histEpoch) { epochs.set(s.id, s.histEpoch); if (s.histEpoch) was = 0; }
     // always resend the last entry we sent: it may have been overwritten within the same time step
     const from = Math.max(0, Math.min(was - 1, n));
     if (n === was && was > 0 && s.vals[n - 1] === lastSentVal.get(s.id) && !s.forced === !forcedSent.get(s.id)) continue;
@@ -78,6 +79,7 @@ function histDeltas(): PHist[] {
   return out;
 }
 const lastSentVal = new Map<number, Vec>();
+const epochs = new Map<number, number>();
 const forcedSent = new Map<number, boolean>();
 
 function flush() {
@@ -101,7 +103,8 @@ function flush() {
   }
   if (d) {
     const k = d.kernel;
-    st.time = { now: k.now, delta: k.deltaCount, finished: k.finished, procStates: k.processes.map(p => (p.done ? 'd' : p.gen ? 'w' : 'r')).join('') };
+    const hs = k.historyStats();
+    st.time = { now: k.now, delta: k.deltaCount, finished: k.finished, procStates: k.processes.map(p => (p.done ? 'd' : p.gen ? 'w' : 'r')).join(''), histBytes: hs.bytes, histEntries: hs.entries };
     st.hist = histDeltas();
     const p = k.pausedAt;
     st.paused = p ? { file: p.file, line: p.line, proc: p.proc.name } : null;

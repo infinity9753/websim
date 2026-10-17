@@ -32,7 +32,7 @@ export interface PState {
   design?: PDesign | null;
   scope?: string | null;
   waves?: PWave[];
-  time?: { now: number; delta: number; finished: boolean; procStates: string };
+  time?: { now: number; delta: number; finished: boolean; procStates: string; histBytes?: number; histEntries?: number };
   hist?: PHist[];
   running?: boolean;
   paused?: { file: string; line: number; proc: string } | null;

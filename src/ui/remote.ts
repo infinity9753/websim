@@ -48,7 +48,7 @@ export interface MScope {
 }
 export interface MDesign {
   top: string; loaded: string[]; root: MScope; allScopes: MScope[];
-  kernel: { now: number; resolution: number; deltaCount: number; finished: boolean; signals: MSignal[] };
+  kernel: { now: number; resolution: number; deltaCount: number; finished: boolean; signals: MSignal[]; histBytes?: number };
 }
 export interface MWave { id: number; path: string; name: string; sig: MSignal; radix: Radix; dividerLabel?: string; expanded?: boolean }
 
@@ -173,7 +173,7 @@ export class RemoteSession {
       }
       if (st.time && this.design) {
         const k = this.design.kernel;
-        k.now = st.time.now; k.deltaCount = st.time.delta; k.finished = st.time.finished;
+        k.now = st.time.now; k.deltaCount = st.time.delta; k.finished = st.time.finished; k.histBytes = st.time.histBytes;
         const ps = st.time.procStates;
         for (const p of this.procs) { const c = ps[p.idx]; p.done = c === 'd'; p.gen = c === 'w' ? true : null; }
       }

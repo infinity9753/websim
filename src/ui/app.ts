@@ -103,6 +103,7 @@ export class App {
       now: h('b', {}, '0 ns'),
       delta: h('b', {}, '0'),
       scope: h('b', {}, '—'),
+      mem: h('b', {}, '—'),
       lib: h('b', {}, 'work'),
     };
     const st = this.status;
@@ -111,6 +112,7 @@ export class App {
       h('span', {}, 'Now: ', st.now),
       h('span', {}, 'Delta: ', st.delta),
       h('span', {}, 'Region: ', st.scope),
+      h('span', { title: 'Recorded waveform history (estimate). Use "log -cap" / "nolog" to limit.' }, 'History: ', st.mem),
       h('span', { class: 'grow' }),
       h('span', {}, 'Library: ', st.lib),
       h('span', {}, 'WebSim — clean-room HDL simulator'));
@@ -354,6 +356,8 @@ export class App {
     st.state.textContent = s.running ? 'Running' : d ? (d.kernel.finished ? 'Finished' : s.paused ? `Paused at ${s.paused.file}:${s.paused.line}` : 'Ready') : 'No design';
     st.now.textContent = fmtTime(s.now, s.resolution);
     st.delta.textContent = String(d?.kernel.deltaCount ?? 0);
+    const hb = d?.kernel.histBytes;
+    st.mem.textContent = hb === undefined ? '—' : hb > 1048576 ? `${(hb / 1048576).toFixed(1)} MB` : `${Math.ceil(hb / 1024)} KB`;
     st.scope.textContent = s.scope ? `sim:${s.scope.path}` : '—';
     for (const b of this.runBtns) b.disabled = !d || s.running;
     for (const b of this.simBtns) b.disabled = !s.lastVsim || s.running;

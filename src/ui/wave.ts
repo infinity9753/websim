@@ -390,9 +390,14 @@ export class WaveView {
     const ts = sig.times;
     const boff = bit === undefined ? -1 : this.bitOffset(w, bit);
     const val = boff < 0 ? (i: number) => sig.vals[i] : (i: number) => L.slice(sig.vals[i], boff, 1);
-    if (!ts.length) return;
     const now = this.session.now;
+    if (!ts.length) return;
     const tStart = this.t0, tEnd = Math.min(this.t(W), now);
+    if (ts[0] > 0 && ts[0] > tStart) {
+      // history before the first recorded sample was trimmed (or never logged)
+      ctx.fillStyle = 'rgba(140,150,165,0.18)';
+      ctx.fillRect(Math.max(0, this.x(tStart)), y + 4, Math.min(W, this.x(ts[0])) - Math.max(0, this.x(tStart)), ROW_H - 9);
+    }
     if (tEnd < tStart) return;
     // last change <= tStart
     let lo = 0, hi = ts.length - 1;

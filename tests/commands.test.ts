@@ -113,3 +113,21 @@ describe('memory commands (#14)', () => {
     expect(fs['out.mem']).toContain('@f 7f');
   });
 });
+
+describe('history limits and logging (#28)', () => {
+  it('caps per-signal history, supports nolog and reports stats', async () => {
+    const lines: string[] = [];
+    const fs: Record<string, string> = { 'c.v': `module c; reg clk = 0; reg [7:0] n = 0; always #1 clk = ~clk; always @(posedge clk) n <= n + 1; endmodule` };
+    const s = new Session({ read: x => fs[x], list: () => Object.keys(fs) }, m => lines.push(m));
+    await s.exec('vlog c.v; vsim c; log -cap 100; nolog /c/n');
+    await s.exec('run 1000');
+    const clk = s.findSignal('/c/clk')!.obj.sig, n = s.findSignal('/c/n')!.obj.sig;
+    expect(clk.times.length).toBeLessThanOrEqual(100);
+    expect(clk.times[0]).toBeGreaterThan(0);              // oldest history trimmed
+    expect(clk.times.at(-1)).toBe(1000_000);
+    expect(n.times.length).toBe(1);                        // only the time-0 sample
+    expect(n.value.toNumber()).toBe(500 % 256);            // value still tracked (500 edges, 8-bit wrap)
+    await s.exec('simstats');
+    expect(lines.at(-1)).toMatch(/Signals: 2 \(1 logged\)/);
+  });
+});

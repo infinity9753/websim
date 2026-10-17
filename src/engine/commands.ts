@@ -119,7 +119,10 @@ export class Session {
       case 'radix': this.radix(rest); return;
       case 'wave': if (rest[0] === 'zoom' || rest[0] === 'zoomfull') this.emit('zoomfull'); return;
       case 'view': return;
-      case 'log': case 'transcript': case 'onfinish': case 'onbreak': case 'onerror': case 'set': case 'configure': case 'update': case 'quietly': case 'TreeUpdate': case 'WaveRestoreCursors': case 'WaveRestoreZoom': return;
+      case 'log': return this.logCmd(rest, true);
+      case 'nolog': return this.logCmd(rest, false);
+      case 'simstats': return this.simstats();
+      case 'transcript': case 'onfinish': case 'onbreak': case 'onerror': case 'set': case 'configure': case 'update': case 'quietly': case 'TreeUpdate': case 'WaveRestoreCursors': case 'WaveRestoreZoom': return;
       case 'bp': return this.bp(rest);
       case 'bd': return this.bd(rest);
       case 'step': return this.step(rest);
@@ -158,6 +161,8 @@ export class Session {
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
       '  write format wave <file.do>        save the wave window setup (restore with "do")',
+      '  log|nolog [-r] <paths>|-all        choose which signals record waveforms;  log -cap <n>',
+      '  simstats                           history size / memory estimate',
       '  mem list | display | save -outfile f | load -infile f  <memory>',
       '  bp [<file> <line> [{cond}]]        set / list breakpoints;  bd <id>|<file> <line>|all',
       '  step [-over]                       execute one statement (step into / over)',
@@ -740,6 +745,33 @@ export class Session {
       }
     }
     throw new Error(`mem: unknown subcommand "${sub}"`);
+  }
+
+  // ------------------------------------------------------------ logging / history
+  logCmd(args: string[], on: boolean) {
+    const d = this.requireDesign();
+    const k = d.kernel;
+    const capI = args.indexOf('-cap');
+    if (capI >= 0) {
+      const n = Number(args[capI + 1]);
+      if (!Number.isInteger(n) || n < 16) throw new Error('log -cap <n>: n must be an integer >= 16');
+      k.histCap = n;
+      this.out(`History limit set to ${n} transitions per signal.`);
+      return;
+    }
+    const all = args.includes('-all');
+    const recursive = args.includes('-r') || args.includes('-recursive');
+    const pats = args.filter(a => !a.startsWith('-'));
+    let n = 0;
+    if (all) { for (const s of k.signals) { s.logged = on; n++; } }
+    else for (const p of pats.length ? pats : ['*']) for (const m of this.matchSignals(p, recursive)) { m.obj.sig.logged = on; n++; }
+    this.out(`${on ? 'Logging' : 'Stopped logging'} ${n} signal(s).`);
+  }
+
+  simstats() {
+    const d = this.requireDesign();
+    const st = d.kernel.historyStats();
+    this.out(`Signals: ${st.signals} (${st.logged} logged)  Transitions: ${st.entries}  History: ~${(st.bytes / 1048576).toFixed(1)} MB  Limit: ${d.kernel.histCap}/signal${d.kernel.histTrimmed ? `  (trimmed ${d.kernel.histTrimmed}x)` : ''}`);
   }
 
   /** Wave window setup as a re-runnable do-file. */

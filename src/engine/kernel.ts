@@ -19,6 +19,10 @@ export class Signal {
   enumNames?: string[];
   kind: 'in' | 'out' | 'inout' | 'internal' = 'internal';
   isReal = false;
+  /** Record value changes for waveforms (see `log` / `nolog`). */
+  logged = true;
+  /** Incremented whenever old history is discarded. */
+  histEpoch = 0;
 
   constructor(
     public path: string,
@@ -202,6 +206,22 @@ export class Kernel {
     this.pausedAt = null;
   }
 
+  /** Maximum recorded transitions per signal before old history is trimmed. */
+  histCap = 1_000_000;
+  histTrimmed = 0;
+
+  /** Total recorded transitions and a rough byte estimate. */
+  historyStats(): { signals: number; logged: number; entries: number; bytes: number } {
+    let entries = 0, logged = 0, bytes = 0;
+    for (const s of this.signals) {
+      if (s.logged) logged++;
+      entries += s.times.length;
+      // number + Vec object (+ BigInt payload grows with width)
+      bytes += s.times.length * (8 + 72 + Math.ceil(s.w / 64) * 16);
+    }
+    return { signals: this.signals.length, logged, entries, bytes };
+  }
+
   /** $dumpfile / $dumpvars requests: written out by the session after each run. */
   dumpFile = 'dump.vcd';
   dumpItems: { path: string; levels: number }[] | null = null;
@@ -233,11 +253,21 @@ export class Kernel {
     sig.lastEvent = this.now;
     sig.lastStamp = this.stamp;
     const ts = sig.times;
-    if (ts.length && ts[ts.length - 1] === this.now) {
+    if (!sig.logged) { /* value only */ }
+    else if (ts.length && ts[ts.length - 1] === this.now) {
       sig.vals[sig.vals.length - 1] = v;
       // collapse no-op glitch inside one time step
       if (sig.vals.length > 1 && sig.vals[sig.vals.length - 2].equals(v)) { ts.pop(); sig.vals.pop(); }
-    } else { ts.push(this.now); sig.vals.push(v); }
+    } else {
+      ts.push(this.now); sig.vals.push(v);
+      if (ts.length > this.histCap) {
+        // keep the most recent half; older waveform data is dropped
+        const drop = ts.length - (this.histCap >> 1);
+        ts.splice(0, drop); sig.vals.splice(0, drop);
+        sig.histEpoch++;
+        this.histTrimmed++;
+      }
+    }
     if (sig.listeners) for (const l of [...sig.listeners]) l(sig);
   }
 
