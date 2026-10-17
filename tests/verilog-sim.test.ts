@@ -156,3 +156,14 @@ endmodule`,
     expect(out[0]).toBe('0a ff');
   });
 });
+
+describe('port collapsing', () => {
+  it('output reg collapsed onto a wire starts as X', () => {
+    const { design } = simulate({
+      't.v': `module c(input clk, output reg [1:0] q); always @(posedge clk) q <= 1; endmodule
+              module t; reg clk = 0; wire [1:0] q; c u(clk, q); initial #1 clk = 1; endmodule`,
+    }, 't', 0);
+    const q = design.root.objects.find(o => o.name === 'q')!.sig;
+    expect(q.vals[0].toString()).toBe('xx');
+  });
+});

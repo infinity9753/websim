@@ -245,7 +245,9 @@ export class Session {
     if (!top) throw new Error('vsim: no design specified. Usage: vsim [lib.]top');
     const m = /^(\w+)\.(.+)$/.exec(top);
     if (m) { lib = m[1]; top = m[2]; }
+    const sameTop = this.lastVsim?.top === top;
     if (this.design) this.quitSim(true);
+    if (!sameTop) this.waves = [];
     this.load({ top, lib, generics, res });
   }
 

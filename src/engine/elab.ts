@@ -291,6 +291,11 @@ export class Elaborator {
       if (conn?.expr && parent) {
         const alias = this.aliasTarget(conn.expr, parent, t);
         if (alias) {
+          // a variable port (output reg / VHDL port) collapsed onto an undriven net starts unknown, not Z
+          if ((port.isVar || lang === 'vhdl') && !alias.drivers && alias.value.b === L.mask(alias.w) && alias.value.a === 0n) {
+            alias.value = port.init ? this.constEval(port.init, scope, alias.w) : this.defaultValue(t);
+            alias.prev = alias.value;
+          }
           scope.syms.set(port.name, { k: 'sig', sig: alias, t });
           scope.objects.push({ name: port.name, sig: alias, dir, t });
           return;

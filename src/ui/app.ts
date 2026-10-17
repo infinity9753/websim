@@ -268,7 +268,9 @@ export class App {
     this.library.onOpenFile = (f) => this.editors.open(f);
     this.objects.onForce = (p) => void this.forceDialog(p);
 
-    s.on('sim', () => { if (s.design) this.left.activate('sim'); this.updateStatus(); });
+    s.on('sim', () => { if (s.design) { this.left.activate('sim'); this.right.activate('wave'); } this.updateStatus(); });
+    let waveCount = 0;
+    s.on('wave', () => { if (s.design && s.waves.length > waveCount) this.right.activate('wave'); waveCount = s.waves.length; });
     s.on('time', () => this.updateStatus());
     s.on('scope', () => this.updateStatus());
     s.on('running', () => this.updateStatus());
