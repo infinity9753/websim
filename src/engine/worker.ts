@@ -57,6 +57,10 @@ function snapDesign(): PDesign | null {
     top: d.top, loaded: d.loaded, resolution: d.kernel.resolution,
     root: snapScope(d.root, procIdx),
     signals: [...sigs.values()].map(s => ({ id: s.id, path: s.path, name: s.name, w: s.w, msb: s.msb, lsb: s.lsb, signed: s.signed, enumNames: s.enumNames, driven: !!s.drivers?.length, isReal: s.isReal })),
+    df: (d.dataflow ?? []).map(n => ({
+      kind: n.kind, name: n.name, scope: n.scope, file: n.file, line: n.line,
+      reads: n.reads.filter(s => sigs.has(s.id)).map(s => s.id), writes: n.writes.filter(s => sigs.has(s.id)).map(s => s.id),
+    })),
   };
 }
 

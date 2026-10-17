@@ -327,6 +327,8 @@ export class ObjectsPanel {
   private valueCells = new Map<HTMLElement, MSignal>();
   private vr: VRows;
   onForce?: (path: string) => void;
+  onSelect?: (path: string) => void;
+  onShowDataflow?: (path: string) => void;
 
   constructor(private session: Session) {
     this.tbody = h('tbody');
@@ -383,7 +385,7 @@ export class ObjectsPanel {
         title: path,
         onclick: (e: MouseEvent) => {
           if (e.ctrlKey || e.metaKey) { if (this.sel.has(path)) this.sel.delete(path); else this.sel.add(path); }
-          else this.sel = new Set([path]);
+          else { this.sel = new Set([path]); this.onSelect?.(o.sig.path); }
           this.render();
         },
         ondblclick: () => this.session.addWavePaths([path]),
@@ -399,6 +401,7 @@ export class ObjectsPanel {
           contextMenu(e.clientX, e.clientY, [
             { label: t('Add to Wave'), action: () => this.session.addWavePaths([...this.sel]) },
             { label: t('Add to List'), action: () => { void this.session.exec(`add list ${[...this.sel].join(' ')}`); } },
+            { label: t('Show in Dataflow'), action: () => this.onShowDataflow?.(o.sig.path) },
             { label: t('Force…'), action: () => this.onForce?.(path) },
             { label: t('NoForce'), action: () => { void this.session.exec(`noforce ${path}`); }, disabled: !o.sig.forced },
             { label: t('Examine'), action: () => { void this.session.exec(`examine ${path}`); } },

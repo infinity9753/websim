@@ -17,7 +17,8 @@ export interface PScope {
   procs: PProc[];
   children: PScope[];
 }
-export interface PDesign { top: string; loaded: string[]; resolution: number; root: PScope; signals: PSignal[] }
+export interface PDFNode { kind: 'process' | 'assign' | 'port' | 'udp'; name: string; scope: string; file?: string; line?: number; reads: number[]; writes: number[] }
+export interface PDesign { top: string; loaded: string[]; resolution: number; root: PScope; signals: PSignal[]; df?: PDFNode[] }
 
 /** History update for one signal: drop entries from `from` onward, then append. */
 export interface PHist { id: number; from: number; t: number[]; v: PVec[]; forced: boolean; value: PVec }

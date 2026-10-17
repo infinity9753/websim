@@ -47,6 +47,10 @@ export class WaveView {
   private raf = 0;
   private drag: { x0: number; x1: number; active: boolean } | null = null;
   private colors: Record<string, string> = {};
+  /** A single signal was selected (for the Dataflow window). */
+  onSelect?: (path: string) => void;
+  onCursor?: () => void;
+  onShowDataflow?: (path: string) => void;
   private dragRow: number | null = null;
   /** Display rows: a wave entry, or one bit of an expanded bus; y/h in pixels. */
   private rows: { w: WaveEntry; bit?: number; y: number; h: number; depth: number }[] = [];
@@ -692,7 +696,8 @@ export class WaveView {
         if (ev.ctrlKey || ev.metaKey || ev.shiftKey) this.cursor2 = t; else this.cursor = t;
         const row = this.rowAt(ev.clientY);
         const w = this.rows[row]?.w;
-        if (w && ev.clientY - rect.top > HEAD_H) { this.selected = new Set([w.id]); this.lastSel = w.id; this.rebuildRows(); }
+        if (w && ev.clientY - rect.top > HEAD_H) { this.selected = new Set([w.id]); this.lastSel = w.id; this.rebuildRows(); this.notifySelect(); }
+        this.onCursor?.();
         this.render();
       };
       document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
@@ -724,6 +729,7 @@ export class WaveView {
       } else this.selected = new Set([id]);
       this.lastSel = id;
       this.rebuildRows();
+      this.notifySelect();
     };
     this.names.addEventListener('click', onClick);
     this.values.addEventListener('click', onClick);
@@ -765,6 +771,7 @@ export class WaveView {
         ...(w.parent !== undefined ? [{ label: t('Remove from group'), action: () => setAll(x => { x.parent = undefined; }) }] : []),
         '-',
         ...(w.sig.w > 1 && !isAnalog(w) ? [{ label: this.expanded.has(w.id) ? t('Collapse bits') : t('Expand bits'), action: () => this.toggleExpand(w.id) }] : []),
+        { label: t('Show in Dataflow'), action: () => this.onShowDataflow?.(w.path) },
         { label: t('Jump to next transition'), action: () => this.jumpEdge(1) },
         { label: t('Jump to previous transition'), action: () => this.jumpEdge(-1) },
         '-',
@@ -784,6 +791,12 @@ export class WaveView {
       e.dataTransfer!.effectAllowed = 'move';
     });
     this.names.addEventListener('dragend', () => { this.dragRow = null; });
+  }
+
+  private notifySelect() {
+    if (this.selected.size !== 1) return;
+    const w = this.session.waves.find(x => this.selected.has(x.id));
+    if (w && !isMarkerRow(w)) this.onSelect?.(w.path);
   }
 
   private async askNumber(title: string, cur: number): Promise<number | null> {

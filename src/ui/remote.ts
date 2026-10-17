@@ -46,8 +46,10 @@ export interface MScope {
   children: MScope[];
   up: MScope | null;
 }
+export interface MDFNode { kind: 'process' | 'assign' | 'port' | 'udp'; name: string; scope: string; file?: string; line?: number; reads: MSignal[]; writes: MSignal[] }
 export interface MDesign {
   top: string; loaded: string[]; root: MScope; allScopes: MScope[];
+  df: MDFNode[];
   kernel: { now: number; resolution: number; deltaCount: number; finished: boolean; signals: MSignal[]; histBytes?: number };
 }
 export interface MList { path: string; name: string; sig: MSignal; radix: Radix }
@@ -228,7 +230,9 @@ export class RemoteSession {
       return sc;
     };
     const root = mk(d.root, null);
-    this.design = { top: d.top, loaded: d.loaded, root, allScopes: all, kernel: { now: 0, resolution: d.resolution, deltaCount: 0, finished: false, signals: [...this.sigs.values()] } };
+    const ref = (ids: number[]) => ids.map(i => this.sigs.get(i)!).filter(Boolean);
+    const df = (d.df ?? []).map(n => ({ ...n, reads: ref(n.reads), writes: ref(n.writes) }));
+    this.design = { top: d.top, loaded: d.loaded, root, allScopes: all, df, kernel: { now: 0, resolution: d.resolution, deltaCount: 0, finished: false, signals: [...this.sigs.values()] } };
     this.scope = root;
   }
 

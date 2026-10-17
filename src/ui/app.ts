@@ -8,6 +8,7 @@ import { Transcript } from './transcript';
 import { Editors } from './editor';
 import { WaveView } from './wave';
 import { ListView } from './list';
+import { DataflowView } from './dataflow';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
@@ -36,6 +37,7 @@ export class App {
   editors: Editors;
   wave: WaveView;
   list: ListView;
+  dataflow: DataflowView;
   left = new Pane('pane-left');
   mid = new Pane('pane-mid');
   right = new Pane('pane-right');
@@ -68,6 +70,7 @@ export class App {
     this.editors = new Editors(this.right, this.fs);
     this.wave = new WaveView(this.session);
     this.list = new ListView(this.session);
+    this.dataflow = new DataflowView(this.session);
     this.project = new ProjectPanel(this.fs, this.session);
     this.library = new LibraryPanel(this.session);
     this.structure = new StructurePanel(this.session);
@@ -93,6 +96,7 @@ export class App {
     this.mid.onActivate = (id) => { if (id === 'memory') this.memory.show(); };
     this.right.add('wave', t('Wave'), this.wave.el);
     this.right.add('list', t('List'), this.list.el, { activate: false });
+    this.right.add('dataflow', t('Dataflow'), this.dataflow.el, { activate: false });
     this.bottom.add('transcript', t('Transcript'), this.transcript.el);
 
     const s1 = h('div', { class: 'split-v1', role: 'separator', 'aria-orientation': 'vertical' });
@@ -184,6 +188,7 @@ export class App {
         { label: t('Memory'), action: () => { this.showMid(); this.mid.activate('memory'); } },
         { label: t('Wave'), action: () => this.right.activate('wave') },
         { label: t('List'), action: () => this.right.activate('list') },
+        { label: t('Dataflow'), action: () => this.right.activate('dataflow') },
         '-',
         { label: t('Theme: Auto'), action: () => this.setTheme('auto') },
         { label: t('Theme: Light'), action: () => this.setTheme('light') },
@@ -295,6 +300,16 @@ export class App {
     this.project.onExport = (f) => download(f, this.fs.read(f) ?? '');
     this.project.onRunDo = (f) => void this.cmd(`do ${f}`);
     this.search.onOpen = (f, l) => this.editors.open(f, l);
+    // Dataflow follows the signal selected in Objects or the Wave window and shows values at the wave cursor
+    const showDf = (p: string) => { this.dataflow.show(p); this.right.activate('dataflow'); };
+    this.dataflow.getTime = () => this.wave.cursor ?? s.now;
+    this.dataflow.onOpenSource = (f, l) => { if (this.fs.has(f)) this.editors.open(f, l); };
+    this.dataflow.onAddWave = (paths) => s.addWavePaths(paths);
+    this.wave.onSelect = (p) => this.dataflow.show(p);
+    this.wave.onCursor = () => this.dataflow.refresh();
+    this.wave.onShowDataflow = showDf;
+    this.objects.onSelect = (p) => this.dataflow.show(p);
+    this.objects.onShowDataflow = showDf;
     this.project.onNewIn = (d) => void this.newFile(d);
     this.project.onNewFolder = async (parent) => {
       const n = await promptText(t('New folder'), t('Folder name'), parent ? `${parent}/` : '');

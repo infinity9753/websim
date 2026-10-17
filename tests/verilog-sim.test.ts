@@ -550,3 +550,27 @@ describe('gate-level modelling (#33)', () => {
     expect(out.filter(l => /=/.test(l) && !l.startsWith('**'))).toEqual(['4 z=0', '5 y=0', '12 z=1', '13 y=1', '24 z=0', '25 y=0']);
   });
 });
+
+describe('dataflow relations (#41)', () => {
+  it('collects the signals each process / assign / port reads and writes', () => {
+    const { design } = simulate({
+      't.v': `module add(input [3:0] a, b, output [3:0] y); assign y = a + b; endmodule
+      module t; reg clk = 0; reg [3:0] q = 0, d; wire [3:0] s; reg [1:0] i = 0; reg [3:0] m [0:3];
+        add u(.a(q), .b(4'd1), .y(s));
+        always @(posedge clk) q <= s;
+        always @* begin d = m[i]; d[i] = clk; end
+        task bump; q = q + 1; endtask
+        initial begin #1 bump; end
+      endmodule`,
+    }, 't', 10);
+    const df = design.dataflow!;
+    const fmt = (n: (typeof df)[number]) => `${n.kind} ${n.scope} ${n.name}: ${n.reads.map(s => s.name).sort().join(',')} -> ${n.writes.map(s => s.name).sort().join(',')}`;
+    const lines = df.map(fmt);
+    // ports a and y collapse onto q and s, so the adder's assign reads q and drives s directly
+    expect(lines).toContain('assign /t/u assign: b,q -> s');
+    expect(lines).toContain('port /t/u port b:  -> b');
+    expect(lines.find(l => l.includes('#ALWAYS#4'))).toBe('process /t #ALWAYS#4: clk,s -> q');
+    expect(lines.find(l => l.includes('#ALWAYS#5'))).toBe('process /t #ALWAYS#5: clk,i -> d'); // m is a memory, not a signal
+    expect(lines.find(l => l.includes('#INITIAL#7'))).toBe('process /t #INITIAL#7: q -> q'); // through the task body
+  });
+});

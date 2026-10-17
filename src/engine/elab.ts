@@ -95,8 +95,14 @@ export interface DesignResolver {
   findPackage(name: string, lib?: string): { pkg: Unit; body?: Unit; libName: string } | undefined;
 }
 
+/** A driver/reader of signals for the Dataflow window: a process, continuous assignment, port connection or UDP. */
+export interface DFNode { kind: 'process' | 'assign' | 'port' | 'udp'; name: string; scope: string; file?: string; line?: number; reads: Signal[]; writes: Signal[] }
+
+const STMT_CHILD = new Set(['t', 'f', 'body', 'stmts', 'branches', 'init', 'step']);
+
 export interface Design {
   root: Scope;
+  dataflow?: DFNode[];
   kernel: Kernel;
   top: string;
   loaded: string[];
@@ -278,6 +284,8 @@ export class Elaborator {
   objSeq = 0;
   objCls: (ClassInfo | undefined)[] = [];
   tmpSeq = 0;
+  /** Drivers/readers collected for the Dataflow window. */
+  dataflow: DFNode[] = [];
   /** Set while elaborating a procedural block's declarations: class-handle initializers run at block entry. */
   deferredInits: Stmt[] | null = null;
 
@@ -316,7 +324,7 @@ export class Elaborator {
     this.k.signals = [...sigs];
     const prec = this.minPrec === Infinity ? 1e6 : this.minPrec;
     this.k.resolution = this.opts.resolutionPs ?? Math.max(1, Math.min(1e6, prec));
-    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines };
+    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines, dataflow: this.dataflow };
   }
 
   parseGenericValue(v: string): Expr {
@@ -2608,6 +2616,9 @@ export class Elaborator {
     for (const s of rc.reads) k.listen(s, wake);
     pending = true;
     k.activate(fire);
+    const W = new Set<Signal>();
+    if (it.conns[0].expr) this.dfLhs(it.conns[0].expr, scope, W, new Set());
+    this.dfRecord('udp', `${it.name} (${u.name})`, scope, it.loc, rc.reads, W);
   }
 
   /** Delay for a new value: rise (to 1), fall (to 0), turn-off (to Z); X takes the smallest (IEEE 1364 §7.14). */
@@ -2654,13 +2665,88 @@ export class Elaborator {
     for (const s of rc.reads) k.listen(s, wake);
     pending = true;
     k.activate(fire);
-    void name;
+    const W = new Set<Signal>();
+    this.dfLhs(lhs, lscope, W, rc.reads as Set<Signal>);
+    const isPort = name.startsWith('port ') || name.startsWith('path ');
+    this.dfRecord(isPort ? 'port' : 'assign', isPort ? name : 'assign', isPort && lscope.up === rscope ? lscope : rscope, lhs.loc ?? rhs.loc, rc.reads, W);
+  }
+
+  // ---------------------------------------------------------- dataflow (static read/write sets)
+
+  private dfSig(name: string, scope: Scope): Signal | null {
+    try { const s = this.lookupName(scope, name); return s?.k === 'sig' ? s.sig : null; } catch { return null; }
+  }
+
+  /** Signals read by an expression. */
+  dfExpr(e: unknown, scope: Scope, out: Set<Signal>) {
+    if (Array.isArray(e)) { for (const x of e) this.dfExpr(x, scope, out); return; }
+    if (!e || typeof e !== 'object' || e instanceof Vec) return;
+    const x = e as Record<string, unknown>;
+    if ((x.k === 'id' || x.k === 'call') && typeof x.name === 'string') { const s = this.dfSig(x.name, scope); if (s) out.add(s); }
+    for (const [key, v] of Object.entries(x)) if (key !== 'loc' && v && typeof v === 'object') this.dfExpr(v, scope, out);
+  }
+
+  /** Signals written by an assignment target (index expressions are reads). */
+  dfLhs(e: Expr, scope: Scope, W: Set<Signal>, R: Set<Signal>) {
+    switch (e.k) {
+      case 'id': { const s = this.dfSig(e.name, scope); if (s) W.add(s); return; }
+      case 'index': this.dfLhs(e.base, scope, W, R); this.dfExpr(e.index, scope, R); return;
+      case 'range': this.dfLhs(e.base, scope, W, R); this.dfExpr([e.msb, e.lsb], scope, R); return;
+      case 'irange': this.dfLhs(e.base, scope, W, R); this.dfExpr([e.start, e.width], scope, R); return;
+      case 'field': this.dfLhs(e.base, scope, W, R); return;
+      case 'concat': for (const p of e.parts) this.dfLhs(p, scope, W, R); return;
+      case 'agg': for (const el of e.elems) this.dfLhs(el.value, scope, W, R); return;
+      case 'call': { const s = this.dfSig(e.name, scope); if (s) W.add(s); this.dfExpr(e.args, scope, R); return; }
+    }
+  }
+
+  dfStmt(s: unknown, scope: Scope, R: Set<Signal>, W: Set<Signal>, depth = 0) {
+    if (Array.isArray(s)) { for (const x of s) this.dfStmt(x, scope, R, W, depth); return; }
+    if (!s || typeof s !== 'object') return;
+    const st = s as Stmt & Record<string, unknown>;
+    if (st.k === 'assign' || st.k === 'vsigassign' || st.k === 'force') {
+      this.dfLhs(st.lhs, scope, W, R);
+      for (const [key, v] of Object.entries(st)) if (key !== 'lhs' && key !== 'loc') this.dfExpr(v, scope, R);
+      return;
+    }
+    if (st.k === 'call' && depth < 4) {
+      const sym = (() => { try { return this.lookupName(scope, scope.mod.lang === 'vhdl' ? st.name.toLowerCase() : st.name); } catch { return undefined; } })();
+      if (sym?.k === 'func') {
+        sym.f.args.forEach((a, i) => { const act = st.args[i]; if (!act) return; if (a.dir !== 'input') this.dfLhs(act, scope, W, R); if (a.dir !== 'output') this.dfExpr(act, scope, R); });
+        // a task body reads and writes signals of its own scope (hierarchically visible ones)
+        const r2 = new Set<Signal>(), w2 = new Set<Signal>();
+        this.dfStmt(sym.f.body, sym.scope, r2, w2, depth + 1);
+        const local = new Set(sym.f.args.map(a => a.name));
+        for (const x of r2) if (!local.has(x.name)) R.add(x);
+        for (const x of w2) if (!local.has(x.name)) W.add(x);
+        return;
+      }
+      this.dfExpr(st.args, scope, R);
+      return;
+    }
+    for (const [key, v] of Object.entries(st)) {
+      if (key === 'loc' || key === 'decls' || !v || typeof v !== 'object') continue;
+      if (STMT_CHILD.has(key)) this.dfStmt(v, scope, R, W, depth);
+      else if (key === 'items' && st.k === 'case') for (const it of v as { labels: Expr[] | null; body: Stmt }[]) { this.dfExpr(it.labels, scope, R); this.dfStmt(it.body, scope, R, W, depth); }
+      else this.dfExpr(v, scope, R);
+    }
+  }
+
+  private dfRecord(kind: DFNode['kind'], name: string, scope: Scope, loc: Loc | undefined, reads: Iterable<Signal | Memory>, writes: Iterable<Signal>) {
+    const r = [...reads].filter((x): x is Signal => x instanceof Signal);
+    this.dataflow.push({ kind, name, scope: scope.path, file: loc?.file, line: loc?.line, reads: [...new Set(r)], writes: [...new Set(writes)] });
   }
 
   compileProcess(it: Extract<Item, { k: 'process' }>, scope: Scope) {
     const lang = scope.mod.lang;
     const line = it.loc?.line ?? 0;
     const pname = it.name ?? (lang === 'vhdl' ? `line__${line}` : `#${it.kind.toUpperCase()}#${line}`);
+    {
+      const R = new Set<Signal>(), W = new Set<Signal>();
+      this.dfStmt(it.body, scope, R, W);
+      if (Array.isArray(it.sens)) this.dfExpr(it.sens, scope, R);
+      this.dfRecord('process', pname, scope, it.loc, R, W);
+    }
     const owner = `${scope.path}/${pname}#${++this.procSeq}`;
     const c = this.ctx(scope, owner);
     c.proc = { name: pname, scope: scope.path, file: it.loc?.file, line };

@@ -274,3 +274,27 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .search-hit:hover { background: var(--sel); color: var(--sel-text); }
 .search-ln { color: var(--text-dim); min-width: 3ch; text-align: right; font-family: var(--mono); }
 .search-hit mark { background: #ffd54a; color: #000; border-radius: 2px; }
+
+/* dataflow (#41) */
+.dataflow { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.df-canvas { flex: 1; overflow: auto; background: var(--w-bg, #0b0f14); }
+.df-title { margin-left: 4px; font-size: 12px; color: var(--text-dim); }
+.df-svg { display: block; font: 11px var(--mono); }
+.df-edge { fill: none; stroke: #5d7a99; stroke-width: 1.2; }
+.df-sig rect { fill: #13291c; stroke: #3fe06a; }
+.df-sig.unknown rect { stroke: #ff5c5c; fill: #2a1414; }
+.df-sig.focus rect { fill: #3fe06a; }
+.df-sig.focus text { fill: #062010; font-weight: 700; }
+.df-sig text { fill: #d6f5dd; }
+.df-sig .df-val { fill: #ffd23f; }
+.df-proc rect { fill: #1a2433; stroke: #6b8cff; }
+.df-assign rect, .df-port rect { stroke: #8fa6c2; stroke-dasharray: 3 2; }
+.df-udp rect { stroke: #ff9f43; }
+.df-proc text { fill: #dfe7f5; }
+.df-proc .df-tag { fill: #ffd23f; font-weight: 700; }
+.df-proc .df-scope { fill: #8fa0b8; font-size: 9px; }
+.df-sig, .df-proc { cursor: pointer; outline: none; }
+.df-sig:hover rect, .df-proc:hover rect, .df-sig:focus rect, .df-proc:focus rect { stroke-width: 2; }
+.df-more { fill: #8fa0b8; font-size: 10px; }
+.df-loop { fill: none; stroke: #ffd23f; stroke-width: 1.3; }
+.dataflow .empty { color: var(--text-dim); padding: 16px; }

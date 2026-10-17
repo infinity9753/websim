@@ -362,4 +362,18 @@ export const KO: Record<string, string> = {
   'Regular expression': '정규식',
   '{0} matches in {1} files': '파일 {1}개에서 {0}건 일치',
   'No matches': '일치 항목 없음',
+  // dataflow
+  'Dataflow': '데이터플로',
+  'Back': '뒤로',
+  'Forward': '앞으로',
+  'Add the signals shown to the wave': '보이는 신호를 파형에 추가',
+  'Select a signal in the Objects or Wave window (or right-click ▸ Show in Dataflow).': '오브젝트 창이나 파형 창에서 신호를 선택하세요 (또는 오른쪽 클릭 ▸ 데이터플로에서 보기).',
+  'Dataflow of {0}': '{0} 의 데이터플로',
+  '+{0} more': '+{0}개 더',
+  'no driver': '구동원 없음',
+  'no readers': '읽는 곳 없음',
+  'Click: follow · Double-click: add to wave': '클릭: 따라가기 · 더블 클릭: 파형에 추가',
+  'Click: open source': '클릭: 소스 열기',
+  'Feedback: this process also reads the signal': '피드백: 이 프로세스가 이 신호를 읽기도 합니다',
+  'Show in Dataflow': '데이터플로에서 보기',
 };
