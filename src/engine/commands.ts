@@ -27,7 +27,9 @@ export interface WaveEntry {
   dividerLabel?: string;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug';
+
+export interface Breakpoint { id: number; file: string; line: number; cond?: string; enabled: boolean }
 
 interface CompiledSrc { file: string; lang: 'verilog' | 'vhdl'; lib: string }
 
@@ -46,6 +48,10 @@ export class Session {
   fileStatus = new Map<string, 'ok' | 'error'>();
   private listeners = new Map<Ev, Set<() => void>>();
   private waveSeq = 1;
+  breakpoints: Breakpoint[] = [];
+  private bpSeq = 1;
+  /** Compile designs with statement hooks (breakpoints / stepping). */
+  debug = true;
   private forceTimers: { cancelled: boolean }[] = [];
 
   constructor(public fs: VFS, public print: (msg: string, kind?: MsgKind) => void) {}
@@ -110,7 +116,10 @@ export class Session {
       case 'wave': if (rest[0] === 'zoom' || rest[0] === 'zoomfull') this.emit('zoomfull'); return;
       case 'view': return;
       case 'log': case 'transcript': case 'onfinish': case 'onbreak': case 'onerror': case 'set': case 'configure': case 'update': return;
-      case 'when': case 'bp': case 'step': this.out(`** Warning: '${cmd}' is not implemented in this version.`, 'warn'); return;
+      case 'bp': return this.bp(rest);
+      case 'bd': return this.bd(rest);
+      case 'step': return this.step(rest);
+      case 'when': this.out(`** Warning: '${cmd}' is not implemented in this version.`, 'warn'); return;
       case 'show': return this.show(rest);
       case 'describe': return this.describe(rest);
       case 'find': return this.find(rest);
@@ -141,6 +150,8 @@ export class Session {
       '  find signals <pattern>             list signals',
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
+      '  bp [<file> <line> [{cond}]]        set / list breakpoints;  bd <id>|<file> <line>|all',
+      '  step [-over]                       execute one statement (step into / over)',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
       '  ls, pwd, echo, history, clear, help',
     ].join('\n'));
@@ -233,6 +244,7 @@ export class Session {
 
   // ------------------------------------------------------------ simulation
   vsim(args: string[]) {
+    this.debug = !args.includes('-nodebug');
     let res: number | undefined;
     const generics = new Map<string, string>();
     let lib: string | undefined;
@@ -243,6 +255,7 @@ export class Session {
       if (a.startsWith('-g') || a.startsWith('-G')) { const [k, v] = a.slice(2).split('='); generics.set(k, v); continue; }
       if (a === '-lib') { lib = args[++i]; continue; }
       if (a === '-do') { i++; continue; }
+      if (a === '-nodebug' || a === '-debug') continue;
       if (a.startsWith('-') || a.startsWith('+')) continue;
       top = a;
     }
@@ -257,7 +270,7 @@ export class Session {
 
   private load(o: { top: string; lib?: string; generics: Map<string, string>; res?: number }) {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n) }, { generics: o.generics, resolutionPs: o.res });
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);
@@ -271,6 +284,7 @@ export class Session {
     for (const w of d.warnings) this.out(`** Warning: ${w}`, 'warn');
     this.design = d;
     this.scope = d.root;
+    this.installBreakpoints();
     this.lastVsim = o;
     this.promptN = 1;
     // rebind existing waves by path (restart)
@@ -357,6 +371,7 @@ export class Session {
       case 'stopped':
         if (k.lastStopInfo) { this.out(k.lastStopInfo); k.lastStopInfo = ''; }
         else this.out('Simulation stop requested.');
+        this.emit('debug');
         break;
       case 'error':
         this.out(`** Fatal: ${k.errorMsg}`, 'err');
@@ -365,6 +380,137 @@ export class Session {
     }
     if (k.dumpItems) this.writeDump();
     this.emit('time');
+  }
+
+  // ------------------------------------------------------------ breakpoints / stepping
+  get paused() { return this.design?.kernel.pausedAt ?? null; }
+
+  installBreakpoints() {
+    const k = this.design?.kernel;
+    if (!k) return;
+    k.breakpoints.clear();
+    for (const b of this.breakpoints) {
+      if (!b.enabled) continue;
+      let cond: (() => boolean) | undefined;
+      if (b.cond) {
+        try { cond = this.compileCond(b.cond); }
+        catch (e) { this.out(`** Warning: breakpoint ${b.id} condition ignored: ${(e as Error).message}`, 'warn'); }
+      }
+      k.breakpoints.set(`${b.file}:${b.line}`, { cond });
+    }
+  }
+
+  /** Nearest executable line at or after `line` (within 10 lines), or null. */
+  executableLine(file: string, line: number): number | null {
+    const lines = this.design?.execLines;
+    if (!lines) return line;
+    for (let l = line; l < line + 10; l++) if (lines.has(`${file}:${l}`)) return l;
+    return null;
+  }
+
+  loadBreakpoints(list: { file: string; line: number; cond?: string }[]) {
+    this.breakpoints = list.map(b => ({ id: this.bpSeq++, file: b.file, line: b.line, cond: b.cond, enabled: true }));
+    this.installBreakpoints();
+    this.emit('debug');
+  }
+
+  addBreakpoint(file: string, line: number, cond?: string): Breakpoint | null {
+    const l = this.executableLine(file, line);
+    if (l === null) { this.out(`** Warning: No executable statement at ${file}:${line}.`, 'warn'); return null; }
+    let b = this.breakpoints.find(x => x.file === file && x.line === l);
+    if (b) { b.cond = cond; b.enabled = true; }
+    else { b = { id: this.bpSeq++, file, line: l, cond, enabled: true }; this.breakpoints.push(b); }
+    this.installBreakpoints();
+    this.emit('debug');
+    return b;
+  }
+
+  removeBreakpoint(file: string, line: number) {
+    this.breakpoints = this.breakpoints.filter(b => !(b.file === file && b.line === line));
+    this.installBreakpoints();
+    this.emit('debug');
+  }
+
+  toggleBreakpoint(file: string, line: number) {
+    if (this.breakpoints.some(b => b.file === file && b.line === line)) this.removeBreakpoint(file, line);
+    else this.addBreakpoint(file, line);
+  }
+
+  bp(args: string[]) {
+    const pos = args.filter(a => !a.startsWith('-'));
+    if (args.includes('-del') || args.includes('-delete')) return this.bd(pos);
+    if (!pos.length) {
+      if (!this.breakpoints.length) { this.out('No breakpoints.'); return; }
+      for (const b of this.breakpoints) this.out(`bp ${b.id}: ${b.file}:${b.line}${b.cond ? ` {${b.cond}}` : ''}${b.enabled ? '' : ' (disabled)'}`);
+      return;
+    }
+    let file = pos[0], lineS = pos[1], cond = pos[2];
+    const m = /^(.+):(\d+)$/.exec(file);
+    if (m) { file = m[1]; cond = pos[1]; lineS = m[2]; }
+    const line = Number(lineS);
+    if (!file || !Number.isInteger(line) || line <= 0) throw new Error('Usage: bp <file> <line> [{condition}]');
+    if (this.fs.read(file) === undefined) throw new Error(`bp: unknown file "${file}"`);
+    const b = this.addBreakpoint(file, line, cond);
+    if (b) this.out(`bp ${b.id}: ${b.file}:${b.line}${b.cond ? ` {${b.cond}}` : ''}`);
+  }
+
+  bd(args: string[]) {
+    const pos = args.filter(a => !a.startsWith('-'));
+    if (!pos.length || pos[0] === 'all' || pos[0] === '*') { this.breakpoints = []; }
+    else if (pos.length === 1 && /^\d+$/.test(pos[0])) { const id = Number(pos[0]); this.breakpoints = this.breakpoints.filter(b => b.id !== id); }
+    else {
+      const m = /^(.+):(\d+)$/.exec(pos[0]);
+      const file = m ? m[1] : pos[0], line = Number(m ? m[2] : pos[1]);
+      this.breakpoints = this.breakpoints.filter(b => !(b.file === file && b.line === line));
+    }
+    this.installBreakpoints();
+    this.emit('debug');
+  }
+
+  async step(args: string[]) {
+    const d = this.requireDesign();
+    const k = d.kernel;
+    if (args.includes('-over') || args.includes('-next')) {
+      const p = k.processes.find(x => x.info === k.pausedAt?.proc);
+      k.stepMode = p ? { kind: 'over', proc: p, depth: (p as any).depthAtStop ?? 0 } : { kind: 'into' };
+    } else k.stepMode = { kind: 'into' };
+    if (!this.debug) this.out('** Warning: design was loaded with -nodebug; stepping is unavailable.', 'warn');
+    await this.run(['-continue']);
+    k.stepMode = null;
+  }
+
+  /** Compile a condition such as "/tb/q == 9 && rst != 1" into a predicate over current values. */
+  compileCond(text: string): () => boolean {
+    const toks = text.match(/\s*(==|!=|<=|>=|&&|\|\||[()<>!]|[^\s()<>!=&|]+)/g)?.map(t => t.trim()).filter(Boolean) ?? [];
+    let i = 0;
+    type F = () => L.Vec;
+    const primary = (): F => {
+      const t = toks[i++];
+      if (t === undefined) throw new Error('unexpected end of condition');
+      if (t === '(') { const e = or(); if (toks[i++] !== ')') throw new Error("missing ')'"); return e; }
+      if (t === '!') { const e = primary(); return () => L.lnot(e()); }
+      const sig = this.findSignal(t);
+      if (sig) { const sg = sig.obj.sig; return () => sg.value; }
+      if (/^[a-zA-Z_]/.test(t) && sig === null && !/^[xXzZ]$/.test(t)) throw new Error(`unknown signal "${t}"`);
+      const v = parseValue(t, 64);
+      return () => v;
+    };
+    const cmp = (): F => {
+      const l = primary();
+      const op = toks[i];
+      if (['==', '!=', '<', '>', '<=', '>='].includes(op)) {
+        i++;
+        const r = primary();
+        const f = { '==': L.caseEq, '!=': L.caseNeq, '<': L.lt, '>': L.gt, '<=': L.le, '>=': L.ge }[op]!;
+        return () => f(l().withSign(false), r().withSign(false));
+      }
+      return l;
+    };
+    const and = (): F => { let l = cmp(); while (toks[i] === '&&') { i++; const a = l, b = cmp(); l = () => L.land(a(), b()); } return l; };
+    const or = (): F => { let l = and(); while (toks[i] === '||') { i++; const a = l, b = and(); l = () => L.lor(a(), b()); } return l; };
+    const e = or();
+    if (i < toks.length) throw new Error(`unexpected "${toks[i]}" in condition`);
+    return () => L.isTrue(e());
   }
 
   // ------------------------------------------------------------ VCD

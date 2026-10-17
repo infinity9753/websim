@@ -47,6 +47,8 @@ export const ICONS: Record<string, string> = {
   zoomcursor: S('<rect x="1.5" y="3.5" width="13" height="9" fill="var(--ic-paper)" stroke="var(--ic-line)"/><path d="M8 3.5v9" stroke="#d4a017" stroke-width="2"/>'),
   prevedge: S('<path d="M10 3v10M10 8H3M6 5L3 8l3 3" fill="none" stroke="var(--ic-blue)" stroke-width="1.6"/>'),
   nextedge: S('<path d="M6 3v10M6 8h7M10 5l3 3-3 3" fill="none" stroke="var(--ic-blue)" stroke-width="1.6"/>'),
+  stepinto: S('<path d="M8 2v8M5 7l3 3 3-3" fill="none" stroke="var(--ic-blue)" stroke-width="1.8"/><circle cx="8" cy="13" r="1.8" fill="var(--ic-green)"/>'),
+  stepover: S('<path d="M3 9a5 5 0 0 1 10 0" fill="none" stroke="var(--ic-blue)" stroke-width="1.8"/><path d="M13.5 5.5V9.5H9.5" fill="none" stroke="var(--ic-blue)" stroke-width="1.8"/><circle cx="8" cy="13" r="1.8" fill="var(--ic-green)"/>'),
   trash: S('<path d="M3.5 4.5h9l-1 9.5h-7z" fill="var(--ic-paper)" stroke="var(--ic-line)"/><path d="M2.5 4h11M6 2.5h4" stroke="var(--ic-line)" stroke-width="1.4"/>'),
   up: S('<path d="M8 3l5 6H3z" fill="var(--ic-line)"/>'),
   down: S('<path d="M8 13l5-6H3z" fill="var(--ic-line)"/>'),

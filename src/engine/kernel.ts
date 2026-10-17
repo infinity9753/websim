@@ -149,6 +149,34 @@ export class Kernel {
   randSeed = 0;
   started = false;
   lastStopInfo = '';
+  // ---- debugging: breakpoints and stepping
+  breakpoints = new Map<string, { cond?: () => boolean }>();
+  stepMode: { kind: 'into' } | { kind: 'over'; proc: Process; depth: number } | null = null;
+  /** Location where execution is currently paused (for the UI). */
+  pausedAt: { file: string; line: number; proc: ProcInfo } | null = null;
+  /** Statements executed in the current process activation (zero-delay loop guard). */
+  ops = 0;
+  get dbgOn() { return this.stepMode !== null || this.breakpoints.size > 0; }
+
+  /** Called before every statement when debugging is active; yields 'stop' to pause there. */
+  *hook(file: string, line: number, depth: number): Generator<Wait, void, void> {
+    const p = this.current;
+    let hit = false;
+    const sm = this.stepMode;
+    if (sm) hit = sm.kind === 'into' || (sm.proc === p && depth <= sm.depth);
+    if (!hit) {
+      const bp = this.breakpoints.get(`${file}:${line}`);
+      if (bp && (!bp.cond || bp.cond())) hit = true;
+    }
+    if (!hit || !p) return;
+    this.stepMode = null;
+    this.pausedAt = { file, line, proc: p.info };
+    this.lastStopInfo = `${sm ? 'Stepped to' : 'Break in Process'} ${p.info.name} at ${file} line ${line}`;
+    (p as any).depthAtStop = depth;
+    yield { t: 'stop' };
+    this.pausedAt = null;
+  }
+
   /** $dumpfile / $dumpvars requests: written out by the session after each run. */
   dumpFile = 'dump.vcd';
   dumpItems: { path: string; levels: number }[] | null = null;
@@ -244,6 +272,7 @@ export class Kernel {
     if (p.done) return;
     if (!p.gen) p.gen = p.start();
     this.current = p;
+    this.ops = 0;
     let r: IteratorResult<Wait, void>;
     try {
       r = p.gen.next();

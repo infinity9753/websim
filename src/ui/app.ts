@@ -20,9 +20,10 @@ interface AppState {
   theme: 'auto' | 'light' | 'dark';
   hideLeft: boolean;
   hideMid: boolean;
+  breakpoints: { file: string; line: number; cond?: string }[];
 }
 
-const DEFAULT_STATE: AppState = { compiled: [], libs: ['work'], runLength: '100 ns', layout: {}, openFiles: [], seen: false, theme: 'auto', hideLeft: false, hideMid: false };
+const DEFAULT_STATE: AppState = { compiled: [], libs: ['work'], runLength: '100 ns', layout: {}, openFiles: [], seen: false, theme: 'auto', hideLeft: false, hideMid: false, breakpoints: [] };
 
 export class App {
   fs = new BrowserFS();
@@ -172,6 +173,10 @@ export class App {
         { label: 'Run -All', kbd: 'F5', action: () => void this.cmd('run -all') },
         { label: 'Continue', action: () => void this.cmd('run -continue') },
         { label: 'Break', kbd: 'Esc', action: () => this.session.breakRun() },
+        { label: 'Step', kbd: 'F11', action: () => void this.cmd('step') },
+        { label: 'Step Over', kbd: 'F10', action: () => void this.cmd('step -over') },
+        { label: 'Toggle Breakpoint at Cursor', kbd: 'F8', action: () => this.toggleBpAtCursor() },
+        { label: 'Delete All Breakpoints', action: () => void this.cmd('bd all') },
         { label: 'Restart', action: () => void this.cmd('restart -f') },
         '-',
         { label: 'End Simulation', action: () => void this.cmd('quit -sim') },
@@ -219,7 +224,9 @@ export class App {
     const runall = b('runall', 'Run -All (F5)', () => void this.cmd('run -all'));
     this.brkBtn = b('brk', 'Break (Esc)', () => this.session.breakRun());
     const restart = b('restart', 'Restart', () => void this.cmd('restart -f'));
-    this.runBtns = [run, cont, runall];
+    const stepIn = b('stepinto', 'Step (F11): run to the next statement', () => void this.cmd('step'));
+    const stepOver = b('stepover', 'Step Over (F10): next statement in this process, skipping task calls', () => void this.cmd('step -over'));
+    this.runBtns = [run, cont, runall, stepIn, stepOver];
     this.simBtns = [restart];
     return h('div', { class: 'toolbar', role: 'toolbar' },
       b('newfile', 'New file', () => this.newFile()),
@@ -232,7 +239,7 @@ export class App {
       b('simulate', 'Start simulation…', () => void this.startSimDialog()),
       restart,
       h('span', { class: 'tb-sep' }),
-      this.runField, run, cont, runall, this.brkBtn,
+      this.runField, run, cont, runall, this.brkBtn, stepIn, stepOver,
       h('span', { class: 'tb-sep' }),
       b('zoomin', 'Zoom in', () => this.wave.zoom(0.5)),
       b('zoomout', 'Zoom out', () => this.wave.zoom(2)),
@@ -266,6 +273,10 @@ export class App {
       s.fileStatus.delete(f);
       this.project.render();
     };
+    this.editors.onToggleBp = (f, l) => { s.toggleBreakpoint(f, l); this.saveBreakpoints(); };
+    s.on('debug', () => this.syncDebug());
+    s.on('running', () => { if (s.running) this.editors.showExec(null); });
+    s.on('sim', () => this.syncDebug());
     this.library.onSimulate = (lib, u) => void this.cmd(`vsim ${lib}.${u}`);
     this.library.onOpenFile = (f) => this.editors.open(f);
     this.objects.onForce = (p) => void this.forceDialog(p);
@@ -284,6 +295,9 @@ export class App {
       const inEditor = (e.target as HTMLElement).closest?.('.cm-editor');
       if (e.key === 'F9') { e.preventDefault(); void this.cmd(`run ${this.runField.value}`); }
       else if (e.key === 'F5') { e.preventDefault(); void this.cmd('run -all'); }
+      else if (e.key === 'F10') { e.preventDefault(); void this.cmd('step -over'); }
+      else if (e.key === 'F11') { e.preventDefault(); void this.cmd('step'); }
+      else if (e.key === 'F8') { e.preventDefault(); this.toggleBpAtCursor(); }
       else if (e.key === 'F7' && !inEditor) { e.preventDefault(); if (e.shiftKey) this.compileFiles(this.project.hdlFiles()); else this.compileCurrent(); }
       else if (e.key === 'F7' && e.shiftKey) { e.preventDefault(); this.compileFiles(this.project.hdlFiles()); }
       else if (e.key === 'Escape' && s.running) { e.preventDefault(); s.breakRun(); }
@@ -294,12 +308,34 @@ export class App {
     });
   }
 
+  private syncDebug() {
+    const byFile = new Map<string, number[]>();
+    for (const b of this.session.breakpoints) (byFile.get(b.file) ?? byFile.set(b.file, []).get(b.file)!).push(b.line);
+    this.editors.setBreakpoints(byFile);
+    const p = this.session.paused;
+    this.editors.showExec(p ? { file: p.file, line: p.line } : null);
+    this.updateStatus();
+  }
+
+  private toggleBpAtCursor() {
+    const n = this.editors.activeName;
+    const line = n ? this.editors.cursorLine(n) : null;
+    if (!n || !line) { this.transcript.print('** Error: Open a source file and place the cursor on a statement.', 'err'); return; }
+    this.session.toggleBreakpoint(n, line);
+    this.saveBreakpoints();
+  }
+
+  private saveBreakpoints() {
+    this.state.breakpoints = this.session.breakpoints.map(b => ({ file: b.file, line: b.line, cond: b.cond }));
+    this.persist();
+  }
+
   private updateStatus() {
     const s = this.session;
     const d = s.design;
     const st = this.status;
     st.ind.classList.toggle('on', s.running);
-    st.state.textContent = s.running ? 'Running' : d ? (d.kernel.finished ? 'Finished' : 'Ready') : 'No design';
+    st.state.textContent = s.running ? 'Running' : d ? (d.kernel.finished ? 'Finished' : s.paused ? `Paused at ${s.paused.file}:${s.paused.line}` : 'Ready') : 'No design';
     st.now.textContent = fmtTime(s.now, s.resolution);
     st.delta.textContent = String(d?.kernel.deltaCount ?? 0);
     st.scope.textContent = s.scope ? `sim:${s.scope.path}` : '—';
@@ -492,6 +528,7 @@ export class App {
   shortcuts() {
     const rows: [string, string][] = [
       ['F7 / Shift+F7', 'Compile current file / all files'], ['F9', 'Run for the run length'], ['F5', 'Run -all'], ['Esc', 'Break a running simulation'],
+      ['F8', 'Toggle breakpoint at the editor cursor (or click the gutter)'], ['F11 / F10', 'Step / Step over'],
       ['Ctrl+S', 'Save file'], ['Ctrl+Alt+N', 'New file'],
       ['Wave: F / I / O / C', 'Zoom full / in / out / center cursor'], ['Wave: Tab / Shift+Tab', 'Next / previous transition'], ['Wave: Del', 'Delete selected signals'],
       ['Wave: Ctrl+wheel', 'Zoom around mouse'], ['Wave: drag', 'Zoom to area'], ['Transcript: ↑ / ↓ / Tab', 'History / completion'],
@@ -505,6 +542,7 @@ export class App {
     t.print('WebSim — browser HDL simulator (clean-room implementation).');
     t.print('Type "help" for commands. Use File ▸ Load Example to try the bundled designs.');
     for (const l of this.state.libs) this.session.libs.ensure(l);
+    this.session.loadBreakpoints(this.state.breakpoints ?? []);
     if (this.fs.empty || !this.state.seen) {
       this.state.seen = true;
       this.persist();

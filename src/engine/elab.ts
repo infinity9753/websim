@@ -72,6 +72,7 @@ export interface Design {
   loaded: string[];
   warnings: string[];
   allScopes: Scope[];
+  execLines: Set<string>;
 }
 
 type Ev = () => Vec;
@@ -118,6 +119,8 @@ const RET = new ReturnEx();
 
 const ONE32 = fromInt(1, 32, true);
 const LOOP_GUARD = 50_000_000;
+// generator-form loops are slower per iteration; a lower bound still catches zero-delay hangs quickly
+const GEN_LOOP_GUARD = 5_000_000;
 
 function err(msg: string, loc?: Loc): never { throw new CompileError(msg, loc); }
 
@@ -174,6 +177,8 @@ const VHDL_STD_TYPES: Record<string, RType> = {
 export interface ElabOptions {
   generics?: Map<string, string>;
   resolutionPs?: number;
+  /** Compile statement hooks so breakpoints and stepping work (slightly slower). */
+  debug?: boolean;
 }
 
 export class Elaborator {
@@ -189,6 +194,8 @@ export class Elaborator {
   pkgScopes = new Map<string, Scope>();
   minPrec = Infinity;
   instDepth = 0;
+  /** "file:line" of every statement that can hold a breakpoint. */
+  execLines = new Set<string>();
 
   constructor(public lib: DesignResolver, host: KernelHost, public opts: ElabOptions = {}) {
     this.k = new Kernel(host);
@@ -222,7 +229,7 @@ export class Elaborator {
     this.k.signals = [...sigs];
     const prec = this.minPrec === Infinity ? 1000 : this.minPrec;
     this.k.resolution = this.opts.resolutionPs ?? Math.max(1, Math.min(1000, prec));
-    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes };
+    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines };
   }
 
   parseGenericValue(v: string): Expr {
@@ -1534,7 +1541,7 @@ export class Elaborator {
         start = bodyGen;
         break;
       case 'always': case 'always_ff':
-        if (body.sync) err(`(vlog-2643) always block has no timing control; this would cause an infinite zero-delay loop.`, it.loc);
+        if (!this.hasTiming(it.body, scope)) err(`(vlog-2643) always block has no timing control; this would cause an infinite zero-delay loop.`, it.loc);
         start = function* () { for (;;) yield* bodyGen(); };
         break;
       case 'always_comb': case 'always_latch': case 'vproc': {
@@ -1546,7 +1553,7 @@ export class Elaborator {
           for (const e of it.sens) this.ex(e, sc);
           sens = [...sc.reads];
         } else {
-          if (body.sync) err(`(vcom-1090) Process without sensitivity list must contain a wait statement.`, it.loc);
+          if (!this.hasTiming(it.body, scope)) err(`(vcom-1090) Process without sensitivity list must contain a wait statement.`, it.loc);
           start = function* () { for (;;) yield* bodyGen(); };
           break;
         }
@@ -1568,7 +1575,40 @@ export class Elaborator {
 
   // ---------------------------------------------------------- statements
 
+  /** Does executing `s` possibly suspend the process? (static check used for infinite-loop diagnostics) */
+  hasTiming(s: Stmt | undefined, scope: Scope, depth = 0): boolean {
+    if (!s || depth > 20) return false;
+    switch (s.k) {
+      case 'delay': case 'event': case 'wait': case 'vwait': return true;
+      case 'assign': return !s.nb && !!(s.delay || s.evctl);
+      case 'sys': return s.name === '$stop';
+      case 'call': {
+        const n = scope.mod.lang === 'vhdl' ? s.name.toLowerCase() : s.name;
+        if (scope.mod.lang === 'vhdl' && /(^|\.)(stop)$/.test(n)) return true;
+        const sym = this.lookupName(scope, n);
+        return sym?.k === 'func' && sym.f.isTask && this.hasTiming(sym.f.body, sym.scope, depth + 1);
+      }
+      case 'block': return s.stmts.some(x => this.hasTiming(x, scope, depth));
+      case 'if': return this.hasTiming(s.t, scope, depth) || this.hasTiming(s.f, scope, depth);
+      case 'case': return s.items.some(i => this.hasTiming(i.body, scope, depth));
+      case 'for': case 'vfor': case 'while': case 'loop': case 'repeat': case 'forever': return this.hasTiming(s.body, scope, depth);
+    }
+    return false;
+  }
+
   st(s: Stmt, c: Ctx): SC {
+    const r = this.stInner(s, c);
+    if (!this.opts.debug || c.func || !c.proc || !s.loc || s.k === 'block' || s.k === 'null') return r;
+    // debug hook: may pause the process right before this statement
+    const file = s.loc.file, line = s.loc.line, depth = c.depth;
+    this.execLines.add(`${file}:${line}`);
+    const k = this.k;
+    const sync = r.sync, gen = r.gen;
+    if (sync) return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth); sync(); } };
+    return { gen: function* () { if (k.dbgOn) yield* k.hook(file, line, depth); yield* gen!(); } };
+  }
+
+  stInner(s: Stmt, c: Ctx): SC {
     switch (s.k) {
       case 'null': return { sync: () => {} };
       case 'block': return this.blockStmt(s, c);
@@ -1602,7 +1642,8 @@ export class Elaborator {
           return { sync: () => { let n = 0; if (i) i(); while (L.truth(C()) === 1) { if (++n > LOOP_GUARD) loopGuard(s.loc); try { b(); } catch (x) { if (x instanceof LoopEx && !x.label) { if (!x.next) break; } else throw x; } if (st) st(); } } };
         }
         const ig = I ? asGen(I) : null, sg = S ? asGen(S) : null, bg = asGen(B);
-        return { gen: function* () { if (ig) yield* ig(); while (L.truth(C()) === 1) { yield* bg(); if (sg) yield* sg(); } } };
+        const kf = this.k;
+        return { gen: function* () { if (ig) yield* ig(); while (L.truth(C()) === 1) { if (++kf.ops > GEN_LOOP_GUARD) loopGuard(s.loc); yield* bg(); if (sg) yield* sg(); } } };
       }
       case 'vfor': return this.vforStmt(s, c);
       case 'while': case 'loop': {
@@ -1621,9 +1662,11 @@ export class Elaborator {
           // VHDL loop with waits
         }
         const bg = asGen(B);
+        const kw = this.k;
         return {
           gen: function* () {
             while (L.truth(C()) === 1) {
+              if (++kw.ops > GEN_LOOP_GUARD) loopGuard(s.loc);
               try { yield* bg(); } catch (x) { if (catchLoop(x) === 'break') break; }
             }
           },
@@ -1638,9 +1681,10 @@ export class Elaborator {
       }
       case 'forever': {
         const B = this.st(s.body, c);
-        if (B.sync) err('(vlog-2643) forever loop without timing control.', s.loc);
+        if (!this.hasTiming(s.body, c.scope)) err('(vlog-2643) forever loop without timing control.', s.loc);
         const bg = asGen(B);
-        return { gen: function* () { for (;;) yield* bg(); } };
+        const kv = this.k;
+        return { gen: function* () { for (;;) { if (++kv.ops > GEN_LOOP_GUARD) loopGuard(s.loc); yield* bg(); } } };
       }
       case 'delay': {
         const D = this.delayFn(s.d, c);

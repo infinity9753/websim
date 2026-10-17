@@ -1,7 +1,8 @@
 // Source editor tabs backed by CodeMirror.
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, StateEffect, StateField, type Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, keymap } from '@codemirror/view';
+import { Decoration, type DecorationSet, keymap, gutter, GutterMarker } from '@codemirror/view';
+import { RangeSet } from '@codemirror/state';
 import { StreamLanguage } from '@codemirror/language';
 import { verilog } from '@codemirror/legacy-modes/mode/verilog';
 import { vhdl } from '@codemirror/legacy-modes/mode/vhdl';
@@ -33,6 +34,40 @@ const errorLineField = StateField.define<DecorationSet>({
   provide: f => EditorView.decorations.from(f),
 });
 
+// ---- breakpoints gutter and current execution line
+const setBpLines = StateEffect.define<number[]>();
+class BpMarker extends GutterMarker {
+  toDOM() { const d = document.createElement('div'); d.className = 'cm-bp-dot'; d.title = 'Breakpoint (click to remove)'; return d; }
+}
+const bpMarker = new BpMarker();
+const bpField = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty,
+  update(set, tr) {
+    set = set.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setBpLines)) {
+        const doc = tr.state.doc;
+        const ranges = [...new Set(e.value)].filter(l => l >= 1 && l <= doc.lines).sort((a, b) => a - b).map(l => bpMarker.range(doc.line(l).from));
+        set = RangeSet.of(ranges);
+      }
+    }
+    return set;
+  },
+});
+const setExecLine = StateEffect.define<number | null>();
+const execField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) if (e.is(setExecLine)) {
+      if (e.value === null) deco = Decoration.none;
+      else { const line = tr.state.doc.line(Math.min(Math.max(1, e.value), tr.state.doc.lines)); deco = Decoration.set([Decoration.line({ class: 'cm-exec-line' }).range(line.from)]); }
+    }
+    return deco;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
+
 interface Doc { name: string; view: EditorView; dirty: boolean; page: HTMLElement }
 
 export class Editors {
@@ -40,6 +75,9 @@ export class Editors {
   onSaved?: (name: string) => void;
   onCompile?: (name: string) => void;
   onChange?: () => void;
+  onToggleBp?: (name: string, line: number) => void;
+  private bpLines = new Map<string, number[]>();
+  private exec: { file: string; line: number } | null = null;
 
   constructor(private pane: Pane, private fs: BrowserFS) {}
 
@@ -63,6 +101,16 @@ export class Editors {
             basicSetup,
             this.langExt(name),
             errorLineField,
+            bpField,
+            execField,
+            gutter({
+              class: 'cm-bp-gutter',
+              markers: v => v.state.field(bpField),
+              initialSpacer: () => bpMarker,
+              domEventHandlers: {
+                mousedown: (view, block) => { this.onToggleBp?.(name, view.state.doc.lineAt(block.from).number); return true; },
+              },
+            }),
             EditorState.tabSize.of(2),
             keymap.of([
               { key: 'Mod-s', preventDefault: true, run: () => { this.save(name); return true; } },
@@ -80,6 +128,7 @@ export class Editors {
       });
       d = { name, view, dirty: false, page };
       this.docs.set(name, d);
+      view.dispatch({ effects: [setBpLines.of(this.bpLines.get(name) ?? []), setExecLine.of(this.exec?.file === name ? this.exec.line : null)] });
       this.pane.add('file:' + name, name, page, { closable: true, onClose: () => this.closing(name), tooltip: name });
       this.onChange?.();
     }
@@ -96,6 +145,19 @@ export class Editors {
     this.docs.delete(name);
     this.onChange?.();
     return true;
+  }
+
+  /** Show breakpoint markers: map of file -> lines. */
+  setBreakpoints(byFile: Map<string, number[]>) {
+    this.bpLines = byFile;
+    for (const [n, d] of this.docs) d.view.dispatch({ effects: setBpLines.of(byFile.get(n) ?? []) });
+  }
+
+  /** Highlight the statement where simulation is paused (null clears). */
+  showExec(loc: { file: string; line: number } | null) {
+    this.exec = loc;
+    for (const [n, d] of this.docs) d.view.dispatch({ effects: setExecLine.of(loc && loc.file === n ? loc.line : null) });
+    if (loc && this.fs.has(loc.file)) { this.open(loc.file); this.gotoLine(loc.file, loc.line); }
   }
 
   gotoLine(name: string, line: number, mark = false) {
@@ -123,6 +185,11 @@ export class Editors {
   }
 
   saveAll() { for (const n of this.docs.keys()) if (this.docs.get(n)!.dirty) this.save(n); }
+
+  cursorLine(name: string): number | null {
+    const d = this.docs.get(name);
+    return d ? d.view.state.doc.lineAt(d.view.state.selection.main.head).number : null;
+  }
 
   get activeName(): string | null {
     const a = this.pane.active;
