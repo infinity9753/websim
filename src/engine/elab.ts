@@ -1408,22 +1408,27 @@ export class Elaborator {
     return leaf(callFn, ret.w, ret.signed, { enumNames: ret.enumNames, isTime: rt?.isTime });
   }
 
+  /** Positional + named association, then default values for omitted parameters. */
   orderArgs(f: FuncDecl, args: Expr[], named: (string | null)[] | undefined, loc?: Loc): Expr[] {
-    if (!named || named.every(n => !n)) {
-      // VHDL default values not supported -> exact count
-      return args;
-    }
-    const out: Expr[] = [];
+    const out: (Expr | undefined)[] = [];
     let pos = 0;
-    for (let i = 0; i < args.length; i++) if (!named[i]) out[pos++] = args[i];
+    for (let i = 0; i < args.length; i++) if (!named?.[i]) out[pos++] = args[i];
     for (let i = 0; i < args.length; i++) {
-      const n = named[i];
+      const n = named?.[i];
       if (!n) continue;
       const idx = f.args.findIndex(a => a.name.toLowerCase() === n.toLowerCase());
       if (idx < 0) err(`No parameter named '${n}' in '${f.name}'.`, loc);
+      if (out[idx]) err(`Parameter '${n}' of '${f.name}' is associated more than once.`, loc);
       out[idx] = args[i];
     }
-    return out;
+    if (out.length > f.args.length) return out as Expr[]; // reported by the caller as a count mismatch
+    for (let i = 0; i < f.args.length; i++) {
+      if (out[i]) continue;
+      const d = f.args[i].def;
+      if (!d) err(`Missing actual for parameter '${f.args[i].name}' of '${f.name}' (no default value).`, loc);
+      out[i] = d;
+    }
+    return out as Expr[];
   }
 
   sysFunc(name: string, args: Expr[], c: Ctx, loc?: Loc): Node {

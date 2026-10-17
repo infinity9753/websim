@@ -82,7 +82,7 @@ export interface FuncDecl {
   name: string;
   isTask: boolean;
   ret?: TypeSpec;
-  args: { name: string; dir: 'input' | 'output' | 'inout'; type: TypeSpec; vsig?: boolean }[];
+  args: { name: string; dir: 'input' | 'output' | 'inout'; type: TypeSpec; vsig?: boolean; def?: Expr }[];
   decls: Item[];
   body: Stmt;
   loc?: Loc;

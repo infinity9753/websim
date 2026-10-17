@@ -346,8 +346,8 @@ class VhParser {
         else if (this.accept('out')) dir = 'output';
         else if (this.accept('inout')) dir = 'inout';
         const type = this.subtype();
-        if (this.accept(':=')) this.expr();
-        for (const n of names) args.push({ name: n, dir, type, vsig: cls === 'signal' });
+        const def = this.accept(':=') ? this.expr() : undefined;
+        for (const n of names) args.push({ name: n, dir, type, vsig: cls === 'signal', def });
       } while (this.accept(';'));
       this.expect(')');
     }

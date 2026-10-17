@@ -400,3 +400,25 @@ end;`;
     expect(out[0]).toBe('** Note: 3C 30 8 3 FF');
   });
 });
+
+describe('subprogram default parameters (#22)', () => {
+  it('fills omitted positional and named parameters from defaults', () => {
+    const src = `
+entity t is end;
+architecture a of t is
+  function scale(x : integer; k : integer := 10; off : integer := 1) return integer is
+  begin return x * k + off; end function;
+  procedure say(msg : string; n : integer := 7) is
+  begin report msg & integer'image(n); end procedure;
+begin
+  process begin
+    report integer'image(scale(2)) & " " & integer'image(scale(2, 3)) & " " & integer'image(scale(2, off => 0)) & " " & integer'image(scale(x => 1, k => 5));
+    say("n=");
+    say("n=", 3);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out.filter(l => l.startsWith('**'))).toEqual(['** Note: 21 7 20 6', '** Note: n=7', '** Note: n=3']);
+  });
+});
