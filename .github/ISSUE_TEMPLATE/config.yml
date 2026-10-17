@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 사용자 가이드 / User guide
+    url: https://github.com/infinity9753/websim/blob/main/docs/GUIDE.md
+    about: 튜토리얼과 명령 레퍼런스 / Tutorials and command reference

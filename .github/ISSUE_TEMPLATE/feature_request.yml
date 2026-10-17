@@ -1,0 +1,22 @@
+name: 기능 제안 / Feature request
+description: 새 언어 기능, 명령, 창 / New language feature, command or window
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 필요한 것 / What do you need?
+      description: 해결하려는 문제와 사용 예 / The problem and how you would use it
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: 예제 / Example
+      description: HDL 코드, 명령, 또는 기대하는 출력 / HDL code, commands or expected output
+      render: text
+  - type: textarea
+    id: reference
+    attributes:
+      label: 참고 / References
+      description: 관련 표준 조항(IEEE 1364/1800/1076) 등 / Relevant standard clauses, etc.

@@ -1,0 +1,52 @@
+name: 버그 신고 / Bug report
+description: 시뮬레이션 결과나 UI 동작이 잘못된 경우 / Wrong simulation results or UI behaviour
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        재현 가능한 최소 예제가 있으면 가장 빨리 고칠 수 있습니다. / A minimal reproducible example helps the most.
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇이 잘못되었나요? / What happened?
+      description: 기대한 동작과 실제 동작 / Expected vs. actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: HDL 소스 / HDL source
+      description: 문제를 재현하는 최소 코드 / Smallest code that shows the problem
+      render: verilog
+  - type: textarea
+    id: commands
+    attributes:
+      label: 실행한 명령 / Commands
+      description: 트랜스크립트에 입력한 명령 또는 do 파일 / Transcript commands or do-file
+      render: tcl
+      placeholder: |
+        vlog top.v
+        vsim top
+        run -all
+  - type: textarea
+    id: transcript
+    attributes:
+      label: 트랜스크립트 출력 / Transcript output
+      render: text
+  - type: dropdown
+    id: area
+    attributes:
+      label: 영역 / Area
+      options:
+        - Verilog / SystemVerilog
+        - VHDL
+        - 시뮬레이션 커널 / Kernel
+        - 파형·리스트·데이터플로 / Wave, List, Dataflow
+        - 편집기·프로젝트 / Editor, Project
+        - 기타 / Other
+  - type: input
+    id: browser
+    attributes:
+      label: 브라우저 / Browser
+      placeholder: Chrome 140 / Windows 11
