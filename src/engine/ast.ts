@@ -58,6 +58,8 @@ export type Stmt =
   | { k: 'disable'; name: string; loc?: Loc }
   | { k: 'exit'; label?: string; cond?: Expr; next: boolean; loc?: Loc }
   | { k: 'force'; lhs: Expr; rhs?: Expr; release: boolean; loc?: Loc }
+  | { k: 'fork'; branches: Stmt[]; join: 'all' | 'any' | 'none'; name?: string; decls?: Item[]; loc?: Loc }
+  | { k: 'disable_fork'; loc?: Loc }
   | { k: 'null'; loc?: Loc };
 
 export interface DeclName { name: string; init?: Expr; unpacked?: [Expr, Expr][] }

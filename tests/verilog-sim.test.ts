@@ -197,3 +197,47 @@ describe('named events (#3)', () => {
     expect(out).toEqual(['done at 15 n=1', 'n=2']);
   });
 });
+
+describe('fork/join (#10)', () => {
+  it('join waits for all, join_any for the first, join_none for none', () => {
+    const { out } = simulate({
+      't.v': `module t;
+        initial begin
+          fork
+            #10 $display("a %0t", $time);
+            #30 $display("b %0t", $time);
+            begin #5; #15 $display("c %0t", $time); end
+          join
+          $display("join %0t", $time);
+          fork
+            #7 $display("d %0t", $time);
+            #50 $display("e %0t", $time);
+          join_any
+          $display("join_any %0t", $time);
+          fork
+            #1 $display("f %0t", $time);
+          join_none
+          $display("join_none %0t", $time);
+          #100 $finish;
+        end
+      endmodule`,
+    }, 't');
+    expect(out.slice(0, 9)).toEqual(['a 10', 'c 20', 'b 30', 'join 30', 'd 37', 'join_any 37', 'join_none 37', 'f 38', 'e 80']);
+  });
+
+  it('disable fork kills remaining branches', () => {
+    const { out } = simulate({
+      't.v': `module t;
+        initial begin
+          fork
+            #5 $display("fast");
+            #50 $display("slow");
+          join_any
+          disable fork;
+          #100 $display("end %0t", $time);
+        end
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['fast', 'end 105']);
+  });
+});

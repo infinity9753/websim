@@ -514,9 +514,13 @@ class VParser {
             this.parseModuleItem(decls, null, new Map());
           } else stmts.push(this.stmt());
         }
+        const endTok = this.tok.v;
         this.pos++;
         if (this.accept(':')) this.ident();
-        if (t.v === 'fork' && stmts.length > 1) this.err('fork/join with multiple statements is not supported', loc);
+        if (t.v === 'fork') {
+          const join = endTok === 'join_any' ? 'any' : endTok === 'join_none' ? 'none' : 'all';
+          return { k: 'fork', branches: stmts, join, name, decls: decls.length ? decls : undefined, loc };
+        }
         return { k: 'block', stmts, name, decls: decls.length ? decls : undefined, loc };
       }
       case 'if': {
@@ -562,7 +566,11 @@ class VParser {
         if (this.accept(';')) return { k: 'wait', c, loc };
         return { k: 'wait', c, body: this.stmt(), loc };
       }
-      case 'disable': { this.pos++; const n = this.ident(); this.expect(';'); return { k: 'disable', name: n, loc }; }
+      case 'disable': {
+        this.pos++;
+        if (this.accept('fork')) { this.expect(';'); return { k: 'disable_fork', loc }; }
+        const n = this.ident(); this.expect(';'); return { k: 'disable', name: n, loc };
+      }
       case 'return': { this.pos++; const e = this.isOp(';') ? undefined : this.expr(); this.expect(';'); return { k: 'return', e, loc }; }
       case 'force': case 'assign': {
         this.pos++; const lhs = this.lvalue(); this.expect('='); const rhs = this.expr(); this.expect(';');

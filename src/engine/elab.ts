@@ -1741,6 +1741,7 @@ export class Elaborator {
         return sym?.k === 'func' && sym.f.isTask && this.hasTiming(sym.f.body, sym.scope, depth + 1);
       }
       case 'block': return s.stmts.some(x => this.hasTiming(x, scope, depth));
+      case 'fork': return s.join !== 'none' && s.branches.some(x => this.hasTiming(x, scope, depth));
       case 'if': return this.hasTiming(s.t, scope, depth) || this.hasTiming(s.f, scope, depth);
       case 'case': return s.items.some(i => this.hasTiming(i.body, scope, depth));
       case 'for': case 'vfor': case 'while': case 'loop': case 'repeat': case 'forever': return this.hasTiming(s.body, scope, depth);
@@ -1876,6 +1877,11 @@ export class Elaborator {
         return { sync: () => { throw RET; } };
       }
       case 'disable': { const n = s.name; return { sync: () => { throw new DisableEx(n); } }; }
+      case 'fork': return this.forkStmt(s, c);
+      case 'disable_fork': {
+        const k = this.k;
+        return { sync: () => { const p = k.current; for (const ch of (p as any)?.forkChildren ?? []) this.killProcess(ch); } };
+      }
       case 'exit': {
         const C = s.cond ? selfEv(this.ex(s.cond, c)) : null;
         const ex = new LoopEx(s.label, s.next);
@@ -1897,6 +1903,47 @@ export class Elaborator {
       }
     }
     err(`Unsupported statement`, (s as any).loc);
+  }
+
+  /** fork ... join / join_any / join_none: each branch runs as its own process. */
+  forkStmt(s: Extract<Stmt, { k: 'fork' }>, c: Ctx): SC {
+    let bc = c;
+    if (s.decls?.length) {
+      const sub = new Scope(s.name ?? 'fork', c.scope.path, c.scope, null, c.scope.mod, 'block');
+      for (const d of s.decls) { if (d.k === 'decl') this.elabDecl({ ...d, kind: 'variable' }, sub); else this.elabItems([d], sub); }
+      bc = { ...c, scope: sub };
+    }
+    const branches = s.branches.map(b => asGen(this.st(b, bc)));
+    const k = this.k;
+    const join = s.join;
+    const info = c.proc ?? { name: 'fork', scope: c.scope.path };
+    const self = this;
+    return {
+      gen: function* () {
+        const parent = k.current as any;
+        // a private counter signal the parent can wait on
+        const left = new Signal(`${info.scope}/#fork`, '#fork', 32, 31, 0, false, fromInt(branches.length, 32));
+        const children: Process[] = [];
+        branches.forEach((g, i) => {
+          const child = new Process(k, { ...info, name: `${info.name}#fork${i}` }, function* () {
+            try { yield* g(); } finally { k.commit(left, fromInt(Number(left.value.a) - 1, 32)); }
+          });
+          children.push(child);
+          k.addProcess(child);
+        });
+        if (parent) parent.forkChildren = [...(parent.forkChildren ?? []), ...children];
+        if (join === 'none' || branches.length === 0) return;
+        const target = join === 'all' ? 0 : branches.length - 1;
+        const test = () => Number(left.value.a) <= target;
+        if (!test()) yield { t: 'sens', sigs: [left], test };
+        void self;
+      },
+    };
+  }
+
+  killProcess(p: Process) {
+    p.done = true;
+    try { p.gen?.return(); } catch { /* ignore */ }
   }
 
   blockStmt(s: Extract<Stmt, { k: 'block' }>, c: Ctx): SC {
