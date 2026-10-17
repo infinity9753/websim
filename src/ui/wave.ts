@@ -35,6 +35,9 @@ export class WaveView {
   private drag: { x0: number; x1: number; active: boolean } | null = null;
   private colors: Record<string, string> = {};
   private dragRow: number | null = null;
+  /** Display rows: a wave entry, or one bit of an expanded bus. */
+  private rows: { w: WaveEntry; bit?: number }[] = [];
+  private expanded = new Set<number>();
 
   constructor(private session: Session) {
     this.names = h('div', { class: 'wave-col wave-names' });
@@ -168,13 +171,21 @@ export class WaveView {
   }
 
   // -------------------------------------------------------------- DOM rows
+  isExpanded(id: number) { return this.expanded.has(id); }
+  toggleExpand(id: number, on?: boolean) {
+    if (on ?? !this.expanded.has(id)) this.expanded.add(id); else this.expanded.delete(id);
+    this.rebuildRows();
+  }
+
   rebuildRows() {
     const waves = this.session.waves;
     clear(this.names); clear(this.values);
     this.names.appendChild(h('div', { class: 'wave-head' }, 'Name'));
     this.values.appendChild(h('div', { class: 'wave-head' }, 'Value'));
+    this.rows = [];
     for (const w of waves) {
       const sel = this.selected.has(w.id) ? ' sel' : '';
+      this.rows.push({ w });
       if (w.dividerLabel !== undefined) {
         this.names.appendChild(h('div', { class: 'wave-row divider' + sel, 'data-id': w.id, draggable: 'true' }, w.dividerLabel));
         this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
@@ -182,8 +193,19 @@ export class WaveView {
       }
       const short = w.path.split('/').filter(Boolean);
       const label = short.length > 2 ? '/' + short.slice(-2).join('/') : w.path;
-      this.names.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id, title: `${w.path}  [${w.sig.w > 1 || w.sig.msb !== 0 ? `${w.sig.msb}:${w.sig.lsb}` : '1 bit'}, ${w.radix}]`, draggable: 'true' }, label));
+      const isBus = w.sig.w > 1;
+      const open = isBus && this.expanded.has(w.id);
+      const tog = isBus ? h('span', { class: 'wave-exp', title: open ? 'Collapse' : 'Expand bits', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleExpand(w.id); } }, open ? '▾' : '▸') : h('span', { class: 'wave-exp' });
+      this.names.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id, title: `${w.path}  [${w.sig.w > 1 || w.sig.msb !== 0 ? `${w.sig.msb}:${w.sig.lsb}` : '1 bit'}, ${w.radix}]`, draggable: 'true' }, tog, label));
       this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
+      if (open) {
+        const step = w.sig.msb >= w.sig.lsb ? -1 : 1;
+        for (let i = w.sig.msb, n = 0; n < w.sig.w; i += step, n++) {
+          this.rows.push({ w, bit: i });
+          this.names.appendChild(h('div', { class: 'wave-row bitrow' + sel, 'data-id': w.id }, `${label}[${i}]`));
+          this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
+        }
+      }
     }
     if (!this.session.design) this.emptyMsg.textContent = 'No simulation loaded. Compile your sources, then Simulate ▸ Start Simulation (or type "vsim <top>").';
     else if (!waves.length) this.emptyMsg.textContent = 'Wave window is empty. Drag signals here from Objects, double-click them, or type "add wave -r /*".';
@@ -207,8 +229,8 @@ export class WaveView {
     const C = this.colors;
     const dpr = window.devicePixelRatio || 1;
     const W = this.width;
-    const waves = this.session.waves;
-    const totalH = waves.length * ROW_H;
+    const rows = this.rows;
+    const totalH = rows.length * ROW_H;
     const viewH = Math.max(0, this.body.clientHeight - HEAD_H);
     const scrollTop = this.body.scrollTop;
     this.track.style.height = totalH + 'px';
@@ -236,13 +258,13 @@ export class WaveView {
     if (xe < W) { ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(Math.max(0, xe), 0, W, H); }
     ctx.font = '11px ' + cssVar(this.el, '--mono');
     ctx.textBaseline = 'middle';
-    const first = Math.floor(offY / ROW_H), last = Math.min(waves.length - 1, Math.floor((offY + H) / ROW_H));
+    const first = Math.floor(offY / ROW_H), last = Math.min(rows.length - 1, Math.floor((offY + H) / ROW_H));
     for (let i = first; i <= last; i++) {
-      const w = waves[i];
+      const { w, bit } = rows[i];
       const y = i * ROW_H - offY;
       if (this.selected.has(w.id)) { ctx.fillStyle = C['--w-sel']; ctx.fillRect(0, y, W, ROW_H); }
       if (w.dividerLabel !== undefined) { ctx.fillStyle = '#2a3a52'; ctx.fillRect(0, y + ROW_H / 2, W, 1); continue; }
-      this.drawSignal(ctx, w, y, W);
+      this.drawSignal(ctx, w, y, W, bit);
     }
     // zoom drag rectangle
     if (this.drag?.active) {
@@ -311,10 +333,17 @@ export class WaveView {
     }
   }
 
-  private drawSignal(ctx: CanvasRenderingContext2D, w: WaveEntry, y: number, W: number) {
+  private bitOffset(w: WaveEntry, bit: number) {
+    const s = w.sig;
+    return s.msb >= s.lsb ? bit - s.lsb : s.lsb - bit;
+  }
+
+  private drawSignal(ctx: CanvasRenderingContext2D, w: WaveEntry, y: number, W: number, bit?: number) {
     const C = this.colors;
     const sig = w.sig;
-    const ts = sig.times, vs = sig.vals;
+    const ts = sig.times;
+    const boff = bit === undefined ? -1 : this.bitOffset(w, bit);
+    const val = boff < 0 ? (i: number) => sig.vals[i] : (i: number) => L.slice(sig.vals[i], boff, 1);
     if (!ts.length) return;
     const now = this.session.now;
     const tStart = this.t0, tEnd = Math.min(this.t(W), now);
@@ -323,7 +352,7 @@ export class WaveView {
     let lo = 0, hi = ts.length - 1;
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ts[m] <= tStart) lo = m; else hi = m - 1; }
     const yHi = y + 4, yLo = y + ROW_H - 5, yMid = y + ROW_H / 2;
-    const scalar = sig.w === 1 && !sig.enumNames && w.radix !== 'ascii';
+    const scalar = boff >= 0 || (sig.w === 1 && !sig.enumNames && w.radix !== 'ascii');
     const xEnd = this.x(tEnd);
     let dense: [number, number, boolean] | null = null;
     const flushDense = () => {
@@ -337,7 +366,7 @@ export class WaveView {
       if (ta > tEnd) break;
       const tb = i + 1 < ts.length ? Math.min(ts[i + 1], tEnd) : tEnd;
       const xa = this.x(ta), xb = i + 1 < ts.length && ts[i + 1] <= tEnd ? this.x(tb) : xEnd;
-      const v = vs[i];
+      const v = val(i);
       if (xb - xa < 1.5 && i + 1 < ts.length && ts[i + 1] <= tEnd) {
         if (!dense) dense = [xa, xb, !v.known]; else { dense[1] = xb; dense[2] = dense[2] || !v.known; }
         continue;
@@ -350,7 +379,7 @@ export class WaveView {
         ctx.lineWidth = 1;
         const xr = Math.round(xa) + 0.5;
         if (ts[i] >= tStart && i > 0) {
-          const pb = vs[i - 1].bit(0);
+          const pb = val(i - 1).bit(0);
           ctx.strokeStyle = b === 'x' || pb === 'x' ? C['--w-x'] : C['--w-sig'];
           ctx.beginPath();
           if (b === 'x' || pb === 'x') { ctx.moveTo(xr, yHi); ctx.lineTo(xr, yLo); }
@@ -410,10 +439,12 @@ export class WaveView {
     const t = this.cursor ?? this.session.now;
     const rows = this.values.querySelectorAll<HTMLElement>('.wave-row');
     rows.forEach((row, i) => {
-      const w = this.session.waves[i];
-      if (!w || w.dividerLabel !== undefined) return;
-      const v = this.cursor === null ? w.sig.value : w.sig.valueAt(t);
-      const s = L.format(v, w.radix === 'symbolic' && !w.sig.enumNames ? 'hex' : w.radix, w.radix !== 'binary' && w.radix !== 'hex' ? w.sig.enumNames : undefined);
+      const r = this.rows[i];
+      if (!r || r.w.dividerLabel !== undefined) return;
+      const w = r.w;
+      const full = this.cursor === null ? w.sig.value : w.sig.valueAt(t);
+      const s = r.bit !== undefined ? full.bit(this.bitOffset(w, r.bit)).toUpperCase().replace(/^([01])$/, '$1')
+        : L.format(full, w.radix === 'symbolic' && !w.sig.enumNames ? 'hex' : w.radix, w.radix !== 'binary' && w.radix !== 'hex' ? w.sig.enumNames : undefined);
       if (row.textContent !== s) row.textContent = s;
     });
   }
@@ -440,7 +471,7 @@ export class WaveView {
   }
 
   private snap(t: number, row: number): number {
-    const w = this.session.waves[row];
+    const w = this.rows[row]?.w;
     if (!w || w.dividerLabel !== undefined) return t;
     const ts = w.sig.times;
     const tol = 6 * this.scale;
@@ -473,7 +504,7 @@ export class WaveView {
         const t = Math.max(0, this.snap(this.t(x0), this.rowAt(ev.clientY)));
         if (ev.ctrlKey || ev.metaKey || ev.shiftKey) this.cursor2 = t; else this.cursor = t;
         const row = this.rowAt(ev.clientY);
-        const w = this.session.waves[row];
+        const w = this.rows[row]?.w;
         if (w && ev.clientY - rect.top > HEAD_H) { this.selected = new Set([w.id]); this.lastSel = w.id; this.rebuildRows(); }
         this.render();
       };
@@ -520,6 +551,7 @@ export class WaveView {
         r('Binary', 'binary'), r('Hexadecimal', 'hex'), r('Unsigned', 'unsigned'), r('Decimal (signed)', 'decimal'), r('Octal', 'octal'), r('ASCII', 'ascii'),
         ...(w.sig.enumNames ? [r('Symbolic', 'symbolic')] : []),
         '-',
+        ...(w.sig.w > 1 ? [{ label: this.expanded.has(w.id) ? 'Collapse bits' : 'Expand bits', action: () => this.toggleExpand(w.id) }] : []),
         { label: 'Jump to next transition', action: () => this.jumpEdge(1) },
         { label: 'Jump to previous transition', action: () => this.jumpEdge(-1) },
         '-',
@@ -564,7 +596,8 @@ export class WaveView {
         e.preventDefault();
         const ws = this.session.waves;
         const from = ws.findIndex(w => w.id === this.dragRow);
-        let to = Math.max(0, Math.min(ws.length - 1, this.rowAt(e.clientY)));
+        const target = this.rows[Math.max(0, Math.min(this.rows.length - 1, this.rowAt(e.clientY)))]?.w;
+        let to = target ? ws.indexOf(target) : ws.length - 1;
         if (from >= 0 && to !== from) { const [item] = ws.splice(from, 1); if (to > from) to = Math.min(to, ws.length); ws.splice(to, 0, item); this.session.emit('wave'); }
         this.dragRow = null;
       }

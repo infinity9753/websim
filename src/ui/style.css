@@ -189,6 +189,8 @@ tr.sel .kind { color: inherit; opacity: .85; }
 .wave-row { height: 22px; display: flex; align-items: center; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #0f141a; cursor: default; }
 .wave-row.sel { background: var(--w-sel); }
 .wave-row.divider { color: #9ad1ff; font-style: italic; }
+.wave-exp { display: inline-block; width: 14px; flex: none; color: #8fb3d9; cursor: pointer; text-align: center; }
+.wave-names .wave-row.bitrow { color: #a9b8c8; padding-left: 26px; }
 .wave-names .wave-row { color: #d8e4f0; }
 .wave-values .wave-row { color: #ffe680; justify-content: flex-end; }
 .wave-split { background: #2a3340; cursor: col-resize; position: sticky; top: 0; height: 100%; }
