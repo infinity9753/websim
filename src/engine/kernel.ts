@@ -79,7 +79,8 @@ export function resolveDrivers(sig: Signal): Vec {
   const m = mask(sig.w);
   if (cov === m) return r;
   const keep = m & ~cov;
-  return new Vec(sig.w, (r.a & cov) | (sig.value.a & keep), (r.b & cov) | (sig.value.b & keep), r.signed);
+  const v = sig.value;
+  return new Vec(sig.w, (r.a & cov) | (v.a & keep), (r.b & cov) | (v.b & keep), r.signed, (r.u & cov) | (v.u & keep), (r.k & cov) | (v.k & keep));
 }
 
 export type Wait =
@@ -220,7 +221,7 @@ export class Kernel {
 
   commit(sig: Signal, v: Vec) {
     const old = sig.value;
-    if (old.a === v.a && old.b === v.b) return;
+    if (old.a === v.a && old.b === v.b && old.u === v.u && old.k === v.k) return;
     sig.prev = old;
     sig.value = v;
     if (sig.isVar) return;
@@ -246,7 +247,7 @@ export class Kernel {
 
   memWrite(m: Memory, idx: number, v: Vec) {
     const old = m.words[idx];
-    if (old.a === v.a && old.b === v.b) return;
+    if (old.a === v.a && old.b === v.b && old.u === v.u && old.k === v.k) return;
     m.words[idx] = v;
     if (m.listeners) for (const l of [...m.listeners]) l(m);
   }

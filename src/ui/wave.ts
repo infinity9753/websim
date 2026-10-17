@@ -421,7 +421,8 @@ export class WaveView {
       if (scalar) {
         const b = v.bit(0);
         const lvl = (c: string) => (c === '1' ? yHi : c === '0' ? yLo : yMid);
-        const col = b === 'x' ? C['--w-x'] : b === 'z' ? C['--w-z'] : C['--w-sig'];
+        const weak = b !== 'x' && b !== 'z' && (v.k & 1n) !== 0n;
+        const col = b === 'x' ? C['--w-x'] : b === 'z' ? C['--w-z'] : weak ? '#1f8f50' : C['--w-sig'];
         ctx.lineWidth = 1;
         const xr = Math.round(xa) + 0.5;
         if (ts[i] >= tStart && i > 0) {

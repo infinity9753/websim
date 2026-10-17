@@ -511,3 +511,45 @@ end;`;
     expect(out[0]).toBe("** Note: 3 101 '0'");
   });
 });
+
+describe('std_logic 9-value system (#26)', () => {
+  it('starts at U, resolves weak drivers and prints 9-value characters', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all;
+entity t is end;
+architecture a of t is
+  signal s : std_logic;
+  signal v : std_logic_vector(3 downto 0);
+  signal bus_line : std_logic;
+  signal n : std_logic := 'U';
+begin
+  bus_line <= 'H';               -- pull-up
+  process begin
+    bus_line <= 'Z';
+    wait for 1 ns;
+    report std_logic'image(s) & " " & to_string(v) & " " & std_logic'image(bus_line) & " " & std_logic'image(not n);
+    bus_line <= '0';
+    v(1 downto 0) <= "L1";
+    wait for 1 ns;
+    report std_logic'image(bus_line) & " " & to_string(v) & " " & boolean'image(v(1) = '0') & " " & boolean'image(v(1) = 'L');
+    bus_line <= 'L';
+    wait for 1 ns;
+    report std_logic'image(bus_line);
+    wait;
+  end process;
+end;`;
+    const { out, design } = simulate({ 't.vhd': src }, 't');
+    expect(out.filter(l => l.startsWith('**'))).toEqual([
+      "** Note: 'U' UUUU 'H' 'U'",
+      "** Note: '0' UUL1 false true",
+      "** Note: 'W'",
+    ]);
+    const s = design.root.objects.find(o => o.name === 's')!.sig;
+    expect(s.vals[0].toString()).toBe('U');
+  });
+
+  it('Verilog stays 4-state', () => {
+    const { out } = simulate({ 'v.v': 'module v; reg [3:0] r; wire w; initial #1 $display("%b %b", r, w); endmodule' }, 'v');
+    expect(out[0]).toBe('xxxx z');
+  });
+});

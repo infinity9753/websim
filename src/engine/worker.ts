@@ -6,7 +6,7 @@ import type { Vec } from './logic';
 import type { FromWorker, PDesign, PHist, PScope, PState, PVec, ToWorker } from './protocol';
 
 const post = (m: FromWorker) => (self as unknown as Worker).postMessage(m);
-const pv = (v: Vec): PVec => ({ w: v.w, a: v.a, b: v.b, s: v.signed });
+const pv = (v: Vec): PVec => (v.rich ? { w: v.w, a: v.a, b: v.b, s: v.signed, u: v.u, k: v.k } : { w: v.w, a: v.a, b: v.b, s: v.signed });
 
 const files = new Map<string, string>();
 const session = new Session(

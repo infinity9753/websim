@@ -11,7 +11,7 @@ import * as L from '../engine/logic';
 import { globRe } from '../engine/commands';
 import type { BrowserFS } from './vfs';
 
-const vec = (p: PVec) => new Vec(p.w, p.a, p.b, p.s);
+const vec = (p: PVec) => new Vec(p.w, p.a, p.b, p.s, p.u ?? 0n, p.k ?? 0n);
 
 export class MSignal {
   value: Vec;

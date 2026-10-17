@@ -18,8 +18,7 @@ export function isTextioProc(name: string) { return PROCS.has(name); }
 
 function err(msg: string, loc?: Loc): never { throw new CompileError(msg, loc); }
 
-function bitChar(b: string) { return b === 'x' ? 'X' : b === 'z' ? 'Z' : b; }
-function vecStr(v: L.Vec) { let s = ''; for (let i = v.w - 1; i >= 0; i--) s += bitChar(v.bit(i)); return s; }
+function vecStr(v: L.Vec) { let s = ''; for (let i = v.w - 1; i >= 0; i--) s += v.char(i).toUpperCase(); return s; }
 
 /** Resolve a line/file variable argument to its state object. */
 function stateOf(el: Elaborator, e: Expr, c: Ctx, want: 'line' | 'file', loc?: Loc): () => TextState {

@@ -370,7 +370,7 @@ export class Elaborator {
         if (alias) {
           // a variable port (output reg / VHDL port) collapsed onto an undriven net starts unknown, not Z
           if ((port.isVar || lang === 'vhdl') && !alias.drivers && alias.value.b === L.mask(alias.w) && alias.value.a === 0n) {
-            alias.value = port.init ? this.constEval(port.init, scope, alias.w) : this.defaultValue(t);
+            alias.value = port.init ? this.constEval(port.init, scope, alias.w) : this.defaultValue(t, false, lang === 'vhdl');
             alias.prev = alias.value;
           }
           scope.syms.set(port.name, { k: 'sig', sig: alias, t });
@@ -444,7 +444,7 @@ export class Elaborator {
 
   newSignal(scope: Scope, name: string, t: RType, init: Vec | undefined, isVar: boolean, dir: ObjEntry['dir'] = 'internal', isNet = false): Signal {
     const w = t.w || 1;
-    let v = init ?? this.defaultValue(t, isNet);
+    let v = init ?? this.defaultValue(t, isNet, scope.mod.lang === 'vhdl');
     v = resize(v, w).withSign(t.signed);
     const sig = new Signal(`${scope.path}/${name}`, name, w, t.msb, t.lsb, t.signed, v, isVar);
     sig.kind = dir;
@@ -455,14 +455,16 @@ export class Elaborator {
     return sig;
   }
 
-  defaultValue(t: RType, isNet = false): Vec {
+  /** Initial value of an object of type t ('U' for VHDL std_logic, X for Verilog 4-state). */
+  defaultValue(t: RType, isNet = false, vhdl = false): Vec {
     const w = t.w || 1;
     if (isNet) return allZ(w);
     if (t.kind === 'record') {
       let v = L.zeros(w);
-      for (const f of t.fields!) v = insert(v, f.off, resize(this.defaultValue(f.t), f.t.w));
+      for (const f of t.fields!) v = insert(v, f.off, resize(this.defaultValue(f.t, false, vhdl), f.t.w));
       return v;
     }
+    if (vhdl && t.kind === 'vec' && !t.isInt && !t.isBool && !t.isBit && !t.enumNames && !(t.scalar && t.w === 8)) return L.allU(w);
     if (t.kind === 'enum' || t.isBool || t.isBit || t.kind === 'real') return L.zeros(w);
     if (t.isInt) {
       if (t.left !== undefined) return fromInt(t.left, w, true);
@@ -742,7 +744,7 @@ export class Elaborator {
         const n = hi - lo + 1;
         if (n > 1 << 22) err(`Memory '${dn.name}' too large (${n} words)`, it.loc);
         const w = et.w || 1;
-        const init = this.defaultValue(et);
+        const init = this.defaultValue(et, false, scope.mod.lang === 'vhdl');
         const words: Vec[] = new Array(n).fill(resize(init, w).withSign(et.signed));
         const mem = new Memory(`${scope.path}/${dn.name}`, dn.name, w, lo, hi, et.signed, words, et.msb, et.lsb, et.enumNames);
         if ((dn as any).dims) mem.dims = (dn as any).dims;
@@ -1287,7 +1289,7 @@ export class Elaborator {
           if (arg.rf) s = vhdlReal(arg.rf());
           else if (names && v.known) s = names[Number(v.a)] ?? String(v.a);
           else if (isTime) s = v.known ? fmtTime(Number(v.toBigInt()), res) : 'X';
-          else if (t?.scalar || arg.w === 1) s = `'${v.bit(0) === 'x' ? 'X' : v.bit(0) === 'z' ? 'Z' : v.bit(0)}'`;
+          else if (t?.scalar || arg.w === 1) s = `'${v.char(0).toUpperCase()}'`;
           else s = L.toDec(v, true);
           return resize(L.fromString(s), Math.max(W, s.length * 8));
         },

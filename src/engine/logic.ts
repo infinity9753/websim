@@ -1,6 +1,8 @@
-// 4-state bit vectors.
+// 4-state bit vectors with optional VHDL std_logic detail.
 // Encoding per bit (a, b):  0 = (0,0)  1 = (1,0)  Z = (0,1)  X = (1,1)
 // `b` marks unknown bits. Widths are arbitrary (BigInt backed).
+// Two extra planes carry the rest of std_logic's 9 values without affecting 4-state logic:
+//   u = uninitialized ('U', on an X bit)   k = weak strength ('W' on X, 'L'/'H' on 0/1)
 
 const maskCache: bigint[] = [];
 export function mask(w: number): bigint {
@@ -14,7 +16,23 @@ export function mask(w: number): bigint {
 }
 
 export class Vec {
-  constructor(public readonly w: number, public readonly a: bigint, public readonly b: bigint, public readonly signed = false) {}
+  constructor(public readonly w: number, public readonly a: bigint, public readonly b: bigint, public readonly signed = false, public readonly u = 0n, public readonly k = 0n) {}
+
+  /** std_logic character of bit i: one of 0 1 x z U W L H (lowercase x/z for strong unknowns). */
+  char(i: number): string {
+    const bi = BigInt(i);
+    const a = (this.a >> bi) & 1n, b = (this.b >> bi) & 1n;
+    if (b) {
+      if (!a) return 'z';
+      if ((this.u >> bi) & 1n) return 'U';
+      return (this.k >> bi) & 1n ? 'W' : 'x';
+    }
+    if ((this.k >> bi) & 1n) return a ? 'H' : 'L';
+    return a ? '1' : '0';
+  }
+
+  /** True when the u/k planes are in use. */
+  get rich(): boolean { return this.u !== 0n || this.k !== 0n; }
 
   get known(): boolean { return this.b === 0n; }
   get hasZ(): boolean { return (this.b & ~this.a & mask(this.w)) !== 0n; }
@@ -25,9 +43,9 @@ export class Vec {
     return b ? (a ? 'x' : 'z') : (a ? '1' : '0');
   }
 
-  equals(o: Vec): boolean { return this.w === o.w && this.a === o.a && this.b === o.b; }
+  equals(o: Vec): boolean { return this.w === o.w && this.a === o.a && this.b === o.b && this.u === o.u && this.k === o.k; }
 
-  withSign(s: boolean): Vec { return s === this.signed ? this : new Vec(this.w, this.a, this.b, s); }
+  withSign(s: boolean): Vec { return s === this.signed ? this : new Vec(this.w, this.a, this.b, s, this.u, this.k); }
 
   /** Value as JS number (two's complement if signed). NaN when unknown. */
   toNumber(): number {
@@ -50,6 +68,8 @@ export const ZERO = new Vec(1, 0n, 0n);
 
 export function allX(w: number): Vec { const m = mask(w); return new Vec(w, m, m); }
 export function allZ(w: number): Vec { return new Vec(w, 0n, mask(w)); }
+/** All 'U' (VHDL uninitialized std_logic). */
+export function allU(w: number): Vec { const m = mask(w); return new Vec(w, m, m, false, m, 0n); }
 export function zeros(w: number): Vec { return new Vec(w, 0n, 0n); }
 export function bool(v: boolean): Vec { return v ? ONE : ZERO; }
 
@@ -61,19 +81,23 @@ export function fromInt(n: number | bigint, w = 32, signed = false): Vec {
 
 /** Parse bits like "01xz" (MSB first). Accepts VHDL std_logic chars. */
 export function fromBits(s: string, signed = false): Vec {
-  let a = 0n, b = 0n;
+  let a = 0n, b = 0n, u = 0n, k = 0n;
   const w = s.length;
   for (let i = 0; i < w; i++) {
     const c = s[i];
-    a <<= 1n; b <<= 1n;
+    a <<= 1n; b <<= 1n; u <<= 1n; k <<= 1n;
     switch (c) {
-      case '0': case 'L': case 'l': break;
-      case '1': case 'H': case 'h': a |= 1n; break;
+      case '0': break;
+      case '1': a |= 1n; break;
+      case 'L': case 'l': k |= 1n; break;
+      case 'H': case 'h': a |= 1n; k |= 1n; break;
       case 'z': case 'Z': b |= 1n; break;
-      default: a |= 1n; b |= 1n; // x X u U w W - ?
+      case 'U': case 'u': a |= 1n; b |= 1n; u |= 1n; break;
+      case 'W': case 'w': a |= 1n; b |= 1n; k |= 1n; break;
+      default: a |= 1n; b |= 1n; // x X - ?
     }
   }
-  return new Vec(w, a, b, signed);
+  return new Vec(w, a, b, signed, u, k);
 }
 
 export function fromString(s: string): Vec {
@@ -96,15 +120,15 @@ export function toAscii(v: Vec): string {
 /** Resize to w bits, sign-extending when v.signed (or `sext`). */
 export function resize(v: Vec, w: number, sext = v.signed): Vec {
   if (w === v.w) return v;
-  if (w < v.w) { const m = mask(w); return new Vec(w, v.a & m, v.b & m, v.signed); }
+  if (w < v.w) { const m = mask(w); return new Vec(w, v.a & m, v.b & m, v.signed, v.u & m, v.k & m); }
   if (sext && v.w > 0) {
     const top = BigInt(v.w - 1);
     const ext = mask(w) ^ mask(v.w);
-    const ta = (v.a >> top) & 1n, tb = (v.b >> top) & 1n;
-    return new Vec(w, v.a | (ta ? ext : 0n), v.b | (tb ? ext : 0n), v.signed);
+    const ta = (v.a >> top) & 1n, tb = (v.b >> top) & 1n, tu = (v.u >> top) & 1n, tk = (v.k >> top) & 1n;
+    return new Vec(w, v.a | (ta ? ext : 0n), v.b | (tb ? ext : 0n), v.signed, v.u | (tu ? ext : 0n), v.k | (tk ? ext : 0n));
   }
   // Verilog: zero-extend, but an unsized X/Z MSB would extend X/Z. Keep zero-extend.
-  return new Vec(w, v.a, v.b, v.signed);
+  return new Vec(w, v.a, v.b, v.signed, v.u, v.k);
 }
 
 /** Extend with X/Z replication of the MSB when the MSB is X or Z (literal rule). */
@@ -136,23 +160,23 @@ function bitAnd(x: Vec, y: Vec, w: number): Vec {
   const zero = ((~x.a & ~x.b) | (~y.a & ~y.b)) & m;
   const one = (x.a & ~x.b) & (y.a & ~y.b) & m;
   const unk = m & ~(zero | one);
-  return new Vec(w, one | unk, unk);
+  return new Vec(w, one | unk, unk, false, unk & (x.u | y.u));
 }
 function bitOr(x: Vec, y: Vec, w: number): Vec {
   const m = mask(w);
   const one = ((x.a & ~x.b) | (y.a & ~y.b)) & m;
   const zero = (~x.a & ~x.b) & (~y.a & ~y.b) & m;
   const unk = m & ~(zero | one);
-  return new Vec(w, one | unk, unk);
+  return new Vec(w, one | unk, unk, false, unk & (x.u | y.u));
 }
 function bitXor(x: Vec, y: Vec, w: number): Vec {
   const m = mask(w);
   const unk = (x.b | y.b) & m;
-  return new Vec(w, ((x.a ^ y.a) & m) | unk, unk);
+  return new Vec(w, ((x.a ^ y.a) & m) | unk, unk, false, unk & (x.u | y.u));
 }
 function bitNot(x: Vec): Vec {
   const m = mask(x.w);
-  return new Vec(x.w, ((~x.a) & m) | x.b, x.b, x.signed);
+  return new Vec(x.w, ((~x.a) & m) | x.b, x.b, x.signed, x.u & x.b);
 }
 
 function prep(x: Vec, y: Vec): [Vec, Vec, number, boolean] {
@@ -272,7 +296,7 @@ export function eq(x: Vec, y: Vec): Vec {
 export function neq(x: Vec, y: Vec): Vec { return lnot(eq(x, y)); }
 export function caseEq(x: Vec, y: Vec): Vec {
   const [p, q] = prep(x, y);
-  return bool(p.a === q.a && p.b === q.b);
+  return bool(p.a === q.a && p.b === q.b && p.u === q.u && p.k === q.k);
 }
 export function caseNeq(x: Vec, y: Vec): Vec { return lnot(caseEq(x, y)); }
 /** casez/casex match: bits where either side has Z (casez) or X/Z (casex) are don't-care. */
@@ -297,15 +321,17 @@ export function ge(x: Vec, y: Vec): Vec { return rel(x, y, (a, b) => a >= b); }
 
 // ---------- structure ----------
 export function concat(parts: Vec[]): Vec {
-  let a = 0n, b = 0n, w = 0;
+  let a = 0n, b = 0n, u = 0n, k = 0n, w = 0;
   for (const p of parts) {
     const s = BigInt(p.w);
     const m = mask(p.w);
     a = (a << s) | (p.a & m);
     b = (b << s) | (p.b & m);
+    u = (u << s) | (p.u & m);
+    k = (k << s) | (p.k & m);
     w += p.w;
   }
-  return new Vec(w, a, b);
+  return new Vec(w, a, b, false, u, k);
 }
 export function replicate(n: number, v: Vec): Vec {
   const parts: Vec[] = [];
@@ -316,33 +342,37 @@ export function replicate(n: number, v: Vec): Vec {
 export function slice(v: Vec, off: number, w: number): Vec {
   if (off >= 0 && off + w <= v.w) {
     const m = mask(w), o = BigInt(off);
-    return new Vec(w, (v.a >> o) & m, (v.b >> o) & m);
+    return new Vec(w, (v.a >> o) & m, (v.b >> o) & m, false, (v.u >> o) & m, (v.k >> o) & m);
   }
-  let a = 0n, b = 0n;
+  let a = 0n, b = 0n, u = 0n, kk = 0n;
   for (let i = w - 1; i >= 0; i--) {
     const k = off + i;
-    a <<= 1n; b <<= 1n;
+    a <<= 1n; b <<= 1n; u <<= 1n; kk <<= 1n;
     if (k < 0 || k >= v.w) { a |= 1n; b |= 1n; }
-    else { const bk = BigInt(k); a |= (v.a >> bk) & 1n; b |= (v.b >> bk) & 1n; }
+    else { const bk = BigInt(k); a |= (v.a >> bk) & 1n; b |= (v.b >> bk) & 1n; u |= (v.u >> bk) & 1n; kk |= (v.k >> bk) & 1n; }
   }
-  return new Vec(w, a, b);
+  return new Vec(w, a, b, false, u, kk);
 }
 /** Return v with bits [off, off+part.w) replaced by `part` (out-of-range bits are dropped). */
 export function insert(v: Vec, off: number, part: Vec): Vec {
-  let pa = part.a & mask(part.w), pb = part.b & mask(part.w), pw = part.w;
-  if (off < 0) { const s = BigInt(-off); pa >>= s; pb >>= s; pw += off; off = 0; }
+  const pm = mask(part.w);
+  let pa = part.a & pm, pb = part.b & pm, pu = part.u & pm, pk = part.k & pm, pw = part.w;
+  if (off < 0) { const s = BigInt(-off); pa >>= s; pb >>= s; pu >>= s; pk >>= s; pw += off; off = 0; }
   if (pw <= 0 || off >= v.w) return v;
   if (off + pw > v.w) pw = v.w - off;
   const m = mask(pw) << BigInt(off);
   const o = BigInt(off);
   const a = (v.a & ~m) | ((pa << o) & m);
   const b = (v.b & ~m) | ((pb << o) & m);
-  return new Vec(v.w, a, b, v.signed);
+  const u = (v.u & ~m) | ((pu << o) & m);
+  const k = (v.k & ~m) | ((pk << o) & m);
+  return new Vec(v.w, a, b, v.signed, u, k);
 }
 
 /** Resolve several drivers of a net (wire semantics). */
 export function resolve(w: number, drivers: Vec[]): Vec {
   if (drivers.length === 1) return drivers[0];
+  if (drivers.some(d => d.rich)) return resolveStdLogic(w, drivers);
   const m = mask(w);
   let acc: Vec = allZ(w);
   let first = true;
@@ -367,10 +397,36 @@ export function resolve(w: number, drivers: Vec[]): Vec {
   return acc;
 }
 
+// IEEE 1164 resolution table, index order U X 0 1 Z W L H
+const SL = 'UX01ZWLH';
+const RES = [
+  'UUUUUUUU',
+  'UXXXXXXX',
+  'UX0X0000',
+  'UXX11111',
+  'UX01ZWLH',
+  'UX01WWWW',
+  'UX01LWLW',
+  'UX01HWWH',
+];
+function slIndex(c: string): number { const i = SL.indexOf(c === 'x' ? 'X' : c === 'z' ? 'Z' : c); return i < 0 ? 1 : i; }
+
+/** Bit-by-bit std_logic resolution (used when weak or 'U' values are present). */
+function resolveStdLogic(w: number, drivers: Vec[]): Vec {
+  let out = '';
+  for (let i = w - 1; i >= 0; i--) {
+    let r = 4; // 'Z'
+    for (const d of drivers) r = SL.indexOf(RES[r][slIndex(d.char(i))]);
+    out += SL[r];
+  }
+  return fromBits(out);
+}
+
 // ---------- formatting ----------
 export function toBin(v: Vec): string {
   let s = '';
-  for (let i = v.w - 1; i >= 0; i--) s += v.bit(i);
+  if (v.rich) for (let i = v.w - 1; i >= 0; i--) s += v.char(i);
+  else for (let i = v.w - 1; i >= 0; i--) s += v.bit(i);
   return s;
 }
 
@@ -384,6 +440,7 @@ function groupDigits(v: Vec, bits: number): string {
     const g = slice(v, off, gw);
     const gm = mask(gw);
     if (g.b === 0n) s += digits[Number(g.a)];
+    else if (g.u === gm) s += 'U';
     else if (g.b === gm && g.a === gm) s += 'x';
     else if (g.b === gm && g.a === 0n) s += 'z';
     else s += (g.a & g.b) ? 'X' : 'Z';
