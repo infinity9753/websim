@@ -482,6 +482,7 @@ export class Elaborator {
         if (!sym || sym.k !== 'type') err(`(vcom-1136) Unknown identifier "${name}".`, loc);
         const base = sym.t;
         const r = range(ts.range);
+        if (base.kind === 'array' && r) return { ...base, lo: Math.min(r[0], r[1]), hi: Math.max(r[0], r[1]) };
         if (base.kind === 'array' || base.kind === 'record') return base;
         if (r) {
           if (base.isInt) return { ...base, left: r[0], right: r[1] };
@@ -533,9 +534,13 @@ export class Elaborator {
           }
           if (it.array) {
             const elem = this.resolveType(it.array.elem, scope, it.loc);
-            const lo = this.constInt(it.array.range[0], scope), hi = this.constInt(it.array.range[1], scope);
-            // unconstrained element vectors can't be stored
-            scope.syms.set(it.name, { k: 'type', t: { kind: 'array', w: elem.w, msb: elem.msb, lsb: elem.lsb, signed: elem.signed, elem, lo: Math.min(lo, hi), hi: Math.max(lo, hi), enumNames: elem.enumNames } });
+            if (!elem.w) err(`Array element type of '${it.name}' must be constrained.`, it.loc);
+            const at: RType = { kind: 'array', w: elem.w, msb: elem.msb, lsb: elem.lsb, signed: elem.signed, elem, enumNames: elem.enumNames };
+            if (it.array.range) {
+              const lo = this.constInt(it.array.range[0], scope), hi = this.constInt(it.array.range[1], scope);
+              at.lo = Math.min(lo, hi); at.hi = Math.max(lo, hi);
+            }
+            scope.syms.set(it.name, { k: 'type', t: at });
           } else {
             const t = this.resolveType(it.type!, scope, it.loc);
             scope.syms.set(it.name, { k: 'type', t });
@@ -700,7 +705,15 @@ export class Elaborator {
           et = t;
           if (dims.length === 1) [lo, hi] = dims[0];
           else { lo = 0; hi = dims.reduce((p, d) => p * (d[1] - d[0] + 1), 1) - 1; (dn as any).dims = dims; }
-        } else { lo = t.lo!; hi = t.hi!; et = t.elem!; }
+        } else {
+          et = t.elem!;
+          if (t.lo === undefined) {
+            // unconstrained array: a constant takes its bounds from the aggregate
+            const agg = dn.init?.k === 'agg' && !dn.init.others ? dn.init : null;
+            if (!agg) err(`'${dn.name}' of unconstrained array type needs an index constraint, e.g. ${it.type.name ?? 'arr_t'}(0 to 7).`, it.loc);
+            lo = 0; hi = agg.elems.length - 1;
+          } else { lo = t.lo; hi = t.hi!; }
+        }
         const n = hi - lo + 1;
         if (n > 1 << 22) err(`Memory '${dn.name}' too large (${n} words)`, it.loc);
         const w = et.w || 1;

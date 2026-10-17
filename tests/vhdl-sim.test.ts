@@ -370,3 +370,33 @@ end;`;
     expect(files2['out.txt']).toBe('10\n20\n30\n');
   });
 });
+
+describe('unconstrained arrays (#21)', () => {
+  it('constrains at declaration and infers bounds from constant aggregates', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+package p is
+  type byte_arr is array (natural range <>) of std_logic_vector(7 downto 0);
+  type int_arr is array (integer range <>) of integer;
+end package;
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+use work.p.all;
+entity t is end;
+architecture a of t is
+  signal buf : byte_arr(0 to 7) := (others => x"00");
+  constant ROM : int_arr := (10, 20, 30, 40);
+  subtype small_t is byte_arr(0 to 1);
+  signal s : small_t;
+begin
+  process begin
+    buf(3) <= x"3c";
+    s(1) <= x"ff";
+    wait for 1 ns;
+    report to_hstring(buf(3)) & " " & integer'image(ROM(2)) & " " & integer'image(buf'length) & " " & integer'image(ROM'high) & " " & to_hstring(s(1));
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out[0]).toBe('** Note: 3C 30 8 3 FF');
+  });
+});

@@ -232,14 +232,15 @@ class VhParser {
         if (this.accept('array')) {
           this.expect('(');
           const l = this.expr();
-          if (this.is('range') && this.isAt(1, '<>')) this.err('Unconstrained array types are not supported');
-          if (!this.accept('to')) this.expect('downto');
-          const r = this.expr();
+          let range: [Expr, Expr] | undefined;
+          if (this.is('range') && this.isAt(1, '<>')) this.pos += 2;   // unconstrained: index_type range <>
+          else { if (!this.accept('to')) this.expect('downto'); range = [l, this.expr()]; }
+          if (this.is(',')) this.err('Multi-dimensional array types are not supported');
           this.expect(')');
           this.expect('of');
           const elem = this.subtype();
           this.expect(';');
-          items.push({ k: 'typedef', name, array: { range: [l, r], elem }, loc });
+          items.push({ k: 'typedef', name, array: { range, elem }, loc });
           return;
         }
         if (this.accept('range')) {

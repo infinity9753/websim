@@ -98,7 +98,7 @@ export type Item =
   | FuncDecl
   | { k: 'genfor'; v: string; init: Expr; cond: Expr; stepExpr: Expr; name?: string; items: Item[]; vhdl?: { from: Expr; to: Expr; down: boolean }; loc?: Loc }
   | { k: 'genif'; c: Expr; then: Item[]; else?: Item[]; name?: string; loc?: Loc }
-  | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
+  | { k: 'typedef'; name: string; type?: TypeSpec; array?: { range?: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
   | { k: 'use'; pkg: string; loc?: Loc };
 
 export interface Unit {
