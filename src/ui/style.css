@@ -259,3 +259,18 @@ tr.sel .kind { color: inherit; opacity: .85; }
   .wave-body { --wn-w: 130px; --wv-w: 64px; }
   .wave .subbar .hint { display: none; }
 }
+
+/* project tree and search (#40) */
+table.grid tr.folder td { font-weight: 600; }
+table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); background: rgba(74,140,255,.12); }
+.tree-tog { display: inline-block; width: 12px; cursor: pointer; }
+.search-panel { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.search-opt { font: 600 11px var(--mono); min-width: 24px; }
+.search-opt.on { background: var(--sel); color: var(--sel-text); }
+.search-info { padding: 3px 8px; font-size: 11px; }
+.search-results { flex: 1; overflow: auto; font-size: 12px; }
+.search-file { padding: 4px 6px 2px; font-weight: 600; position: sticky; top: 0; background: var(--panel, inherit); }
+.search-hit { display: flex; gap: 8px; padding: 1px 6px 1px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.search-hit:hover { background: var(--sel); color: var(--sel-text); }
+.search-ln { color: var(--text-dim); min-width: 3ch; text-align: right; font-family: var(--mono); }
+.search-hit mark { background: #ffd54a; color: #000; border-radius: 2px; }

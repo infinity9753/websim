@@ -2,7 +2,8 @@
 import { h, icon, modal, promptText, confirmBox, alertBox, download, clear } from './dom';
 import { Pane } from './pane';
 import { RemoteSession } from './remote';
-import { BrowserFS, langOf, loadState, saveState } from './vfs';
+import { BrowserFS, langOf, loadState, saveState, projects, dirOf, baseOf } from './vfs';
+import { SearchPanel } from './search';
 import { Transcript } from './transcript';
 import { Editors } from './editor';
 import { WaveView } from './wave';
@@ -29,6 +30,7 @@ const DEFAULT_STATE: AppState = { compiled: [], libs: ['work'], runLength: '100 
 
 export class App {
   fs = new BrowserFS();
+  search = new SearchPanel(this.fs);
   session: RemoteSession;
   transcript: Transcript;
   editors: Editors;
@@ -56,6 +58,7 @@ export class App {
 
   constructor(private root: HTMLElement) {
     this.state = loadState(DEFAULT_STATE);
+    if (projects.list().length > 1) document.title = `WebSim — ${projects.current().name}`;
     this.applyTheme();
     // the transcript needs the session and vice versa: route prints through a late-bound function
     let sink: (m: string, k?: any) => void = () => {};
@@ -82,6 +85,7 @@ export class App {
     this.left.add('project', t('Project'), this.project.el, { activate: true });
     this.left.add('library', t('Library'), this.library.el, { activate: false });
     this.left.add('sim', 'sim', this.structure.el, { activate: false });
+    this.left.add('search', t('Search'), this.search.el, { activate: false });
     this.mid.add('objects', t('Objects'), this.objects.el);
     this.mid.add('processes', t('Processes'), this.processes.el, { activate: false });
     this.mid.add('memory', t('Memory'), this.memory.el, { activate: false });
@@ -119,6 +123,7 @@ export class App {
       h('span', {}, t('Region: '), st.scope),
       h('span', { title: t('Recorded waveform history (estimate). Use "log -cap" / "nolog" to limit.') }, t('History: '), st.mem),
       h('span', { class: 'grow' }),
+      h('span', { title: t('Current project (File ▸ Projects)') }, t('Project: '), h('b', { class: 'proj-name' }, projects.current().name)),
       h('span', {}, t('Library: '), st.lib),
       h('span', {}, t('WebSim — clean-room HDL simulator')));
 
@@ -153,6 +158,13 @@ export class App {
         { label: t('Open VCD Waveform…'), action: () => this.openVcd() },
         { label: t('Save'), kbd: 'Ctrl+S', action: () => { const n = this.editors.activeName; if (n) this.editors.save(n); } },
         { label: t('Save All'), action: () => this.editors.saveAll() },
+        '-',
+        { label: t('Find in Files…'), kbd: 'Ctrl+Shift+F', action: () => this.findInFiles() },
+        '-',
+        { label: t('New Project…'), action: () => void this.newProject() },
+        { label: t('Open Project'), sub: projects.list().map(p => ({ label: (p.id === projects.current().id ? '✓ ' : '') + p.name, action: () => void this.switchProject(p.id) })) },
+        { label: t('Rename Project…'), action: () => void this.renameProject() },
+        { label: t('Delete Project'), sub: projects.list().filter(p => p.id !== projects.current().id).map(p => ({ label: p.name, action: () => void this.deleteProject(p.id, p.name) })) },
         '-',
         { label: t('Load Example'), sub: EXAMPLES.map(ex => ({ label: ex.title, action: () => void this.loadExample(ex.id, true) })) },
         { label: t('Download Project (.json)'), action: () => this.exportProject() },
@@ -282,6 +294,39 @@ export class App {
     this.project.onImport = () => this.importFiles();
     this.project.onExport = (f) => download(f, this.fs.read(f) ?? '');
     this.project.onRunDo = (f) => void this.cmd(`do ${f}`);
+    this.search.onOpen = (f, l) => this.editors.open(f, l);
+    this.project.onNewIn = (d) => void this.newFile(d);
+    this.project.onNewFolder = async (parent) => {
+      const n = await promptText(t('New folder'), t('Folder name'), parent ? `${parent}/` : '');
+      if (n) this.fs.addFolder(n);
+    };
+    this.project.onRenameFolder = async (d) => {
+      const n = await promptText(t('Rename folder'), t('New name'), d);
+      if (!n || n === d) return;
+      const open = this.editors.openNames().filter(f => f.startsWith(d + '/'));
+      const dirty = open.map(f => [f, this.editors.text(f)] as const);
+      if (!this.fs.renameFolder(d, n)) { await alertBox(t('Rename folder'), t('A file in "{0}" already exists.', n)); return; }
+      for (const [f, text] of dirty) { const to = n + f.slice(d.length); if (text !== undefined) this.fs.write(to, text); await this.editors.close(f, true); this.editors.open(to); }
+      this.project.sel = n;
+    };
+    this.project.onDeleteFolder = async (d) => {
+      const inside = this.fs.list().filter(f => f.startsWith(d + '/'));
+      if (!(await confirmBox(t('Delete folder'), t('Delete folder "{0}" and its {1} file(s) from the project?', d, inside.length)))) return;
+      for (const f of inside) { await this.editors.close(f, true); s.fileStatus.delete(f); }
+      this.fs.removeFolder(d);
+    };
+    this.project.onMove = async (f, dir) => {
+      if (dir === '?') {
+        const d = await promptText(t('Move to folder'), t('Folder (empty = project root)'), dirOf(f));
+        if (d === null) return;
+        dir = d.replace(/^\/+|\/+$/g, '');
+      }
+      const to = dir ? `${dir}/${baseOf(f)}` : baseOf(f);
+      if (to === f) return;
+      if (!this.fs.rename(f, to)) { await alertBox(t('Move to folder'), t('A file named "{0}" already exists.', to)); return; }
+      await this.editors.rename(f, to);
+      this.project.sel = to;
+    };
     this.project.onRename = async (f) => {
       const n = await promptText(t('Rename file'), t('New name'), f);
       if (!n || n === f) return;
@@ -331,6 +376,7 @@ export class App {
       else if (e.key === 'F7' && e.shiftKey) { e.preventDefault(); this.compileFiles(this.project.hdlFiles()); }
       else if (e.key === 'Escape' && s.running) { e.preventDefault(); s.breakRun(); }
       else if (e.key.toLowerCase() === 'n' && e.ctrlKey && e.altKey) { e.preventDefault(); this.newFile(); }
+      else if (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); this.findInFiles(); }
     });
     window.addEventListener('beforeunload', (e) => {
       if ([...this.editors.docs.values()].some(d => d.dirty)) { e.preventDefault(); e.returnValue = ''; }
@@ -409,8 +455,8 @@ export class App {
     })();
   }
 
-  async newFile() {
-    const n = await promptText(t('New file'), t('File name'), 'design.v');
+  async newFile(dir = '') {
+    const n = await promptText(t('New file'), t('File name'), dir ? `${dir}/design.v` : 'design.v');
     if (!n) return;
     if (this.fs.has(n)) { this.editors.open(n); return; }
     const l = langOf(n);
@@ -451,6 +497,49 @@ export class App {
       await this.cmd(`vcd load ${f.name}`);
     });
     inp.click();
+  }
+
+  findInFiles() {
+    this.showLeft();
+    this.left.activate('search');
+    this.search.focus();
+  }
+
+  /** Projects keep their own files, libraries and settings; switching reloads the page. */
+  private async leaveProject(): Promise<boolean> {
+    const dirty = this.editors.dirtyNames();
+    if (dirty.length && !(await confirmBox(t('Unsaved changes'), t('Discard unsaved changes in {0}?', dirty.join(', '))))) return false;
+    this.persist();
+    return true;
+  }
+
+  async newProject() {
+    const name = await promptText(t('New Project'), t('Project name'), t('Project {0}', projects.list().length + 1));
+    if (!name || !(await this.leaveProject())) return;
+    projects.select(projects.create(name));
+    location.reload();
+  }
+
+  async switchProject(id: string) {
+    if (id === projects.current().id || !(await this.leaveProject())) return;
+    projects.select(id);
+    location.reload();
+  }
+
+  async renameProject() {
+    const cur = projects.current();
+    const name = await promptText(t('Rename Project'), t('Project name'), cur.name);
+    if (!name) return;
+    projects.rename(cur.id, name);
+    document.title = `WebSim — ${name}`;
+    const el = document.querySelector('.statusbar .proj-name');
+    if (el) el.textContent = name;
+  }
+
+  async deleteProject(id: string, name: string) {
+    if (!(await confirmBox(t('Delete Project'), t('Delete project "{0}" with all its files and libraries? This cannot be undone.', name)))) return;
+    projects.remove(id);
+    this.transcript.print(t('Deleted project "{0}".', name));
   }
 
   async saveWaveFormat() {
@@ -601,7 +690,8 @@ export class App {
     tr.print(t('Type "help" for commands. Use File ▸ Load Example to try the bundled designs.'));
     for (const l of this.state.libs) this.session.libs.ensure(l);
     this.session.loadBreakpoints(this.state.breakpoints ?? []);
-    if (this.fs.empty || !this.state.seen) {
+    // first visit: start with an example (projects created later start empty)
+    if (!this.state.seen) {
       this.state.seen = true;
       this.persist();
       if (this.fs.empty) { await this.loadExample('counter', true); return; }

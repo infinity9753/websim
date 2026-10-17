@@ -229,4 +229,7 @@ export class Editors {
   }
 
   openNames() { return [...this.docs.keys()]; }
+  dirtyNames() { return [...this.docs].filter(([, d]) => d.dirty).map(([n]) => n); }
+  /** Current editor text of an open file (including unsaved edits). */
+  text(name: string) { return this.docs.get(name)?.view.state.doc.toString(); }
 }

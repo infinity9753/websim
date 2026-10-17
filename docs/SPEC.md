@@ -41,7 +41,9 @@ A *project* groups source files, their compile order, and the default library.
 | Menu bar | File / Edit / View / Compile / Simulate / Wave / Help. |
 | Toolbar | New file, save, compile, compile all, simulate, run (default length), run-length field, run -all, break, restart, zoom in/out/full. |
 | **Library** panel | Tree of libraries → compiled design units (module/entity/architecture/package) with type. Double-click a unit to simulate it. |
-| **Project** panel | Project source files with compile status (✓ / ✗ / ?), compile order, add/remove/new file. Double-click opens the editor. |
+| **Project** panel | Project source files in a folder tree (`rtl/alu.v`), with compile status (✓ / ✗ / ?), compile order, add/remove/new file and folder, drag a file onto a folder to move it. Double-click opens the editor. |
+| Projects | File ▸ New Project / Open Project / Rename / Delete: each project keeps its own files, compiled libraries, open editors and breakpoints in browser storage (appearance settings are shared). |
+| **Search** panel | Find in all project files (Ctrl+Shift+F) with match-case, whole-word and regex options; click a hit to open the file at that line. |
 | **Sim** (structure) panel | Instance hierarchy of the loaded design. Selecting an instance populates Objects. |
 | **Objects** panel | Signals of the selected scope: name, current value, kind (in/out/inout/internal). Add selected/all to wave. |
 | **Wave** window | Signal list with value at cursor, waveform area with time ruler, logic and bus rendering (X red, Z blue/mid-level), cursor placement by click, zoom, radix per signal (binary/hex/unsigned/signed/octal/ascii). |

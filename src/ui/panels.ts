@@ -2,9 +2,10 @@
 import { h, icon, clear, contextMenu } from './dom';
 import { fmtSig, type RemoteSession as Session, type MScope as Scope, type MSignal } from './remote';
 import * as L from '../engine/logic';
-import { langOf, type BrowserFS } from './vfs';
+import { langOf, dirOf, baseOf, type BrowserFS } from './vfs';
 import { DND_TYPE } from './wave';
 import { t } from './i18n';
+const FILE_DND = 'application/x-websim-file';
 
 
 /** Renders only the rows of a long table that are in view (fixed row height). */
@@ -60,12 +61,19 @@ export class ProjectPanel {
   onDelete?: (f: string) => void;
   onExport?: (f: string) => void;
   onRunDo?: (f: string) => void;
+  onNewIn?: (dir: string) => void;
+  onNewFolder?: (parent: string) => void;
+  onRenameFolder?: (dir: string) => void;
+  onDeleteFolder?: (dir: string) => void;
+  onMove?: (f: string, dir: string) => void;
+  private collapsed = new Set<string>();
 
   constructor(private fs: BrowserFS, private session: Session) {
     this.tbody = h('tbody');
     this.el = h('div', {},
       bar(
         tbtn('newfile', t('New file'), () => this.onNew?.()),
+        tbtn('newfolder', t('New folder'), () => this.onNewFolder?.(this.sel ? (this.fs.has(this.sel) ? dirOf(this.sel) : this.sel) : '')),
         tbtn('upload', t('Import files from disk'), () => this.onImport?.()),
         tbtn('download', t('Download selected file'), () => this.sel && this.onExport?.(this.sel)),
         tbtn('rename', t('Rename selected file'), () => this.sel && this.onRename?.(this.sel)),
@@ -77,7 +85,12 @@ export class ProjectPanel {
         tbtn('compile', t('Compile selected'), () => this.sel && this.onCompile?.([this.sel])),
         tbtn('compileall', t('Compile all (in order)'), () => this.onCompile?.(this.hdlFiles())),
       ),
-      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+      h('div', {
+        class: 'scroll',
+        // dropping a file outside any folder row moves it to the project root
+        ondragover: (e: DragEvent) => { if (e.dataTransfer?.types.includes(FILE_DND)) e.preventDefault(); },
+        ondrop: (e: DragEvent) => { const f = e.dataTransfer?.getData(FILE_DND); if (f && dirOf(f)) { e.preventDefault(); this.onMove?.(f, ''); } },
+      }, h('table', { class: 'grid' },
         h('thead', {}, h('tr', {}, h('th', {}, t('Name')), h('th', { title: t('Compile status') }, t('Status')), h('th', {}, t('Type')), h('th', { title: t('Compile order') }, t('Order')))),
         this.tbody)));
     fs.onChange(() => this.render());
@@ -90,17 +103,65 @@ export class ProjectPanel {
   render() {
     clear(this.tbody);
     const files = this.fs.list();
-    if (!files.length) {
+    const folders = this.fs.allFolders();
+    if (!files.length && !folders.length) {
       this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, t('No files. Use File ▸ New or Import.'))));
       return;
     }
-    let order = 0;
-    for (const f of files) {
+    const orderOf = new Map<string, number>();
+    let n = 0;
+    for (const f of files) if (langOf(f) === 'verilog' || langOf(f) === 'vhdl') orderOf.set(f, n++);
+    const walk = (dir: string, depth: number) => {
+      for (const d of folders.filter(x => dirOf(x) === dir)) {
+        this.tbody.appendChild(this.folderRow(d, depth));
+        if (!this.collapsed.has(d)) walk(d, depth + 1);
+      }
+      for (const f of files.filter(x => dirOf(x) === dir)) this.tbody.appendChild(this.fileRow(f, depth, orderOf.get(f)));
+    };
+    walk('', 0);
+  }
+
+  private folderRow(d: string, depth: number): HTMLElement {
+    const open = !this.collapsed.has(d);
+    const toggle = () => { if (open) this.collapsed.add(d); else this.collapsed.delete(d); this.render(); };
+    const inside = this.fs.list().filter(f => f.startsWith(d + '/'));
+    return h('tr', {
+      class: 'folder' + (this.sel === d ? ' sel' : ''),
+      title: d,
+      onclick: () => { this.sel = d; this.render(); },
+      ondblclick: toggle,
+      ondragover: (e: DragEvent) => { if (e.dataTransfer?.types.includes(FILE_DND)) { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add('drop-hi'); } },
+      ondragleave: (e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove('drop-hi'),
+      ondrop: (e: DragEvent) => {
+        (e.currentTarget as HTMLElement).classList.remove('drop-hi');
+        const f = e.dataTransfer?.getData(FILE_DND);
+        if (f) { e.preventDefault(); e.stopPropagation(); if (dirOf(f) !== d) this.onMove?.(f, d); }
+      },
+      oncontextmenu: (e: MouseEvent) => {
+        e.preventDefault(); this.sel = d; this.render();
+        const hdl = inside.filter(f => langOf(f) === 'verilog' || langOf(f) === 'vhdl');
+        contextMenu(e.clientX, e.clientY, [
+          { label: t('New file here…'), action: () => this.onNewIn?.(d) },
+          { label: t('New folder…'), action: () => this.onNewFolder?.(d) },
+          { label: t('Compile folder'), disabled: !hdl.length, action: () => this.onCompile?.(hdl) },
+          '-',
+          { label: t('Rename folder…'), action: () => this.onRenameFolder?.(d) },
+          { label: t('Delete folder…'), action: () => this.onDeleteFolder?.(d) },
+        ]);
+      },
+    },
+      h('td', { colspan: '4', style: { paddingLeft: 4 + depth * 14 + 'px' } }, h('span', { class: 'tree-tog', onclick: (e: MouseEvent) => { e.stopPropagation(); toggle(); } }, open ? '▾' : '▸'), ' 📁 ', baseOf(d), h('span', { class: 'kind' }, `  (${inside.length})`)));
+  }
+
+  private fileRow(f: string, depth: number, order: number | undefined): HTMLElement {
+    {
       const lang = langOf(f);
       const st = this.session.fileStatus.get(f);
       const isHdl = lang === 'verilog' || lang === 'vhdl';
       const row = h('tr', {
         class: this.sel === f ? 'sel' : '',
+        draggable: 'true',
+        ondragstart: (e: DragEvent) => { e.dataTransfer!.setData(FILE_DND, f); e.dataTransfer!.effectAllowed = 'move'; },
         onclick: () => { this.sel = f; this.render(); },
         ondblclick: () => { if (/\.vcd$/i.test(f)) void this.session.exec(`vcd load ${f}`); else this.onOpen?.(f); },
         oncontextmenu: (e: MouseEvent) => {
@@ -113,16 +174,17 @@ export class ProjectPanel {
             { label: t('Compile all'), action: () => this.onCompile?.(this.hdlFiles()) },
             '-',
             { label: t('Rename…'), action: () => this.onRename?.(f) },
+            { label: t('Move to folder…'), action: () => this.onMove?.(f, '?') },
             { label: t('Download'), action: () => this.onExport?.(f) },
             { label: t('Remove from project'), action: () => this.onDelete?.(f) },
           ]);
         },
       },
-        h('td', {}, f),
+        h('td', { style: { paddingLeft: 4 + depth * 14 + (depth ? 12 : 0) + 'px' }, title: f }, baseOf(f)),
         h('td', { class: st === 'ok' ? 'st-ok' : st === 'error' ? 'st-err' : 'st-none' }, isHdl ? (st === 'ok' ? '✓' : st === 'error' ? '✗' : '?') : ''),
         h('td', { class: 'kind' }, lang === 'verilog' ? (/\.sv$/i.test(f) ? 'SystemVerilog' : 'Verilog') : lang === 'vhdl' ? 'VHDL' : lang === 'do' ? t('Macro') : t('Text')),
-        h('td', { class: 'kind' }, isHdl ? String(order++) : ''));
-      this.tbody.appendChild(row);
+        h('td', { class: 'kind' }, order !== undefined ? String(order) : ''));
+      return row;
     }
   }
 }

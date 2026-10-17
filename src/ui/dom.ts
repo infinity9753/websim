@@ -31,6 +31,8 @@ export function clear(el: HTMLElement) { while (el.firstChild) el.removeChild(el
 const S = (body: string) => `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">${body}</svg>`;
 
 export const ICONS: Record<string, string> = {
+  newfolder: S('<path d="M1.5 4h4.5l1.5 1.5h7v8h-13z" fill="#e8c46a" stroke="#a5852f"/><path d="M8.5 9.5h4M10.5 7.5v4" stroke="#2a7a2a" stroke-width="1.5"/>'),
+  search: S('<circle cx="6.5" cy="6.5" r="4" fill="none" stroke="var(--ic-line)" stroke-width="1.5"/><path d="M9.5 9.5l4.5 4.5" stroke="var(--ic-line)" stroke-width="1.8"/>'),
   newfile: S('<path d="M4 1.5h5l3 3V14.5H4z" fill="var(--ic-paper)" stroke="var(--ic-line)"/><path d="M9 1.5v3h3" fill="none" stroke="var(--ic-line)"/>'),
   open: S('<path d="M1.5 4.5h4l1 1h7v8h-12z" fill="var(--ic-folder)" stroke="var(--ic-line)"/>'),
   save: S('<rect x="2" y="2" width="12" height="12" rx="1" fill="var(--ic-blue)" stroke="var(--ic-line)"/><rect x="4.5" y="2.5" width="7" height="4" fill="var(--ic-paper)"/><rect x="4" y="9" width="8" height="4.5" fill="var(--ic-paper)"/>'),

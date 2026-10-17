@@ -229,6 +229,7 @@ export class Session {
   compile(lang: 'verilog' | 'vhdl', args: string[], quiet = false): boolean {
     let lib = 'work';
     const files: string[] = [];
+    const incdirs: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '-work') { lib = args[++i]; continue; }
@@ -236,11 +237,11 @@ export class Session {
         for (const d of a.slice(8).split('+')) { const [k, v] = d.split('='); this.libs.defines.set(k, { body: v ?? '' }); }
         continue;
       }
-      if (a.startsWith('+incdir+')) continue;
+      if (a.startsWith('+incdir+')) { incdirs.push(...a.slice(8).split('+').filter(Boolean)); continue; }
       if (a.startsWith('-') || a.startsWith('+')) continue;
-      // simple glob support
+      // simple glob support ("*" does not cross folders: rtl/*.v)
       if (a.includes('*')) {
-        const re = globRe(a);
+        const re = new RegExp('^' + a.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]') + '$');
         files.push(...this.fs.list().filter(f => re.test(f)));
       } else files.push(a);
     }
@@ -255,7 +256,10 @@ export class Session {
       const src = this.fs.read(f);
       if (src === undefined) { this.out(`** Error: (${lang === 'verilog' ? 'vlog' : 'vcom'}-7) Failed to open design unit file "${f}" in read mode.`, 'err'); errors++; continue; }
       if (!quiet) this.out(`-- Compiling file ${f}`, 'out');
-      const r = this.libs.compile(lang, src, f, lib, (n) => this.fs.read(n));
+      // `include: as written, then relative to the including file's folder, then each +incdir+
+      const dir = f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '';
+      const inc = (n: string) => this.fs.read(n) ?? [dir, ...incdirs].filter(Boolean).map(d => this.fs.read(`${d}/${n}`)).find(x => x !== undefined);
+      const r = this.libs.compile(lang, src, f, lib, inc);
       if (!quiet) for (const l of r.log) this.out(l);
       if (!r.ok) {
         errors += r.errors.length;
