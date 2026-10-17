@@ -25,7 +25,7 @@ let scheduled = false;
 let sent = new Map<number, number>(); // signal id -> history length already sent
 let designRef: unknown = null;
 
-for (const ev of ['library', 'sim', 'time', 'wave', 'zoomfull', 'scope', 'running', 'compiled', 'debug', 'list']) {
+for (const ev of ['library', 'sim', 'time', 'wave', 'zoomfull', 'scope', 'running', 'compiled', 'debug', 'list', 'coverage']) {
   session.on(ev as never, () => { pending.add(ev); schedule(); });
 }
 
@@ -143,6 +143,7 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   loadBreakpoints: (list: never) => session.loadBreakpoints(list),
   rebuild: (list: never) => session.rebuild(list),
   vcdText: (all: boolean) => session.vcdText(all),
+  coverageLines: () => session.coverageLines(),
   listMemories: () => session.listMemories(),
   memWords: (path: string, from: number, count: number) => { const r = session.memWords(path, from, count); return r && { ...r, words: r.words.map(pv) }; },
   memDeposit: (path: string, addr: number, value: string) => session.memDeposit(path, addr, value),

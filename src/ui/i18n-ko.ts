@@ -376,4 +376,15 @@ export const KO: Record<string, string> = {
   'Click: open source': '클릭: 소스 열기',
   'Feedback: this process also reads the signal': '피드백: 이 프로세스가 이 신호를 읽기도 합니다',
   'Show in Dataflow': '데이터플로에서 보기',
+  // coverage
+  'Never executed': '실행되지 않음',
+  'Executed {0} times': '{0}회 실행',
+  'Branch never taken: {0}': '실행되지 않은 분기: {0}',
+  'Code Coverage': '코드 커버리지',
+  'Coverage Report': '커버리지 리포트',
+  'Coverage Report (details)': '커버리지 리포트 (상세)',
+  'Clear Coverage Counts': '커버리지 카운트 초기화',
+  'Show/Hide Coverage in Editor': '편집기에 커버리지 표시/숨기기',
+  'Coverage': '커버리지',
+  'Enable code coverage (statement, branch, toggle)': '코드 커버리지 수집 (문장, 분기, 토글)',
 };

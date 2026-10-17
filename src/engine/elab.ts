@@ -100,9 +100,15 @@ export interface DFNode { kind: 'process' | 'assign' | 'port' | 'udp'; name: str
 
 const STMT_CHILD = new Set(['t', 'f', 'body', 'stmts', 'branches', 'init', 'step']);
 
+/** Code coverage counters (vsim -coverage). Task bodies and module instances get one counter per copy. */
+export interface CovStmt { file: string; line: number; n: number }
+export interface CovBranch { file: string; line: number; kind: 'if' | 'case'; arms: { label: string; n: number }[] }
+export interface Coverage { stmts: CovStmt[]; branches: CovBranch[] }
+
 export interface Design {
   root: Scope;
   dataflow?: DFNode[];
+  coverage?: Coverage;
   kernel: Kernel;
   top: string;
   loaded: string[];
@@ -255,6 +261,8 @@ export interface ElabOptions {
   debug?: boolean;
   /** vsim +nospecify: ignore specify path delays. */
   noSpecify?: boolean;
+  /** vsim -coverage: count statement executions and branch arms. */
+  coverage?: boolean;
 }
 
 export class Elaborator {
@@ -286,11 +294,13 @@ export class Elaborator {
   tmpSeq = 0;
   /** Drivers/readers collected for the Dataflow window. */
   dataflow: DFNode[] = [];
+  cov: Coverage | null = null;
   /** Set while elaborating a procedural block's declarations: class-handle initializers run at block entry. */
   deferredInits: Stmt[] | null = null;
 
   constructor(public lib: DesignResolver, host: KernelHost, public opts: ElabOptions = {}) {
     this.k = new Kernel(host);
+    if (opts.coverage) this.cov = { stmts: [], branches: [] };
     const dummyUnit: Unit = { kind: 'package', lang: 'vhdl', name: 'standard', file: '', line: 0, params: [], ports: [], items: [] };
     this.stdScope = new Scope('std', '/std', null, null, { lang: 'vhdl', unit: dummyUnit, tsUnit: 1, tsPrec: 1, file: '', libName: 'std' }, 'package');
     for (const [n, t] of Object.entries(VHDL_STD_TYPES)) this.stdScope.syms.set(n, { k: 'type', t });
@@ -324,7 +334,7 @@ export class Elaborator {
     this.k.signals = [...sigs];
     const prec = this.minPrec === Infinity ? 1e6 : this.minPrec;
     this.k.resolution = this.opts.resolutionPs ?? Math.max(1, Math.min(1e6, prec));
-    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines, dataflow: this.dataflow };
+    return { root: this.root, kernel: this.k, top: found.unit.name, loaded: this.loaded, warnings: this.warnings, allScopes: this.scopes, execLines: this.execLines, dataflow: this.dataflow, coverage: this.cov ?? undefined };
   }
 
   parseGenericValue(v: string): Expr {
@@ -2889,7 +2899,13 @@ export class Elaborator {
   }
 
   st(s: Stmt, c: Ctx): SC {
-    const r = this.stInner(s, c);
+    let r = this.stInner(s, c);
+    if (this.cov && s.loc && s.k !== 'block' && s.k !== 'null' && !c.constOnly) {
+      const cnt: CovStmt = { file: s.loc.file, line: s.loc.line, n: 0 };
+      this.cov.stmts.push(cnt);
+      const sync = r.sync, gen = r.gen;
+      r = sync ? { sync: () => { cnt.n++; sync(); } } : { gen: function* () { cnt.n++; yield* gen!(); } };
+    }
     if (!this.opts.debug || c.func || !c.proc || !s.loc || s.k === 'block' || s.k === 'null') return r;
     // debug hook: may pause the process right before this statement
     const file = s.loc.file, line = s.loc.line, depth = c.depth;
@@ -2908,7 +2924,13 @@ export class Elaborator {
       case 'assign': return this.assignStmt(s, c);
       case 'vsigassign': return this.vsigStmt(s, c);
       case 'if': {
-        const C = selfEv(this.ex(s.c, c));
+        let C = selfEv(this.ex(s.c, c));
+        if (this.cov && s.loc) {
+          const b: CovBranch = { file: s.loc.file, line: s.loc.line, kind: 'if', arms: [{ label: 'true', n: 0 }, { label: s.f ? 'else' : 'false (implicit else)', n: 0 }] };
+          this.cov.branches.push(b);
+          const c0 = C;
+          C = () => { const v = c0(); b.arms[L.truth(v) === 1 ? 0 : 1].n++; return v; };
+        }
         const T = this.st(s.t, c), F = s.f ? this.st(s.f, c) : null;
         if (T.sync && (!F || F.sync)) {
           const t = T.sync, f = F?.sync;
@@ -3421,7 +3443,7 @@ export class Elaborator {
       if (kind === 'match') { const dc = x.a & x.b; return ((v.a ^ x.a) & ~dc & L.mask(w)) === 0n && (v.b & ~dc & L.mask(w)) === 0n; } // '-' in the choice
       return L.wildEq(v, x, kind);
     };
-    const select = (): number => {
+    const select0 = (): number => {
       const v = ef();
       let def = -1;
       for (let i = 0; i < labs.length; i++) {
@@ -3431,6 +3453,15 @@ export class Elaborator {
       }
       return def;
     };
+    let select = select0;
+    if (this.cov && s.loc) {
+      // one arm per case item, plus the implicit default when there is none
+      const arms = s.items.map((it, i) => ({ label: it.labels ? `item ${i + 1} (line ${it.body.loc?.line ?? s.loc!.line})` : 'default', n: 0 }));
+      if (!s.items.some(it => !it.labels)) arms.push({ label: 'default (implicit)', n: 0 });
+      const b: CovBranch = { file: s.loc.file, line: s.loc.line, kind: 'case', arms };
+      this.cov.branches.push(b);
+      select = () => { const i = select0(); b.arms[i >= 0 ? i : arms.length - 1].n++; return i; };
+    }
     if (items.every(it => it.body.sync)) {
       const bs = items.map(it => it.body.sync!);
       return { sync: () => { const i = select(); if (i >= 0) bs[i](); } };

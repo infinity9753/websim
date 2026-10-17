@@ -169,3 +169,41 @@ describe('history limits and logging (#28)', () => {
     expect(s.lists.map(l => l.path)).toEqual(['/tb/q']);
   });
 });
+
+describe('code coverage (#42)', () => {
+  it('reports statements, branches and toggles; -details lists the misses', async () => {
+    const fs: Record<string, string> = {
+      'c.v': `module c;
+  reg clk = 0; reg [1:0] s = 0; reg [3:0] q = 0; reg never = 0;
+  always #5 clk = ~clk;
+  always @(posedge clk) begin
+    if (s != 3) q <= q + 1;
+    else q <= 0;
+    case (s)
+      0: s <= 1;
+      1: s <= 2;
+      3: s <= 0;
+    endcase
+  end
+  initial #100 $finish;
+endmodule`,
+    };
+    const lines: string[] = [];
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, m => lines.push(m));
+    await s.exec('vlog c.v; vsim c');
+    expect(await s.exec('coverage report')).toBe(false); // not enabled
+    await s.exec('vsim -coverage c; run -all; coverage report -details -file cov.txt');
+    const r = fs['cov.txt'];
+    expect(r).toMatch(/Statements\s+8\s+6\s+2\s+75\.00%/);   // else branch and "3:" item never run
+    expect(r).toMatch(/Branches\s+6\s+4\s+2\s+66\.67%/);     // if: true only; case: items 1, 2 and the implicit default (s stays 2)
+    expect(r).toContain('Statements not executed: lines 6, 10');
+    expect(r).toContain('Branch (if) at line 5 never took: else');
+    expect(r).toContain('Branch (case) at line 7 never took: item 3 (line 10)');
+    expect(r).toContain('/c/never: no toggle');
+    expect(r).toMatch(/\/c\/s:\[1\] no 1->0/);
+    const g = s.coverageLines()!.find(f => f.file === 'c.v')!;
+    expect(g.lines.filter(([, n]) => n === 0).map(([l]) => l)).toEqual([6, 10]);
+    await s.exec('coverage clear');
+    expect(s.coverageLines()!.find(f => f.file === 'c.v')!.lines.every(([, n]) => n === 0)).toBe(true);
+  });
+});

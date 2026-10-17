@@ -5,7 +5,7 @@ import { RemoteSession } from './remote';
 import { BrowserFS, langOf, loadState, saveState, projects, dirOf, baseOf } from './vfs';
 import { SearchPanel } from './search';
 import { Transcript } from './transcript';
-import { Editors } from './editor';
+import { Editors, type LineCoverage } from './editor';
 import { WaveView } from './wave';
 import { ListView } from './list';
 import { DataflowView } from './dataflow';
@@ -216,6 +216,13 @@ export class App {
         { label: t('Delete All Breakpoints'), action: () => void this.cmd('bd all') },
         { label: t('Restart'), action: () => void this.cmd('restart -f') },
         '-',
+        { label: t('Code Coverage'), sub: [
+          { label: t('Coverage Report'), action: () => void this.cmd('coverage report') },
+          { label: t('Coverage Report (details)'), action: () => void this.cmd('coverage report -details') },
+          { label: t('Clear Coverage Counts'), action: () => void this.cmd('coverage clear') },
+          { label: t('Show/Hide Coverage in Editor'), action: () => { this.showCoverage = !this.showCoverage; void this.refreshCoverage(); } },
+        ] },
+        '-',
         { label: t('End Simulation'), action: () => void this.cmd('quit -sim') },
       ]],
       [t('Wave'), [
@@ -378,6 +385,10 @@ export class App {
     s.on('running', () => this.updateStatus());
     s.on('library', () => { this.state.compiled = s.compiledSources; this.state.libs = [...s.libs.libs.keys()]; this.persist(); });
     s.on('compiled', () => this.markErrors());
+    // coverage marks in the editors: refreshed when a run stops (and cleared with the design)
+    s.on('running', () => { if (!s.running) void this.refreshCoverage(); });
+    s.on('sim', () => void this.refreshCoverage());
+    s.on('coverage', () => void this.refreshCoverage());
     this.updateStatus();
 
     document.addEventListener('keydown', (e) => {
@@ -512,6 +523,19 @@ export class App {
       await this.cmd(`vcd load ${f.name}`);
     });
     inp.click();
+  }
+
+  showCoverage = true;
+  async refreshCoverage() {
+    const data = this.showCoverage && this.session.design ? await this.session.coverageLines() : null;
+    if (!data) { this.editors.setCoverage(null); return; }
+    const m = new Map<string, Map<number, LineCoverage>>();
+    for (const f of data) {
+      const lines = new Map<number, LineCoverage>(f.lines.map(([l, n]) => [l, { hits: n }]));
+      for (const [l, missed] of f.branches) if (missed.length) lines.set(l, { ...(lines.get(l) ?? {}), missedArms: missed });
+      m.set(f.file, lines);
+    }
+    this.editors.setCoverage(m);
   }
 
   findInFiles() {
@@ -651,13 +675,16 @@ export class App {
     renderList();
     const res = h('select', { class: 'field' }, ['default', '1fs', '1ps', '10ps', '100ps', '1ns'].map(r => h('option', { value: r }, r)));
     const gen = h('input', { class: 'field', placeholder: t('e.g. WIDTH=8 DEPTH=16'), spellcheck: 'false' });
+    const cov = h('input', { type: 'checkbox' });
     const body = h('div', {}, list,
       h('label', { class: 'form-row' }, h('span', {}, t('Resolution')), res),
-      h('label', { class: 'form-row' }, h('span', {}, t('Generics')), gen));
+      h('label', { class: 'form-row' }, h('span', {}, t('Generics')), gen),
+      h('label', { class: 'form-row' }, h('span', {}, t('Coverage')), h('span', {}, cov, ' ', t('Enable code coverage (statement, branch, toggle)'))));
     const r = await modal(t('Start Simulation'), body, [{ label: t('OK'), value: 'ok', primary: true }, { label: t('Cancel'), value: 'cancel' }]);
     if (r !== 'ok' || !chosen) return;
     const parts = ['vsim'];
     if (res.value !== 'default') parts.push('-t', res.value);
+    if (cov.checked) parts.push('-coverage');
     for (const g of gen.value.split(/\s+/).filter(Boolean)) parts.push(`-g${g}`);
     parts.push(`${chosen.lib}.${chosen.name}`);
     await this.cmd(parts.join(' '));

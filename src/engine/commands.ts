@@ -9,6 +9,7 @@ import type { Radix } from './logic';
 import './vhdl';
 import { writeVcd, parseVcd, vcdBits, type VcdVar, type VcdScopeDecl } from './vcd';
 import { listRows, listText } from './list';
+import { aggregate, coverageReport } from './coverage';
 import { fmtReal, vecToReal } from './elab';
 import type { Vec } from './logic';
 
@@ -52,7 +53,7 @@ export function waveAttrs(w: Partial<Record<(typeof WAVE_ATTRS)[number], unknown
   return o as Pick<WaveEntry, (typeof WAVE_ATTRS)[number]>;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage';
 
 export interface ListEntry { path: string; name: string; sig: Signal; radix: Radix }
 
@@ -164,6 +165,7 @@ export class Session {
       case 'find': return this.find(rest);
       case 'now': this.out(this.fmt(this.now)); return;
       case 'vcd': return this.vcd(rest);
+      case 'coverage': return this.coverageCmd(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -192,6 +194,9 @@ export class Session {
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
       '  vcd load <file.vcd>                open a VCD as a read-only waveform view',
+      '  vsim -coverage ...                 count statement / branch / toggle coverage',
+      '  coverage report [-details] [-file f]  coverage summary (or missed items)',
+      '  coverage clear                     reset coverage counts',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
       '  write list <file>                  save the List window as a text table',
@@ -298,12 +303,14 @@ export class Session {
 
   // ------------------------------------------------------------ simulation
   noSpecify = false;
+  coverage = false;
 
   vsim(args: string[]) {
     const vi = args.indexOf('-view');
     if (vi >= 0) return this.viewVcd(args[vi + 1] ?? '');
     this.debug = !args.includes('-nodebug');
     this.noSpecify = args.includes('+nospecify');
+    this.coverage = args.includes('-coverage');
     let res: number | undefined;
     const generics = new Map<string, string>();
     let lib: string | undefined;
@@ -329,7 +336,7 @@ export class Session {
 
   private load(o: { top: string; lib?: string; generics: Map<string, string>; res?: number }) {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify });
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);
@@ -872,6 +879,44 @@ export class Session {
     if (!all && !this.waves.length) throw new Error('vcd: the wave window is empty (use -all to dump every signal)');
     this.fs.write(file, this.vcdText(all));
     this.out(`Wrote ${file}`);
+  }
+
+  /** coverage report [-details] [-file f] | coverage clear */
+  coverageCmd(args: string[]) {
+    const d = this.requireDesign();
+    const cov = d.coverage;
+    if (!cov) throw new Error('(vsim-3926) Coverage was not enabled for this simulation. Load the design with "vsim -coverage".');
+    const sub = args[0] ?? 'report';
+    if (sub === 'clear') {
+      for (const s of cov.stmts) s.n = 0;
+      for (const b of cov.branches) for (const a of b.arms) a.n = 0;
+      this.out('Coverage counts cleared.');
+      this.emit('coverage');
+      return;
+    }
+    if (sub !== 'report') throw new Error('Usage: coverage report [-details] [-file <file>] | coverage clear');
+    const text = coverageReport(cov, d.kernel.signals, args.includes('-details'));
+    const fi = args.indexOf('-file');
+    if (fi >= 0) {
+      const f = args[fi + 1];
+      if (!f) throw new Error('coverage report: -file needs a file name');
+      if (!this.fs.write) throw new Error('write: file system is read-only');
+      this.fs.write(f, text + '\n');
+      this.out(`Wrote ${f}`);
+      return;
+    }
+    this.out(text);
+  }
+
+  /** Per-file line hits and branch arms for the editor's coverage gutter. */
+  coverageLines(): { file: string; lines: [number, number][]; branches: [number, string[]][] }[] | null {
+    const cov = this.design?.coverage;
+    if (!cov) return null;
+    return [...aggregate(cov)].map(([file, fc]) => ({
+      file,
+      lines: [...fc.lines],
+      branches: [...fc.branches].map(([l, b]) => [l, b.arms.filter(a => a.n === 0).map(a => a.label)] as [number, string[]]),
+    }));
   }
 
   /** Open a VCD file as a read-only dataset: its scopes and variables become a design to browse and plot. */

@@ -59,7 +59,7 @@ export interface MWave {
   groupLabel?: string; collapsed?: boolean; parent?: number;
 }
 
-type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list';
+type Ev = 'library' | 'sim' | 'time' | 'wave' | 'zoomfull' | 'scope' | 'running' | 'files' | 'compiled' | 'debug' | 'list' | 'coverage';
 
 export class RemoteSession {
   private worker: Worker;
@@ -128,6 +128,7 @@ export class RemoteSession {
   breakRun() { this.send({ type: 'break' }); }
   setScope(s: MScope) { this.scope = s; this.emitLocal('scope'); void this.call('setScope', s.path); }
   addWavePaths(paths: string[]) { void this.call('addWavePaths', paths); }
+  coverageLines() { return this.call<{ file: string; lines: [number, number][]; branches: [number, string[]][] }[] | null>('coverageLines'); }
   toggleBreakpoint(file: string, line: number) { void this.call('toggleBreakpoint', file, line); }
   loadBreakpoints(list: { file: string; line: number; cond?: string }[]) { void this.call('loadBreakpoints', list); }
   rebuild(list: { file: string; lang: 'verilog' | 'vhdl'; lib: string }[]) { void this.call('rebuild', list); }
@@ -202,7 +203,7 @@ export class RemoteSession {
       if (st.history) this.history = st.history;
       if (st.defaultRadix) this.defaultRadix = st.defaultRadix;
       if (st.lastVsim !== undefined) this.lastVsim = st.lastVsim;
-      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'list', 'time', 'running', 'debug', 'zoomfull'];
+      const order: Ev[] = ['library', 'compiled', 'sim', 'scope', 'wave', 'list', 'time', 'running', 'debug', 'zoomfull', 'coverage'];
       for (const ev of order) if (st.events.includes(ev)) this.emitLocal(ev);
       if (st.hist?.length && !st.events.includes('time')) this.emitLocal('time');
     } finally {

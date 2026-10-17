@@ -69,6 +69,37 @@ const execField = StateField.define<DecorationSet>({
   provide: f => EditorView.decorations.from(f),
 });
 
+// ---- coverage gutter: execution counts, misses and partially taken branches
+export interface LineCoverage { hits?: number; missedArms?: string[] }
+const setCov = StateEffect.define<Map<number, LineCoverage> | null>();
+class CovMarker extends GutterMarker {
+  constructor(readonly c: LineCoverage) { super(); }
+  eq(o: CovMarker) { return o.c.hits === this.c.hits && (o.c.missedArms ?? []).join() === (this.c.missedArms ?? []).join(); }
+  toDOM() {
+    const d = document.createElement('div');
+    const { hits, missedArms } = this.c;
+    const partial = !!missedArms?.length;
+    d.className = 'cm-cov ' + (hits === 0 ? 'miss' : partial ? 'partial' : 'hit');
+    d.textContent = hits === undefined ? '◐' : hits === 0 ? '✗' : hits >= 1e6 ? `${Math.floor(hits / 1e6)}M` : hits >= 1e4 ? `${Math.floor(hits / 1e3)}k` : String(hits);
+    const parts = [hits === undefined ? '' : hits === 0 ? t('Never executed') : t('Executed {0} times', hits)];
+    if (partial) parts.push(t('Branch never taken: {0}', missedArms!.join(', ')));
+    d.title = parts.filter(Boolean).join('\n');
+    return d;
+  }
+}
+const covField = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty,
+  update(set, tr) {
+    set = set.map(tr.changes);
+    for (const e of tr.effects) if (e.is(setCov)) {
+      const doc = tr.state.doc;
+      set = e.value ? RangeSet.of([...e.value].filter(([l]) => l >= 1 && l <= doc.lines).sort((a, b) => a[0] - b[0]).map(([l, c]) => new CovMarker(c).range(doc.line(l).from))) : RangeSet.empty;
+    }
+    return set;
+  },
+});
+const covGutter = gutter({ class: 'cm-cov-gutter', markers: v => v.state.field(covField) });
+
 interface Doc { name: string; view: EditorView; dirty: boolean; page: HTMLElement }
 
 export class Editors {
@@ -78,6 +109,13 @@ export class Editors {
   onChange?: () => void;
   onToggleBp?: (name: string, line: number) => void;
   private bpLines = new Map<string, number[]>();
+  private cov: Map<string, Map<number, LineCoverage>> | null = null;
+
+  /** Show (or with null, hide) coverage marks in every editor. */
+  setCoverage(cov: Map<string, Map<number, LineCoverage>> | null) {
+    this.cov = cov;
+    for (const [n, d] of this.docs) d.view.dispatch({ effects: setCov.of(cov?.get(n) ?? null) });
+  }
   private exec: { file: string; line: number } | null = null;
 
   constructor(private pane: Pane, private fs: BrowserFS) {}
@@ -104,6 +142,8 @@ export class Editors {
             errorLineField,
             bpField,
             execField,
+            covField,
+            covGutter,
             gutter({
               class: 'cm-bp-gutter',
               markers: v => v.state.field(bpField),
@@ -129,7 +169,7 @@ export class Editors {
       });
       d = { name, view, dirty: false, page };
       this.docs.set(name, d);
-      view.dispatch({ effects: [setBpLines.of(this.bpLines.get(name) ?? []), setExecLine.of(this.exec?.file === name ? this.exec.line : null)] });
+      view.dispatch({ effects: [setBpLines.of(this.bpLines.get(name) ?? []), setExecLine.of(this.exec?.file === name ? this.exec.line : null), setCov.of(this.cov?.get(name) ?? null)] });
       this.pane.add('file:' + name, name, page, { closable: true, onClose: () => this.closing(name), tooltip: name });
       this.onChange?.();
     }

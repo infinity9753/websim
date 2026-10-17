@@ -59,7 +59,7 @@ run -all
 
 - SystemVerilog: interfaces (modports not enforced), basic classes (no parameterized classes, randomization, constraints, queues or dynamic arrays) and a subset of SVA (no `throughout/within/intersect`, `[->]`/`[=]` repetition or property arguments).
 - VHDL configurations support component bindings (`use entity` / `use configuration` / `use open`) but not generic/port maps inside the configuration.
-- No code coverage; no WLF export.
+- No WLF export; coverage has no UCDB database or exclusions.
 
 ## Project layout
 
