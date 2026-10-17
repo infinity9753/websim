@@ -318,7 +318,17 @@ class VParser {
       case 'typedef': items.push(this.parseTypedef()); return;
       case 'import': items.push(...this.parseImport()); return;
       case 'specify': while (!this.accept('endspecify')) this.pos++; return;
-      case 'defparam': this.err('defparam is not supported; use #() parameter overrides');
+      case 'defparam': {
+        this.pos++;
+        do {
+          const dl = this.loc();
+          const path = this.hierName();
+          this.expect('=');
+          items.push({ k: 'defparam', path, value: this.expr(), loc: dl });
+        } while (this.accept(','));
+        this.expect(';');
+        return;
+      }
     }
     if (NET_TYPES.has(v) || VAR_TYPES.has(v) || this.typedefs.has(v) || (this.peek().v === '::' && this.pkgTypes.get(v)?.has(this.peek(2).v))) {
       const isNet = NET_TYPES.has(v);
@@ -403,7 +413,8 @@ class VParser {
     do {
       const iloc = this.loc();
       const name = this.ident();
-      if (this.isOp('[')) this.err('Arrays of instances are not supported');
+      let range: [Expr, Expr] | undefined;
+      if (this.accept('[')) { const a = this.expr(); this.expect(':'); const b = this.expr(); this.expect(']'); range = [a, b]; }
       this.expect('(');
       const conns: { name?: string; expr: Expr | null }[] = [];
       if (!this.isOp(')')) {
@@ -421,7 +432,7 @@ class VParser {
         } while (this.accept(','));
       }
       this.expect(')');
-      items.push({ k: 'inst', module, name, params, conns, loc: iloc ?? loc });
+      items.push({ k: 'inst', module, name, params, conns, range, loc: iloc ?? loc });
     } while (this.accept(','));
     this.expect(';');
   }

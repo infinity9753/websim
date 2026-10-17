@@ -368,3 +368,42 @@ endmodule`,
     expect(out).toEqual(['10 3c 1 w=11', 'sum=60', 'i=5 dbl=10 W=8', '1 0 1']);
   });
 });
+
+describe('instance arrays, multi-dim arrays, defparam (#20)', () => {
+  it('slices buses across instance arrays and shares scalar connections', () => {
+    const { out } = simulate({
+      't.v': `module inv #(parameter P = 0) (input a, input en, output y); assign y = en ? ~a : a; endmodule
+      module t;
+        reg [3:0] a = 4'b0011; reg en = 1; wire [3:0] y;
+        inv u [3:0] (.a(a), .en(en), .y(y));
+        initial #1 $display("%b", y);
+      endmodule`,
+    }, 't');
+    expect(out).toEqual(['1100']);
+  });
+
+  it('flattens multi-dimensional unpacked arrays', () => {
+    const { out } = simulate({
+      't.v': `module t; reg [7:0] m [0:2][0:3]; integer i, j;
+        initial begin
+          for (i = 0; i < 3; i = i + 1) for (j = 0; j < 4; j = j + 1) m[i][j] = i * 10 + j;
+          $display("%0d %0d %0d %b", m[0][0], m[1][2], m[2][3], m[2][3][1:0]);
+          m[1][1][7] = 1'b1;
+          $display("%0d", m[1][1]);
+        end endmodule`,
+    }, 't');
+    expect(out).toEqual(['0 12 23 11', '139']);
+  });
+
+  it('applies defparam to direct and nested instances', () => {
+    const { out } = simulate({
+      't.v': `module leaf #(parameter W = 1) (); initial #1 $display("%m W=%0d", W); endmodule
+      module mid; leaf l(); endmodule
+      module t; leaf a(); mid m();
+        defparam a.W = 4;
+        defparam m.l.W = 9;
+      endmodule`,
+    }, 't');
+    expect(out.sort()).toEqual(['t.a W=4', 't.m.l W=9']);
+  });
+});

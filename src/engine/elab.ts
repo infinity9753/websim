@@ -51,6 +51,8 @@ export class Scope {
   imports: Scope[] = [];
   procs: Process[] = [];
   overrides?: { named: Map<string, Expr>; positional: Expr[]; from: Scope };
+  /** defparam values targeting instances below this scope, keyed by relative dotted path. */
+  defparams = new Map<string, Vec>();
   constructor(public name: string, public path: string, public lex: Scope | null, public up: Scope | null, public mod: ModInfo, public kind: 'instance' | 'generate' | 'block' | 'package' | 'func') {}
 
   lookup(n: string): Sym | undefined {
@@ -293,7 +295,7 @@ export class Elaborator {
 
   // ---------------------------------------------------------- hierarchy
 
-  instantiate(found: { unit: Unit; arch?: Unit; libName: string }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null }[], loc: Loc | undefined): Scope {
+  instantiate(found: { unit: Unit; arch?: Unit; libName: string }, instName: string, parent: Scope | null, params: { name?: string; value: Expr }[], conns: { name?: string; expr: Expr | null }[], loc: Loc | undefined, arr?: { n: number; k: number }, defs?: Map<string, Vec>): Scope {
     if (++this.instDepth > 64) err('Design hierarchy too deep (recursive instantiation?)', loc);
     const unit = found.unit;
     const arch = found.arch;
@@ -303,6 +305,7 @@ export class Elaborator {
     const mod: ModInfo = { lang, unit, arch: arch?.name, tsUnit: ts.unit, tsPrec: ts.prec, file: (arch ?? unit).file, libName: found.libName };
     const path = parent ? `${parent.path}/${instName}` : `/${instName}`;
     const scope = new Scope(instName, path, null, parent, mod, 'instance');
+    if (defs) for (const [k2, v] of defs) scope.defparams.set(k2, v);
     this.scopes.push(scope);
     if (parent) { parent.children.push(scope); parent.syms.set(instName, { k: 'scope', s: scope }); }
     const unitLabel = `${found.libName}.${unit.name}${arch ? `(${arch.name})` : ''}`;
@@ -343,6 +346,7 @@ export class Elaborator {
         if (!conn && wildcard) conn = { name: port.name, expr: { k: 'id', name: port.name } };
       } else conn = conns[pi];
       const dir = port.dir === 'input' ? 'in' : port.dir === 'output' ? 'out' : 'inout';
+      if (conn?.expr && parent && arr) conn = { ...conn, expr: this.arraySlice(conn.expr, parent, t.w || 1, arr, loc) };
       if (conn?.expr && parent) {
         const alias = this.aliasTarget(conn.expr, parent, t);
         if (alias) {
@@ -548,6 +552,7 @@ export class Elaborator {
           break;
         }
         case 'use': this.importPackage(scope, it.pkg, it.loc); break;
+        case 'defparam': scope.defparams.set(it.path, this.constEval(it.value, scope)); break;
       }
     }
     // pass 2: structure and behaviour
@@ -615,7 +620,64 @@ export class Elaborator {
     let found = this.lib.findDesign(it.module, lib, it.arch);
     if (!found && scope.mod.lang === 'vhdl') found = this.lib.findDesign(it.module.toLowerCase(), lib, it.arch);
     if (!found) err(`(vsim-3033) Instantiation of '${it.module}' failed. The design unit was not found.`, it.loc);
-    this.instantiate(found, it.name, scope, it.params, it.conns, it.loc);
+    // defparams aimed at this instance (direct) or deeper (passed down)
+    const n = (v: Vec): Expr => ({ k: 'num', v, loc: it.loc });
+    const own: { name?: string; value: Expr }[] = [];
+    const deeper = new Map<string, Vec>();
+    for (const [p, v] of scope.defparams) {
+      if (!p.startsWith(it.name + '.')) continue;
+      const rest = p.slice(it.name.length + 1);
+      if (rest.includes('.')) deeper.set(rest, v); else own.push({ name: rest, value: n(v) });
+    }
+    const params = [...it.params, ...own];
+    if (!it.range) { this.instantiate(found, it.name, scope, params, it.conns, it.loc, undefined, deeper); return; }
+    const a = this.constInt(it.range[0], scope), b = this.constInt(it.range[1], scope);
+    const count = Math.abs(a - b) + 1;
+    for (let i = a; ; i += a >= b ? -1 : 1) {
+      this.instantiate(found, `${it.name}[${i}]`, scope, params, it.conns, it.loc, { n: count, k: Math.abs(i - b) }, deeper);
+      if (i === b) break;
+    }
+  }
+
+  /** Port connection for element k of an instance array: the whole expression, or its k-th slice. */
+  arraySlice(e: Expr, parent: Scope, pw: number, arr: { n: number; k: number }, loc?: Loc): Expr {
+    const ew = this.ex(e, this.ctx(parent, 'width')).w;
+    if (ew === pw) return e;
+    if (ew !== pw * arr.n) err(`(vsim-3015) Port connection width ${ew} does not match ${pw} or ${pw * arr.n} for an array of ${arr.n} instances.`, loc);
+    if (e.k !== 'id') err('Instance-array connections that are sliced must be a simple signal name.', loc);
+    const sym = this.lookupName(parent, e.name);
+    if (sym?.k !== 'sig') err(`'${e.name}' is not a signal.`, loc);
+    const s = sym.sig;
+    const lowIdx = s.msb >= s.lsb ? s.lsb + arr.k * pw : s.lsb - arr.k * pw - (pw - 1);
+    const num = (v: number): Expr => ({ k: 'num', v: fromInt(v, 32, true), unsized: true });
+    return { k: 'irange', base: e, start: num(lowIdx), width: num(pw), dir: '+', loc };
+  }
+
+  /** m[i][j]... on a multi-dimensional memory -> m[flat] followed by any remaining selects. */
+  flattenMem(e: Expr, c: Ctx): Expr {
+    if (e.k === 'range' || e.k === 'irange') { const b = this.flattenMem(e.base, c); return b === e.base ? e : { ...e, base: b }; }
+    if (e.k !== 'index') return e;
+    const chain: Expr[] = [];
+    let b: Expr = e;
+    while (b.k === 'index') { if ((b as any).flat) return e; chain.unshift(b.index); b = b.base; }
+    if (b.k !== 'id') return e;
+    const sym = this.lookupName(c.scope, b.name);
+    if (sym?.k !== 'mem' || !sym.mem.dims) return e;
+    const dims = sym.mem.dims;
+    if (chain.length < dims.length) err(`'${b.name}' needs ${dims.length} indices.`, e.loc);
+    const num = (v: number): Expr => ({ k: 'num', v: fromInt(v, 32, true), unsized: true });
+    let flat: Expr | null = null;
+    let stride = 1;
+    for (let d = dims.length - 1; d >= 0; d--) {
+      const [lo] = dims[d];
+      const term: Expr = { k: 'bin', op: '*', l: { k: 'bin', op: '-', l: chain[d], r: num(lo) }, r: num(stride) };
+      flat = flat ? { k: 'bin', op: '+', l: term, r: flat } : term;
+      stride *= dims[d][1] - dims[d][0] + 1;
+    }
+    let out: Expr = { k: 'index', base: b, index: flat!, loc: e.loc };
+    (out as any).flat = true;
+    for (const extra of chain.slice(dims.length)) out = { k: 'index', base: out, index: extra, loc: e.loc };
+    return out;
   }
 
   elabDecl(it: Extract<Item, { k: 'decl' }>, scope: Scope) {
@@ -634,9 +696,10 @@ export class Elaborator {
         // memory
         let lo: number, hi: number, et: RType;
         if (dn.unpacked) {
-          const a = this.constInt(dn.unpacked[0][0], scope), b = this.constInt(dn.unpacked[0][1], scope);
-          lo = Math.min(a, b); hi = Math.max(a, b); et = t;
-          if (dn.unpacked.length > 1) err('Multi-dimensional unpacked arrays are not supported', it.loc);
+          const dims = dn.unpacked.map(([x, y]) => { const a = this.constInt(x, scope), b = this.constInt(y, scope); return [Math.min(a, b), Math.max(a, b)] as [number, number]; });
+          et = t;
+          if (dims.length === 1) [lo, hi] = dims[0];
+          else { lo = 0; hi = dims.reduce((p, d) => p * (d[1] - d[0] + 1), 1) - 1; (dn as any).dims = dims; }
         } else { lo = t.lo!; hi = t.hi!; et = t.elem!; }
         const n = hi - lo + 1;
         if (n > 1 << 22) err(`Memory '${dn.name}' too large (${n} words)`, it.loc);
@@ -644,6 +707,7 @@ export class Elaborator {
         const init = this.defaultValue(et);
         const words: Vec[] = new Array(n).fill(resize(init, w).withSign(et.signed));
         const mem = new Memory(`${scope.path}/${dn.name}`, dn.name, w, lo, hi, et.signed, words, et.msb, et.lsb, et.enumNames);
+        if ((dn as any).dims) mem.dims = (dn as any).dims;
         if (dn.init) this.initMemory(mem, dn.init, scope, et);
         const mt: RType = { kind: 'array', w, msb: et.msb, lsb: et.lsb, signed: et.signed, elem: et, lo, hi, enumNames: et.enumNames };
         scope.syms.set(dn.name, { k: 'mem', mem, t: mt });
@@ -814,7 +878,10 @@ export class Elaborator {
         return this.withFieldType(this.ex(fe.expr, c), fe.t);
       }
       case 'sized': { const n = this.ex(e.e, c); return leaf(final(n, e.w), e.w, n.s, { enumNames: n.enumNames }); }
-      case 'index': case 'range': case 'irange': return this.selectNode(e, c);
+      case 'index': case 'range': case 'irange': {
+        const f = this.flattenMem(e, c);
+        return f !== e ? this.ex(f, c) : this.selectNode(e, c);
+      }
       case 'un': return this.unaryNode(e, c);
       case 'bin': return this.binNode(e, c);
       case 'tern': {
@@ -1702,6 +1769,8 @@ export class Elaborator {
       return { w: sig.w, tg: () => t };
     }
     if (e.k === 'index' || e.k === 'range' || e.k === 'irange') {
+      const fl = this.flattenMem(e, c);
+      if (fl !== e) return this.lv(fl, c);
       // memory word (possibly with bit/part select on it)
       const memBase = (x: Expr): { mem: Memory; idx: () => number } | null => {
         if (x.k === 'index' && x.base.k === 'id') {

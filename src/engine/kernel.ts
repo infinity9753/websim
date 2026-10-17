@@ -57,6 +57,8 @@ export class Signal {
 export class Memory {
   listeners: Set<Waker> | null = null;
   constructor(public path: string, public name: string, public w: number, public lo: number, public hi: number, public signed: boolean, public words: Vec[], public elemMsb: number, public elemLsb: number, public enumNames?: string[]) {}
+  /** Multi-dimensional unpacked arrays are flattened; dims holds each [lo, hi]. */
+  dims?: [number, number][];
   index(i: number): number { return i >= this.lo && i <= this.hi ? i - this.lo : -1; }
 }
 
