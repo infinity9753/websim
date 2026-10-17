@@ -121,3 +121,21 @@ describe('locals and call stack (#15)', () => {
     expect(s.locals().find(l => l.name === 'v')!.value.toNumber()).toBe(2); // second pass through the process
   });
 });
+
+describe('when (#16)', () => {
+  it('stops when the condition becomes true and runs other commands without stopping', async () => {
+    const { s, lines } = mk();
+    await s.exec('vlog tb.v; vsim tb');
+    await s.exec('when -label hit2 {/tb/i == 2} {echo "i is two"; stop}');
+    await s.exec('run -all');
+    expect(s.now).toBe(15000);
+    expect(lines).toContain('i is two');
+    expect(lines.some(l => /stop requested by when "hit2"/.test(l))).toBe(true);
+    await s.exec('nowhen hit2');
+    await s.exec('when {/tb/sum == 6} {echo sum reached}');
+    await s.exec('run -all');
+    expect(lines).toContain('sum reached');
+    expect(lines).toContain('sum=6');
+    expect(s.design!.kernel.finished).toBe(true);
+  });
+});

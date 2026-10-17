@@ -50,6 +50,10 @@ export class Session {
   private waveSeq = 1;
   breakpoints: Breakpoint[] = [];
   private bpSeq = 1;
+  whens: { id: number; label: string; cond: string; cmds: string; off?: () => void }[] = [];
+  private whenSeq = 1;
+  private whenQueue: string[] = [];
+  private whenContinue = false;
   /** Compile designs with statement hooks (breakpoints / stepping). */
   debug = true;
   private forceTimers: { cancelled: boolean }[] = [];
@@ -119,7 +123,8 @@ export class Session {
       case 'bp': return this.bp(rest);
       case 'bd': return this.bd(rest);
       case 'step': return this.step(rest);
-      case 'when': this.out(`** Warning: '${cmd}' is not implemented in this version.`, 'warn'); return;
+      case 'when': return this.when(rest);
+      case 'nowhen': return this.nowhen(rest);
       case 'show': return this.show(rest);
       case 'describe': return this.describe(rest);
       case 'find': return this.find(rest);
@@ -156,6 +161,7 @@ export class Session {
       '  mem list | display | save -outfile f | load -infile f  <memory>',
       '  bp [<file> <line> [{cond}]]        set / list breakpoints;  bd <id>|<file> <line>|all',
       '  step [-over]                       execute one statement (step into / over)',
+      '  when [-label n] {cond} {cmds}      run commands (e.g. stop) when cond becomes true; nowhen <label>',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
       '  ls, pwd, echo, history, clear, help',
     ].join('\n'));
@@ -289,6 +295,7 @@ export class Session {
     this.design = d;
     this.scope = d.root;
     this.installBreakpoints();
+    this.installWhens();
     this.lastVsim = o;
     this.promptN = 1;
     // rebind existing waves by path (restart)
@@ -356,6 +363,16 @@ export class Session {
       for (;;) {
         r = k.run(until, 40);
         this.emit('time');
+        if (r === 'stopped' && this.whenContinue) {
+          // a 'when' fired without 'stop': run its commands at this time, then keep going
+          this.whenContinue = false;
+          const q = this.whenQueue; this.whenQueue = [];
+          this.running = false;
+          for (const c of q) await this.exec(c);
+          this.running = true;
+          k.lastStopInfo = '';
+          continue;
+        }
         if (r !== 'budget') break;
         await new Promise(res => setTimeout(res, 0));
         if (!this.design || this.design !== d) return;
@@ -384,6 +401,8 @@ export class Session {
     }
     if (k.dumpItems) this.writeDump();
     this.emit('time');
+    const q = this.whenQueue; this.whenQueue = []; this.whenContinue = false;
+    for (const c of q) await this.exec(c);
   }
 
   // ------------------------------------------------------------ breakpoints / stepping
@@ -437,6 +456,7 @@ export class Session {
   loadBreakpoints(list: { file: string; line: number; cond?: string }[]) {
     this.breakpoints = list.map(b => ({ id: this.bpSeq++, file: b.file, line: b.line, cond: b.cond, enabled: true }));
     this.installBreakpoints();
+    this.installWhens();
     this.emit('debug');
   }
 
@@ -447,6 +467,7 @@ export class Session {
     if (b) { b.cond = cond; b.enabled = true; }
     else { b = { id: this.bpSeq++, file, line: l, cond, enabled: true }; this.breakpoints.push(b); }
     this.installBreakpoints();
+    this.installWhens();
     this.emit('debug');
     return b;
   }
@@ -454,6 +475,7 @@ export class Session {
   removeBreakpoint(file: string, line: number) {
     this.breakpoints = this.breakpoints.filter(b => !(b.file === file && b.line === line));
     this.installBreakpoints();
+    this.installWhens();
     this.emit('debug');
   }
 
@@ -490,6 +512,7 @@ export class Session {
       this.breakpoints = this.breakpoints.filter(b => !(b.file === file && b.line === line));
     }
     this.installBreakpoints();
+    this.installWhens();
     this.emit('debug');
   }
 
@@ -505,8 +528,65 @@ export class Session {
     k.stepMode = null;
   }
 
+  // ------------------------------------------------------------ when
+  when(args: string[]) {
+    let label: string | undefined;
+    const pos: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-label') { label = args[++i]; continue; }
+      if (args[i] === '-fast' || args[i] === '-repeat') continue;
+      pos.push(args[i]);
+    }
+    if (!pos.length) {
+      if (!this.whens.length) this.out('No when statements.');
+      for (const w of this.whens) this.out(`when -label ${w.label} {${w.cond}} {${w.cmds}}`);
+      return;
+    }
+    if (pos.length < 2) throw new Error('Usage: when [-label name] {condition} {commands}');
+    const id = this.whenSeq++;
+    const w = { id, label: label ?? `when${id}`, cond: pos[0], cmds: pos[1] };
+    this.compileCond(w.cond); // validate now if a design is loaded
+    this.whens = this.whens.filter(x => x.label !== w.label);
+    this.whens.push(w);
+    this.installWhens();
+  }
+
+  nowhen(args: string[]) {
+    const pat = args[0] ?? '*';
+    const re = globRe(pat);
+    for (const w of this.whens) if (re.test(w.label)) w.off?.();
+    this.whens = this.whens.filter(w => !re.test(w.label));
+  }
+
+  private installWhens() {
+    const d = this.design;
+    for (const w of this.whens) {
+      w.off?.(); w.off = undefined;
+      if (!d) continue;
+      let pred: () => boolean;
+      const sigs = new Set<Signal>();
+      try { pred = this.compileCond(w.cond, sigs); }
+      catch (e) { this.out(`** Warning: when ${w.label}: ${(e as Error).message}`, 'warn'); continue; }
+      const k = d.kernel;
+      const cmds = splitCommands(w.cmds).map(c => c.trim()).filter(Boolean);
+      const waker = () => {
+        if (!pred()) return;
+        let stop = false;
+        for (const c of cmds) {
+          if (/^stop\b/.test(c)) stop = true;
+          else this.whenQueue.push(c);
+        }
+        k.stopRequested = true;
+        if (stop) { this.whenContinue = false; k.lastStopInfo = `Simulation stop requested by when "${w.label}" at ${fmtTime(k.now, k.resolution)}.`; }
+        else this.whenContinue = true;
+      };
+      for (const s of sigs) k.listen(s, waker);
+      w.off = () => { for (const s of sigs) k.unlisten(s, waker); };
+    }
+  }
+
   /** Compile a condition such as "/tb/q == 9 && rst != 1" into a predicate over current values. */
-  compileCond(text: string): () => boolean {
+  compileCond(text: string, sigs?: Set<Signal>): () => boolean {
     const toks = text.match(/\s*(==|!=|<=|>=|&&|\|\||[()<>!]|[^\s()<>!=&|]+)/g)?.map(t => t.trim()).filter(Boolean) ?? [];
     let i = 0;
     type F = () => L.Vec;
@@ -516,7 +596,7 @@ export class Session {
       if (t === '(') { const e = or(); if (toks[i++] !== ')') throw new Error("missing ')'"); return e; }
       if (t === '!') { const e = primary(); return () => L.lnot(e()); }
       const sig = this.findSignal(t);
-      if (sig) { const sg = sig.obj.sig; return () => sg.value; }
+      if (sig) { const sg = sig.obj.sig; sigs?.add(sg); return () => sg.value; }
       if (/^[a-zA-Z_]/.test(t) && sig === null && !/^[xXzZ]$/.test(t)) throw new Error(`unknown signal "${t}"`);
       const v = parseValue(t, 64);
       return () => v;
