@@ -355,3 +355,78 @@ export class ProcessesPanel {
     if (!n) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No processes in this region.')));
   }
 }
+
+// ------------------------------------------------------------------ memory
+
+export class MemoryPanel {
+  el: HTMLElement;
+  private sel: HTMLSelectElement;
+  private addr: HTMLInputElement;
+  private radix: HTMLSelectElement;
+  private tbody: HTMLElement;
+  private start = 0;
+  private pending = false;
+  private static PAGE = 256;
+  onEdit?: (path: string, addr: number, current: string) => void;
+
+  constructor(private session: Session) {
+    this.sel = h('select', { class: 'tb-field', style: { width: '170px' }, 'aria-label': 'Memory', onchange: () => { this.start = 0; void this.refresh(); } });
+    this.addr = h('input', { class: 'tb-field', placeholder: 'Go to addr', style: { width: '80px' }, 'aria-label': 'Go to address', onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') this.goto(); } });
+    this.radix = h('select', { class: 'tb-field', style: { width: '80px' }, 'aria-label': 'Radix', onchange: () => void this.refresh() },
+      ['hex', 'binary', 'unsigned', 'decimal', 'octal'].map(r => h('option', { value: r }, r)));
+    this.tbody = h('tbody');
+    this.el = h('div', {},
+      bar(this.sel, this.addr, this.radix,
+        tbtn('up', 'Previous page', () => { this.start -= MemoryPanel.PAGE; void this.refresh(); }),
+        tbtn('down', 'Next page', () => { this.start += MemoryPanel.PAGE; void this.refresh(); })),
+      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Value'))),
+        this.tbody)));
+    session.on('sim', () => void this.reload());
+    session.on('time', () => this.schedule());
+    void this.reload();
+  }
+
+  private schedule() {
+    if (this.pending || !this.el.isConnected || this.el.offsetParent === null) return;
+    this.pending = true;
+    setTimeout(() => { this.pending = false; void this.refresh(); }, 150);
+  }
+
+  private goto() {
+    const v = this.addr.value.trim();
+    const n = /^(0x|16#)/i.test(v) ? parseInt(v.replace(/^(0x|16#)/i, '').replace(/#$/, ''), 16) : parseInt(v, 10);
+    if (!isNaN(n)) { this.start = n; void this.refresh(); }
+  }
+
+  async reload() {
+    clear(this.sel);
+    if (!this.session.design) { this.empty('No design loaded.'); return; }
+    const mems = await this.session.listMemories();
+    for (const m of mems) this.sel.appendChild(h('option', { value: m.path }, `${m.path.split('/').slice(-2).join('/')} [${m.lo}:${m.hi}]`));
+    this.start = mems[0]?.lo ?? 0;
+    if (!mems.length) { this.empty('No memories in this design.'); return; }
+    await this.refresh();
+  }
+
+  show() { void this.reload(); }
+
+  private empty(msg: string) { clear(this.tbody); this.tbody.appendChild(h('tr', {}, h('td', { colspan: '2', class: 'empty' }, msg))); }
+
+  async refresh() {
+    const path = this.sel.value;
+    if (!path) return;
+    const r = await this.session.memWords(path, this.start, MemoryPanel.PAGE);
+    if (!r) return;
+    this.start = Math.max(r.lo, Math.min(this.start, r.hi));
+    clear(this.tbody);
+    const digits = Math.max(2, r.hi.toString(16).length);
+    r.words.forEach((v, i) => {
+      const a = Math.max(r.lo, this.start) + i;
+      const txt = L.format(v, this.radix.value as L.Radix);
+      this.tbody.appendChild(h('tr', { title: 'Double-click to change', ondblclick: () => this.onEdit?.(path, a, txt) },
+        h('td', { class: 'mono kind' }, a.toString(16).padStart(digits, '0')),
+        h('td', { class: 'mono' }, txt)));
+    });
+  }
+}

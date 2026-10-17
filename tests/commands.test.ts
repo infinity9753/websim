@@ -93,3 +93,23 @@ describe('wave format save/restore (#12)', () => {
     expect(s.waves.map(w => w.dividerLabel ?? `${w.path}:${w.radix}`)).toEqual(['/tb/clk:binary', 'Counter', '/tb/q:hex']);
   });
 });
+
+describe('memory commands (#14)', () => {
+  it('lists, displays, saves, loads and deposits memory words', async () => {
+    const fs: Record<string, string> = {
+      'm.v': `module m; reg [7:0] ram [0:15]; integer i; initial for (i = 0; i < 16; i = i + 1) ram[i] = i * 3; endmodule`,
+      'in.mem': '@2 aa bb\n',
+    };
+    const lines: string[] = [];
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, m => lines.push(m));
+    await s.exec('vlog m.v; vsim m; run 1');
+    expect(s.listMemories()).toEqual([{ path: '/m/ram', lo: 0, hi: 15, w: 8 }]);
+    await s.exec('mem display -startaddress 0 -endaddress 3 /m/ram');
+    expect(lines.at(-1)).toBe('0000: 00 03 06 09');
+    await s.exec('mem load -infile in.mem /m/ram');
+    expect(s.memWords('/m/ram', 2, 2)!.words.map(v => Number(v.a))).toEqual([0xaa, 0xbb]);
+    s.memDeposit('/m/ram', 15, '16#7f');
+    await s.exec('mem save -outfile out.mem ram');
+    expect(fs['out.mem']).toContain('@f 7f');
+  });
+});

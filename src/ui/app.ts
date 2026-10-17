@@ -6,7 +6,7 @@ import { BrowserFS, langOf, loadState, saveState } from './vfs';
 import { Transcript } from './transcript';
 import { Editors } from './editor';
 import { WaveView } from './wave';
-import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel } from './panels';
+import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
 
@@ -40,6 +40,7 @@ export class App {
   structure: StructurePanel;
   objects: ObjectsPanel;
   processes: ProcessesPanel;
+  memory: MemoryPanel;
   state: AppState;
   main!: HTMLElement;
   runField!: HTMLInputElement;
@@ -64,6 +65,7 @@ export class App {
     this.structure = new StructurePanel(this.session);
     this.objects = new ObjectsPanel(this.session);
     this.processes = new ProcessesPanel(this.session);
+    this.memory = new MemoryPanel(this.session);
     this.build();
     this.wire();
     this.start();
@@ -76,6 +78,8 @@ export class App {
     this.left.add('sim', 'sim', this.structure.el, { activate: false });
     this.mid.add('objects', 'Objects', this.objects.el);
     this.mid.add('processes', 'Processes', this.processes.el, { activate: false });
+    this.mid.add('memory', 'Memory', this.memory.el, { activate: false });
+    this.mid.onActivate = (id) => { if (id === 'memory') this.memory.show(); };
     this.right.add('wave', 'Wave', this.wave.el);
     this.bottom.add('transcript', 'Transcript', this.transcript.el);
 
@@ -154,6 +158,7 @@ export class App {
         { label: 'Structure (sim)', action: () => { this.showLeft(); this.left.activate('sim'); } },
         { label: 'Objects', action: () => { this.showMid(); this.mid.activate('objects'); } },
         { label: 'Processes', action: () => { this.showMid(); this.mid.activate('processes'); } },
+        { label: 'Memory', action: () => { this.showMid(); this.mid.activate('memory'); } },
         { label: 'Wave', action: () => this.right.activate('wave') },
         '-',
         { label: 'Theme: Auto', action: () => this.setTheme('auto') },
@@ -283,6 +288,10 @@ export class App {
     this.library.onSimulate = (lib, u) => void this.cmd(`vsim ${lib}.${u}`);
     this.library.onOpenFile = (f) => this.editors.open(f);
     this.objects.onForce = (p) => void this.forceDialog(p);
+    this.memory.onEdit = async (path, addr, cur) => {
+      const v = await promptText('Change memory word', `${path}[${addr}]`, cur);
+      if (v) { await this.session.memDeposit(path, addr, /^[0-9a-f]+$/i.test(v) && !/^[01]+$/.test(v) ? `16#${v}` : v); void this.memory.refresh(); }
+    };
 
     s.on('sim', () => { if (s.design) { this.left.activate('sim'); this.right.activate('wave'); } this.updateStatus(); });
     let waveCount = 0;

@@ -121,6 +121,12 @@ export class RemoteSession {
   quitSim() { void this.call('quitSim'); }
   resetLibraries() { void this.call('resetLibraries'); }
   vcdText(all: boolean): Promise<string> { return this.call<string>('vcdText', all); }
+  listMemories() { return this.call<{ path: string; lo: number; hi: number; w: number }[]>('listMemories'); }
+  async memWords(path: string, from: number, count: number) {
+    const r = await this.call<{ lo: number; hi: number; w: number; words: PVec[] } | null>('memWords', path, from, count);
+    return r && { ...r, words: r.words.map(vec) };
+  }
+  memDeposit(path: string, addr: number, value: string) { return this.call('memDeposit', path, addr, value); }
 
   private emitLocal(ev: Ev) { for (const f of this.listeners.get(ev) ?? []) f(); }
 

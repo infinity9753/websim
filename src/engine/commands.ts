@@ -1,7 +1,7 @@
 // Transcript command interpreter (simulator command language subset).
 import { LibraryManager } from './library';
 import { Elaborator, type Design, type Scope, type ObjEntry } from './elab';
-import type { Signal } from './kernel';
+import type { Signal, Memory } from './kernel';
 import { fmtTime, parseTime } from './format';
 import * as L from './logic';
 import type { Radix } from './logic';
@@ -126,6 +126,7 @@ export class Session {
       case 'now': this.out(this.fmt(this.now)); return;
       case 'vcd': return this.vcd(rest);
       case 'write': return this.writeCmd(rest);
+      case 'mem': return this.memCmd(rest);
     }
     throw new Error(`invalid command name "${cmd}"`);
   }
@@ -152,6 +153,7 @@ export class Session {
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
       '  write format wave <file.do>        save the wave window setup (restore with "do")',
+      '  mem list | display | save -outfile f | load -infile f  <memory>',
       '  bp [<file> <line> [{cond}]]        set / list breakpoints;  bd <id>|<file> <line>|all',
       '  step [-over]                       execute one statement (step into / over)',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
@@ -549,6 +551,93 @@ export class Session {
     if (!this.fs.write) return;
     const text = writeVcd(this.dumpVars(k.dumpItems!), k.now);
     this.fs.write(k.dumpFile, text);
+  }
+
+  // ------------------------------------------------------------ memories
+  findMemory(path: string): { path: string; mem: Memory } | null {
+    path = path.replace(/^sim:/, '');
+    const i = path.lastIndexOf('/');
+    const sc = i < 0 ? (this.scope ?? this.design?.root ?? null) : this.findScope(path.slice(0, i) || '/');
+    const m = sc?.memories.find(x => x.name === path.slice(i + 1) || x.name.toLowerCase() === path.slice(i + 1).toLowerCase());
+    return m && sc ? { path: `${sc.path}/${m.name}`, mem: m.mem } : null;
+  }
+
+  listMemories(): { path: string; lo: number; hi: number; w: number }[] {
+    const d = this.design;
+    if (!d) return [];
+    return d.allScopes.flatMap(s => s.memories.map(m => ({ path: `${s.path}/${m.name}`, lo: m.mem.lo, hi: m.mem.hi, w: m.mem.w })));
+  }
+
+  memWords(path: string, from: number, count: number): { lo: number; hi: number; w: number; words: L.Vec[] } | null {
+    const f = this.findMemory(path);
+    if (!f) return null;
+    const m = f.mem;
+    const a = Math.max(m.lo, from), b = Math.min(m.hi, from + count - 1);
+    return { lo: m.lo, hi: m.hi, w: m.w, words: b >= a ? m.words.slice(a - m.lo, b - m.lo + 1) : [] };
+  }
+
+  memDeposit(path: string, addr: number, value: string) {
+    const d = this.requireDesign();
+    const f = this.findMemory(path);
+    if (!f) throw new Error(`(vsim-3140) Unable to find memory "${path}".`);
+    const i = f.mem.index(addr);
+    if (i < 0) throw new Error(`Address ${addr} is outside [${f.mem.lo}:${f.mem.hi}].`);
+    d.kernel.memWrite(f.mem, i, parseValue(value, f.mem.w).withSign(f.mem.signed));
+    this.emit('time');
+  }
+
+  memCmd(args: string[]) {
+    this.requireDesign();
+    const sub = args[0];
+    const opt = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+    const path = args.slice(1).filter((a, i, arr) => !a.startsWith('-') && !(arr[i - 1] ?? '').startsWith('-')).pop();
+    if (sub === 'list') { for (const m of this.listMemories()) this.out(`${m.path}  [${m.lo}:${m.hi}] x ${m.w} bits`); return; }
+    if (!path) throw new Error('Usage: mem display|save|load [options] <memory>');
+    const f = this.findMemory(path);
+    if (!f) throw new Error(`(vsim-3140) Unable to find memory "${path}".`);
+    const m = f.mem;
+    const radix: Radix = opt('-format') === 'bin' || opt('-radix')?.startsWith('b') ? 'binary' : opt('-radix') ? parseRadix(opt('-radix')!) : 'hex';
+    const fmtW = (v: L.Vec) => L.format(v, radix);
+    switch (sub) {
+      case 'display': {
+        const a = Number(opt('-startaddress') ?? m.lo), b = Number(opt('-endaddress') ?? Math.min(m.hi, a + 63));
+        const lines: string[] = [];
+        for (let x = a; x <= b; x += 8) {
+          const vals: string[] = [];
+          for (let y = x; y <= Math.min(b, x + 7); y++) vals.push(fmtW(m.words[y - m.lo]));
+          lines.push(`${x.toString(16).padStart(4, '0')}: ${vals.join(' ')}`);
+        }
+        this.out(lines.join('\n'));
+        return;
+      }
+      case 'save': {
+        const file = opt('-outfile') ?? opt('-o');
+        if (!file || !this.fs.write) throw new Error('mem save: -outfile <file> required');
+        const lines = [`// memory data file: ${f.path}`, `// format=${radix === 'binary' ? 'bin' : 'hex'} addressradix=h`];
+        m.words.forEach((v, i) => lines.push(`@${(i + m.lo).toString(16)} ${fmtW(v)}`));
+        this.fs.write(file, lines.join('\n') + '\n');
+        this.out(`Saved ${m.words.length} words to ${file}`);
+        return;
+      }
+      case 'load': {
+        const file = opt('-infile') ?? opt('-i');
+        const text = file ? this.fs.read(file) : undefined;
+        if (text === undefined) throw new Error(`mem load: cannot read "${file}"`);
+        const base = radix === 'binary' ? 2 : 16;
+        let addr = m.lo, n = 0;
+        for (const tok of text.replace(/\/\/.*$/gm, '').split(/\s+/).filter(Boolean)) {
+          if (tok.startsWith('@')) { addr = parseInt(tok.slice(1), 16); continue; }
+          const i = m.index(addr++);
+          if (i < 0) continue;
+          this.design!.kernel.memWrite(m, i, parseValue(base === 16 ? `16#${tok}` : tok, m.w).withSign(m.signed));
+          n++;
+        }
+        this.out(`Loaded ${n} words into ${f.path}`);
+        this.emit('time');
+        return;
+      }
+    }
+    throw new Error(`mem: unknown subcommand "${sub}"`);
   }
 
   /** Wave window setup as a re-runnable do-file. */
