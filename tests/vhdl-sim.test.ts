@@ -213,3 +213,31 @@ end;`;
     expect(out[0]).toBe('** Note: m=15');
   });
 });
+
+describe('whole-array assignment (#2)', () => {
+  it('assigns every word from an aggregate and from another array', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+entity t is end;
+architecture a of t is
+  type mem_t is array (0 to 3) of std_logic_vector(7 downto 0);
+  signal m, m2 : mem_t;
+begin
+  process
+    variable v : mem_t;
+  begin
+    m <= (others => x"AA");
+    wait for 1 ns;
+    m <= (1 => x"11", others => x"00");
+    v := (x"01", x"02", x"03", x"04");
+    wait for 1 ns;
+    m2 <= m;
+    wait for 1 ns;
+    report to_hstring(m(0)) & " " & to_hstring(m(1)) & " " & to_hstring(m(3)) & " " & to_hstring(v(2)) & " " & to_hstring(m2(1));
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out[0]).toBe('** Note: 00 11 00 03 11');
+  });
+});

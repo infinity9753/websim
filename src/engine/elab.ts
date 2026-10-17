@@ -1383,9 +1383,7 @@ export class Elaborator {
       }
       if (!sym) err(c.lang === 'vhdl' ? `(vcom-1136) Unknown identifier "${e.name}".` : `(vlog-2110) Undefined variable: '${e.name}'.`, e.loc);
       if (sym.k === 'mem') {
-        // whole-memory assignment (VHDL aggregate)
-        const mem = sym.mem;
-        return { w: mem.w, tg: () => mem.words.map((_, i) => ({ k: 'mem', mem, idx: i, off: 0, w: mem.w }) as Tgt).slice(0, 1) };
+        err(`Array '${e.name}' must be indexed here (whole-array assignment is only supported as a plain statement).`, e.loc);
       }
       if (sym.k !== 'sig') err(`Illegal target for assignment: '${e.name}' is not a variable or signal.`, e.loc);
       const sig = sym.sig;
@@ -1738,6 +1736,8 @@ export class Elaborator {
   assignStmt(s: Extract<Stmt, { k: 'assign' }>, c: Ctx): SC {
     const k = this.k;
     const nb = s.nb;
+    const mem = this.memTarget(s.lhs, c);
+    if (mem && !s.delay && !s.evctl) return this.memAssign(mem, s.rhs, c, nb ? 'nba' : 'now');
     const lc: Ctx = nb && c.lang === 'verilog' ? { ...c, driverMode: false } : { ...c, driverMode: false };
     const Lv = this.lv(s.lhs, lc);
     const R = final(this.ex(s.rhs, c), Lv.w);
@@ -1764,7 +1764,59 @@ export class Elaborator {
     return { sync: () => self.write(Lv.tg(), R()) };
   }
 
+  /** Whole-array target (VHDL `mem <= (others => ...)`): returns the memory if `lhs` names one. */
+  memTarget(lhs: Expr, c: Ctx): Memory | null {
+    if (lhs.k !== 'id') return null;
+    const sym = this.lookupName(c.scope, lhs.name);
+    return sym?.k === 'mem' ? sym.mem : null;
+  }
+
+  /** Compile a value for every word of `mem`: an aggregate or another array of the same shape. */
+  memValues(mem: Memory, rhs: Expr, c: Ctx): () => Vec[] {
+    const n = mem.words.length;
+    const fix = (f: Ev) => () => resize(f(), mem.w).withSign(mem.signed);
+    if (rhs.k === 'agg') {
+      const others = rhs.others ? fix(final(this.ex(rhs.others, c), mem.w)) : null;
+      const per: (Ev | null)[] = new Array(n).fill(others);
+      rhs.elems.forEach((el, i) => {
+        const idx = el.choice ? this.constInt(el.choice, c.scope) - mem.lo : i;
+        if (idx < 0 || idx >= n) err(`Aggregate index out of range for '${mem.name}'.`, rhs.loc);
+        per[idx] = fix(final(this.ex(el.value, c), mem.w));
+      });
+      if (per.some(p => !p)) err(`Aggregate does not cover every element of '${mem.name}' (add "others =>").`, rhs.loc);
+      return () => per.map(p => p!());
+    }
+    const src = rhs.k === 'id' ? this.memTarget(rhs, c) : null;
+    if (src) {
+      if (src.words.length !== n || src.w !== mem.w) err(`Array size mismatch assigning '${src.name}' to '${mem.name}'.`, rhs.loc);
+      c.reads?.add(src);
+      return () => src.words.slice();
+    }
+    err(`Unsupported value for whole-array assignment to '${mem.name}'.`, rhs.loc);
+  }
+
+  memAssign(mem: Memory, rhs: Expr, c: Ctx, when: 'now' | 'nba', delay?: () => number): SC {
+    const k = this.k;
+    const V = this.memValues(mem, rhs, c);
+    const apply = (vals: Vec[]) => vals.forEach((v, i) => k.memWrite(mem, i, v));
+    return {
+      sync: () => {
+        const vals = V();
+        const d = delay ? delay() : 0;
+        if (d > 0) k.schedule(k.now + d, () => apply(vals), true);
+        else if (when === 'nba') k.nba.push(() => apply(vals));
+        else apply(vals);
+      },
+    };
+  }
+
   vsigStmt(s: Extract<Stmt, { k: 'vsigassign' }>, c: Ctx): SC {
+    const mem = this.memTarget(s.lhs, c);
+    if (mem) {
+      if (s.waves.length !== 1) err('Multiple waveform elements are not supported for array assignment.', s.loc);
+      const w = s.waves[0];
+      return this.memAssign(mem, w.value, c, c.deferred ? 'nba' : 'now', w.after ? this.delayFn(w.after, c) : undefined);
+    }
     const k = this.k;
     const Lv = this.lv(s.lhs, c);
     const waves = s.waves.map(w => ({ R: final(this.ex(w.value, c), Lv.w), D: w.after ? this.delayFn(w.after, c) : null }));
