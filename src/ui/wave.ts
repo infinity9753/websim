@@ -88,7 +88,7 @@ export class WaveView {
     this.bindNames();
     this.bindKeys();
     this.bindDrop();
-    this.body.addEventListener('scroll', () => this.render());
+    this.body.addEventListener('scroll', () => { this.paintRows(); this.render(); });
     this.scrollbar.addEventListener('input', () => { this.autoFull = false; this.t0 = Number(this.scrollbar.value); this.render(); });
     new ResizeObserver(() => { if (this.autoFull) this.zoomFull(false); this.render(); }).observe(this.body);
     session.on('wave', () => { this.selected = new Set([...this.selected].filter(id => session.waves.some(w => w.id === id))); this.rebuildRows(); });
@@ -225,38 +225,58 @@ export class WaveView {
 
   rebuildRows() {
     const waves = this.session.waves;
-    clear(this.names); clear(this.values);
-    this.names.appendChild(h('div', { class: 'wave-head' }, 'Name'));
-    this.values.appendChild(h('div', { class: 'wave-head' }, 'Value'));
     this.rows = [];
     for (const w of waves) {
-      const sel = this.selected.has(w.id) ? ' sel' : '';
       this.rows.push({ w });
-      if (w.dividerLabel !== undefined) {
-        this.names.appendChild(h('div', { class: 'wave-row divider' + sel, 'data-id': w.id, draggable: 'true' }, w.dividerLabel));
-        this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
-        continue;
-      }
-      const short = w.path.split('/').filter(Boolean);
-      const label = short.length > 2 ? '/' + short.slice(-2).join('/') : w.path;
-      const isBus = w.sig.w > 1;
-      const open = isBus && this.expanded.has(w.id);
-      const tog = isBus ? h('span', { class: 'wave-exp', title: open ? 'Collapse' : 'Expand bits', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleExpand(w.id); } }, open ? '▾' : '▸') : h('span', { class: 'wave-exp' });
-      this.names.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id, title: `${w.path}  [${w.sig.w > 1 || w.sig.msb !== 0 ? `${w.sig.msb}:${w.sig.lsb}` : '1 bit'}, ${w.radix}]`, draggable: 'true' }, tog, label));
-      this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
-      if (open) {
+      if (w.dividerLabel === undefined && w.sig.w > 1 && this.expanded.has(w.id)) {
         const step = w.sig.msb >= w.sig.lsb ? -1 : 1;
-        for (let i = w.sig.msb, n = 0; n < w.sig.w; i += step, n++) {
-          this.rows.push({ w, bit: i });
-          this.names.appendChild(h('div', { class: 'wave-row bitrow' + sel, 'data-id': w.id }, `${label}[${i}]`));
-          this.values.appendChild(h('div', { class: 'wave-row' + sel, 'data-id': w.id }));
-        }
+        for (let i = w.sig.msb, n = 0; n < w.sig.w; i += step, n++) this.rows.push({ w, bit: i });
       }
     }
     if (!this.session.design) this.emptyMsg.textContent = 'No simulation loaded. Compile your sources, then Simulate ▸ Start Simulation (or type "vsim <top>").';
     else if (!waves.length) this.emptyMsg.textContent = 'Wave window is empty. Drag signals here from Objects, double-click them, or type "add wave -r /*".';
     else this.emptyMsg.textContent = '';
+    this.paintFirst = -1;
+    this.paintRows();
     this.render();
+  }
+
+  private paintFirst = -1;
+  private paintLast = -1;
+  private valueEls: HTMLElement[] = [];
+
+  /** Build DOM only for the name/value rows in view (plus a margin); spacers keep the scroll height. */
+  private paintRows() {
+    const total = this.rows.length;
+    const top = Math.max(0, this.body.scrollTop - HEAD_H);
+    const vis = Math.ceil(Math.max(this.body.clientHeight, 200) / ROW_H);
+    const first = Math.max(0, Math.floor(top / ROW_H) - 10);
+    const last = Math.min(total, first + vis + 20);
+    if (first === this.paintFirst && last === this.paintLast) return;
+    this.paintFirst = first; this.paintLast = last;
+    const nameRows: HTMLElement[] = [h('div', { class: 'wave-head' }, 'Name')];
+    const valueRows: HTMLElement[] = [h('div', { class: 'wave-head' }, 'Value')];
+    const pad = (n: number) => h('div', { style: { height: n * ROW_H + 'px' } });
+    if (first > 0) { nameRows.push(pad(first)); valueRows.push(pad(first)); }
+    this.valueEls = [];
+    for (let i = first; i < last; i++) {
+      const { w, bit } = this.rows[i];
+      const sel = this.selected.has(w.id) ? ' sel' : '';
+      const v = h('div', { class: 'wave-row' + sel, 'data-id': w.id });
+      this.valueEls.push(v);
+      valueRows.push(v);
+      if (w.dividerLabel !== undefined) { nameRows.push(h('div', { class: 'wave-row divider' + sel, 'data-id': w.id, draggable: 'true' }, w.dividerLabel)); continue; }
+      const short = w.path.split('/').filter(Boolean);
+      const label = short.length > 2 ? '/' + short.slice(-2).join('/') : w.path;
+      if (bit !== undefined) { nameRows.push(h('div', { class: 'wave-row bitrow' + sel, 'data-id': w.id }, `${label}[${bit}]`)); continue; }
+      const isBus = w.sig.w > 1;
+      const open = isBus && this.expanded.has(w.id);
+      const tog = isBus ? h('span', { class: 'wave-exp', title: open ? 'Collapse' : 'Expand bits', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggleExpand(w.id); } }, open ? '▾' : '▸') : h('span', { class: 'wave-exp' });
+      nameRows.push(h('div', { class: 'wave-row' + sel, 'data-id': w.id, title: `${w.path}  [${w.sig.w > 1 || w.sig.msb !== 0 ? `${w.sig.msb}:${w.sig.lsb}` : '1 bit'}, ${w.radix}]`, draggable: 'true' }, tog, label));
+    }
+    if (last < total) { nameRows.push(pad(total - last)); valueRows.push(pad(total - last)); }
+    this.names.replaceChildren(...nameRows);
+    this.values.replaceChildren(...valueRows);
   }
 
   // -------------------------------------------------------------- canvas
@@ -489,9 +509,8 @@ export class WaveView {
 
   private updateValues() {
     const t = this.cursor ?? this.session.now;
-    const rows = this.values.querySelectorAll<HTMLElement>('.wave-row');
-    rows.forEach((row, i) => {
-      const r = this.rows[i];
+    this.valueEls.forEach((row, k) => {
+      const r = this.rows[this.paintFirst + k];
       if (!r || r.w.dividerLabel !== undefined) return;
       const w = r.w;
       const full = this.cursor === null ? w.sig.value : w.sig.valueAt(t);

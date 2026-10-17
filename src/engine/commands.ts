@@ -882,12 +882,14 @@ export class Session {
     }
     if (!pats.length) pats.push('*');
     let n = 0;
+    const have = new Set(this.waves.map(w => w.path));
     for (const p of pats) {
       const found = this.matchSignals(p, recursive);
       if (!found.length) this.out(`** Warning: (vsim-WLF-5000) No objects found matching '${p}'.`, 'warn');
       for (const f of found) {
         const path = `${f.scope.path}/${f.obj.name}`;
-        if (this.waves.some(w => w.path === path)) continue;
+        if (have.has(path)) continue;
+        have.add(path);
         this.waves.push({ id: this.waveSeq++, path, name: path, sig: f.obj.sig, radix: radix ?? (f.obj.sig.enumNames ? 'symbolic' : this.defaultRadix) });
         n++;
       }
@@ -897,9 +899,11 @@ export class Session {
   }
 
   addWavePaths(paths: string[]) {
+    const have = new Set(this.waves.map(w => w.path));
     for (const p of paths) {
       const f = this.findSignal(p);
-      if (!f || this.waves.some(w => w.path === p)) continue;
+      if (!f || have.has(p)) continue;
+      have.add(p);
       this.waves.push({ id: this.waveSeq++, path: p, name: p, sig: f.obj.sig, radix: f.obj.sig.enumNames ? 'symbolic' : this.defaultRadix });
     }
     this.emit('wave');

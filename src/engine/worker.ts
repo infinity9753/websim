@@ -106,7 +106,7 @@ function flush() {
   if (d) {
     const k = d.kernel;
     const hs = k.historyStats();
-    st.time = { now: k.now, delta: k.deltaCount, finished: k.finished, procStates: k.processes.map(p => (p.done ? 'd' : p.gen ? 'w' : 'r')).join(''), histBytes: hs.bytes, histEntries: hs.entries };
+    st.time = { now: k.now, delta: k.deltaCount, finished: k.finished, procStates: k.processes.map(p => (p.done ? 'd' : p.gen || p.armed ? 'w' : 'r')).join(''), histBytes: hs.bytes, histEntries: hs.entries };
     st.hist = histDeltas();
     const p = k.pausedAt;
     st.paused = p ? { file: p.file, line: p.line, proc: p.proc.name } : null;

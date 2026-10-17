@@ -5,6 +5,43 @@ import * as L from '../engine/logic';
 import { langOf, type BrowserFS } from './vfs';
 import { DND_TYPE } from './wave';
 
+
+/** Renders only the rows of a long table that are in view (fixed row height). */
+export class VRows {
+  private count = 0;
+  private renderRow: (i: number) => HTMLElement = () => h('tr');
+  private first = -1;
+  private last = -1;
+  private raf = 0;
+  constructor(private scroller: HTMLElement, private tbody: HTMLElement, private cols: number, private rowH = 21) {
+    scroller.addEventListener('scroll', () => this.schedule());
+    new ResizeObserver(() => this.schedule()).observe(scroller);
+  }
+  set(count: number, render: (i: number) => HTMLElement) {
+    this.count = count; this.renderRow = render;
+    this.paint(true);
+  }
+  private schedule() {
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.paint(false); });
+  }
+  private pad(px: number) { return h('tr', { class: 'vpad' }, h('td', { colspan: String(this.cols), style: { height: px + 'px', padding: '0', border: '0' } })); }
+  paint(force: boolean) {
+    const head = 24;
+    const top = Math.max(0, this.scroller.scrollTop - head);
+    const vis = Math.max(20, Math.ceil(this.scroller.clientHeight / this.rowH));
+    const first = Math.max(0, Math.floor(top / this.rowH) - 10);
+    const last = Math.min(this.count, first + vis + 20);
+    if (!force && first === this.first && last === this.last) return;
+    this.first = first; this.last = last;
+    const rows: HTMLElement[] = [];
+    if (first > 0) rows.push(this.pad(first * this.rowH));
+    for (let i = first; i < last; i++) rows.push(this.renderRow(i));
+    if (last < this.count) rows.push(this.pad((this.count - last) * this.rowH));
+    this.tbody.replaceChildren(...rows);
+  }
+}
+
 function bar(...items: (HTMLElement | string)[]) { return h('div', { class: 'subbar' }, ...items); }
 function tbtn(ic: string, title: string, f: () => void) { return h('button', { class: 'tb-btn', title, 'aria-label': title, onclick: f }, icon(ic)); }
 
@@ -164,27 +201,35 @@ export class StructurePanel {
   private tbody: HTMLElement;
   private collapsed = new Set<string>();
 
+  private vr: VRows;
+
   constructor(private session: Session) {
     this.tbody = h('tbody');
-    this.el = h('div', {},
-      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Instance'), h('th', {}, 'Design unit'), h('th', {}, 'Type'))),
-        this.tbody)));
+    const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Instance'), h('th', {}, 'Design unit'), h('th', {}, 'Type'))),
+      this.tbody));
+    this.el = h('div', {}, scroll);
+    this.vr = new VRows(scroll, this.tbody, 3);
     session.on('sim', () => this.render());
     session.on('scope', () => this.render());
     this.render();
   }
 
   render() {
-    clear(this.tbody);
     const d = this.session.design;
-    if (!d) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No design loaded.'))); return; }
-    const rows: HTMLElement[] = [];
+    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '3', class: 'empty' }, 'No design loaded.'))); return; }
+    const nodes: { s: Scope; depth: number }[] = [];
     const visit = (s: Scope, depth: number) => {
+      nodes.push({ s, depth });
+      if (!this.collapsed.has(s.path)) for (const c of s.children) visit(c, depth + 1);
+    };
+    visit(d.root, 0);
+    this.vr.set(nodes.length, (i) => {
+      const { s, depth } = nodes[i];
       const open = !this.collapsed.has(s.path);
       const isInst = s.kind === 'instance';
       const unit = s.mod.unit;
-      rows.push(h('tr', {
+      return h('tr', {
         class: this.session.scope === s ? 'sel' : '',
         onclick: () => this.session.setScope(s),
         ondblclick: () => this.toggle(s.path),
@@ -200,11 +245,8 @@ export class StructurePanel {
           h('span', { class: 'tree-toggle', onclick: (e: MouseEvent) => { e.stopPropagation(); this.toggle(s.path); } }, s.children.length ? (open ? '▾' : '▸') : ''),
           isInst ? icon('chip') : '', ' ', s.name),
         h('td', { class: 'kind' }, isInst ? `${unit.name}${s.mod.arch ? `(${s.mod.arch})` : ''}` : ''),
-        h('td', { class: 'kind' }, isInst ? (unit.lang === 'vhdl' ? 'Architecture' : 'Module') : 'Generate')));
-      if (open) for (const c of s.children) visit(c, depth + 1);
-    };
-    visit(d.root, 0);
-    this.tbody.append(...rows);
+        h('td', { class: 'kind' }, isInst ? (unit.lang === 'vhdl' ? 'Architecture' : 'Module') : 'Generate'));
+    });
   }
 
   toggle(p: string) { if (this.collapsed.has(p)) this.collapsed.delete(p); else this.collapsed.add(p); this.render(); }
@@ -217,20 +259,23 @@ export class ObjectsPanel {
   private tbody: HTMLElement;
   private filter: HTMLInputElement;
   private sel = new Set<string>();
-  private valueCells = new Map<string, HTMLElement>();
+  private valueCells = new Map<HTMLElement, MSignal>();
+  private vr: VRows;
   onForce?: (path: string) => void;
 
   constructor(private session: Session) {
     this.tbody = h('tbody');
     this.filter = h('input', { type: 'search', class: 'tb-field', placeholder: 'Filter', style: { width: '110px' }, 'aria-label': 'Filter objects', oninput: () => this.render() });
+    const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Kind'), h('th', {}, 'Mode'))),
+      this.tbody));
     this.el = h('div', {},
       bar(
         tbtn('addwave', 'Add selected to wave (or all if none selected)', () => this.addToWave()),
         h('span', { class: 'grow' }),
         this.filter),
-      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Kind'), h('th', {}, 'Mode'))),
-        this.tbody)));
+      scroll);
+    this.vr = new VRows(scroll, this.tbody, 4);
     session.on('sim', () => { this.sel.clear(); this.render(); });
     session.on('scope', () => { this.sel.clear(); this.render(); });
     session.on('time', () => this.updateValues());
@@ -247,17 +292,27 @@ export class ObjectsPanel {
   }
 
   render() {
-    clear(this.tbody);
     this.valueCells.clear();
     const s = this.session.scope;
-    if (!s) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    if (!s) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
     const f = this.filter.value.trim().toLowerCase();
-    for (const o of s.objects) {
-      if (f && !o.name.toLowerCase().includes(f)) continue;
+    const objs = f ? s.objects.filter(o => o.name.toLowerCase().includes(f)) : s.objects;
+    const mems = f ? s.memories.filter(m => m.name.toLowerCase().includes(f)) : s.memories;
+    if (!objs.length && !mems.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No objects in this region.'))); return; }
+    // cells of rows scrolled out of view are dropped from the update map
+    this.valueCells = new Map();
+    this.vr.set(objs.length + mems.length, (i) => {
+      for (const [cell] of this.valueCells) if (!cell.isConnected) this.valueCells.delete(cell);
+      if (i >= objs.length) {
+        const m = mems[i - objs.length];
+        return h('tr', { title: `${s.path}/${m.name}` },
+          h('td', {}, m.name), h('td', { class: 'mono kind' }, `[${m.mem.lo}:${m.mem.hi}] × ${m.mem.w}b`), h('td', { class: 'kind' }, 'Memory'), h('td', { class: 'kind' }, 'Internal'));
+      }
+      const o = objs[i];
       const path = this.pathOf(s, o.name);
-      const val = h('td', { class: 'mono' });
-      this.valueCells.set(path, val);
-      const row = h('tr', {
+      const val = h('td', { class: 'mono' }, this.fmt(o.sig));
+      this.valueCells.set(val, o.sig);
+      return h('tr', {
         class: this.sel.has(path) ? 'sel' : '',
         draggable: 'true',
         title: path,
@@ -288,25 +343,18 @@ export class ObjectsPanel {
         val,
         h('td', { class: 'kind' }, kindOf(s, o.sig)),
         h('td', { class: 'kind' }, o.dir === 'in' ? 'In' : o.dir === 'out' ? 'Out' : o.dir === 'inout' ? 'InOut' : 'Internal'));
-      this.tbody.appendChild(row);
-    }
-    for (const m of s.memories) {
-      if (f && !m.name.toLowerCase().includes(f)) continue;
-      this.tbody.appendChild(h('tr', { title: `${s.path}/${m.name}` },
-        h('td', {}, m.name), h('td', { class: 'mono kind' }, `[${m.mem.lo}:${m.mem.hi}] × ${m.mem.w}b`), h('td', { class: 'kind' }, 'Memory'), h('td', { class: 'kind' }, 'Internal')));
-    }
-    if (!this.tbody.children.length) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No objects in this region.')));
-    this.updateValues();
+    });
+  }
+
+  private fmt(sig: MSignal) {
+    const radix = this.session.defaultRadix === 'binary' && sig.w > 16 ? 'hex' : this.session.defaultRadix;
+    return fmtSig(sig, sig.value, radix, sig.enumNames);
   }
 
   updateValues() {
-    const s = this.session.scope;
-    if (!s) return;
-    for (const o of s.objects) {
-      const cell = this.valueCells.get(this.pathOf(s, o.name));
-      if (!cell) continue;
-      const radix = this.session.defaultRadix === 'binary' && o.sig.w > 16 ? 'hex' : this.session.defaultRadix;
-      const txt = fmtSig(o.sig, o.sig.value, radix, o.sig.enumNames);
+    for (const [cell, sig] of this.valueCells) {
+      if (!cell.isConnected) { this.valueCells.delete(cell); continue; }
+      const txt = this.fmt(sig);
       if (cell.textContent !== txt) cell.textContent = txt;
     }
   }
@@ -324,36 +372,37 @@ export class ProcessesPanel {
   el: HTMLElement;
   private tbody: HTMLElement;
   private all: HTMLInputElement;
+  private vr: VRows;
 
   constructor(private session: Session) {
     this.tbody = h('tbody');
     this.all = h('input', { type: 'checkbox', onchange: () => this.render() });
-    this.el = h('div', {},
-      bar(h('label', { class: 'hint' }, this.all, ' Show all regions')),
-      h('div', { class: 'scroll' }, h('table', { class: 'grid' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Region'), h('th', {}, 'State'), h('th', {}, 'Source'))),
-        this.tbody)));
+    const scroll = h('div', { class: 'scroll' }, h('table', { class: 'grid vt' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Region'), h('th', {}, 'State'), h('th', {}, 'Source'))),
+      this.tbody));
+    this.el = h('div', {}, bar(h('label', { class: 'hint' }, this.all, ' Show all regions')), scroll);
+    this.vr = new VRows(scroll, this.tbody, 4);
     session.on('sim', () => this.render());
     session.on('scope', () => this.render());
-    session.on('time', () => this.render());
+    // states change constantly while running: only refresh when visible
+    session.on('time', () => { if (this.el.offsetParent !== null) this.render(); });
     this.render();
   }
 
   render() {
-    clear(this.tbody);
     const d = this.session.design;
-    if (!d) { this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
+    if (!d) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No design loaded.'))); return; }
     const scopes = this.all.checked ? d.allScopes : this.session.scope ? [this.session.scope] : [];
-    let n = 0;
-    for (const s of scopes) for (const p of s.procs) {
-      if (++n > 2000) break;
-      this.tbody.appendChild(h('tr', {},
+    const procs = scopes.flatMap(s => s.procs);
+    if (!procs.length) { this.vr.set(1, () => h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No processes in this region.'))); return; }
+    this.vr.set(procs.length, (i) => {
+      const p = procs[i];
+      return h('tr', {},
         h('td', {}, p.info.name),
         h('td', { class: 'kind' }, p.info.scope),
         h('td', { class: 'kind' }, p.done ? 'Done' : !p.gen ? 'Ready' : 'Wait'),
-        h('td', { class: 'kind' }, p.info.file ? `${p.info.file}:${p.info.line}` : '')));
-    }
-    if (!n) this.tbody.appendChild(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No processes in this region.')));
+        h('td', { class: 'kind' }, p.info.file ? `${p.info.file}:${p.info.line}` : ''));
+    });
   }
 }
 
