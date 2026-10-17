@@ -422,3 +422,31 @@ end;`;
     expect(out.filter(l => l.startsWith('**'))).toEqual(['** Note: 21 7 20 6', '** Note: n=7', '** Note: n=3']);
   });
 });
+
+describe('aliases (#23)', () => {
+  it('reads and writes through object, element and slice aliases', () => {
+    const src = `
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all;
+entity t is end;
+architecture a of t is
+  signal data : std_logic_vector(7 downto 0) := x"A5";
+  alias msb : std_logic is data(7);
+  alias hi_nib : std_logic_vector(3 downto 0) is data(7 downto 4);
+  alias lo_rev : std_logic_vector(0 to 3) is data(3 downto 0);
+  alias d : std_logic_vector(7 downto 0) is data;
+begin
+  process begin
+    report std_logic'image(msb) & " " & to_hstring(hi_nib) & " " & std_logic'image(hi_nib(0)) & " " & std_logic'image(lo_rev(0));
+    hi_nib <= x"3";
+    wait for 1 ns;
+    report to_hstring(d) & " " & std_logic'image(msb);
+    hi_nib(3) <= '1';
+    wait for 1 ns;
+    report to_hstring(data);
+    wait;
+  end process;
+end;`;
+    const { out } = simulate({ 't.vhd': src }, 't');
+    expect(out.filter(l => l.startsWith('**'))).toEqual(["** Note: '1' A '0' '0'", "** Note: 35 '0'", '** Note: B5']);
+  });
+});

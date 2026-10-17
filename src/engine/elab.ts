@@ -2,7 +2,7 @@
 import { CompileError, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert } from './logic';
-import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, type Wait, type KernelHost, type ProcInfo } from './kernel';
+import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, type Wait, type KernelHost, type ProcInfo } from './kernel';
 import { expandFormat, fmtTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
 
@@ -38,7 +38,8 @@ export type Sym =
   | { k: 'const'; v: Vec; t?: RType; str?: string }
   | { k: 'func'; f: FuncDecl; scope: Scope; cache: Map<string, CFunc> }
   | { k: 'type'; t: RType }
-  | { k: 'scope'; s: Scope };
+  | { k: 'scope'; s: Scope }
+  | { k: 'alias'; target: Expr; aMsb?: number; aLsb?: number; tMsb?: number; tLsb?: number };
 
 export interface ModInfo { lang: 'verilog' | 'vhdl'; unit: Unit; arch?: string; tsUnit: number; tsPrec: number; file: string; libName: string }
 export interface ObjEntry { name: string; sig: Signal; dir: 'in' | 'out' | 'inout' | 'internal'; t: RType }
@@ -272,7 +273,7 @@ export class Elaborator {
     const sigs = new Set<Signal>();
     for (const s of this.scopes) for (const o of s.objects) sigs.add(o.sig);
     for (const sig of sigs) {
-      if (sig.drivers && sig.drivers.length) sig.value = sig.drivers.length === 1 ? sig.drivers[0].value : L.resolve(sig.w, sig.drivers.map(d => d.value));
+      if (sig.drivers && sig.drivers.length) sig.value = resolveDrivers(sig);
       sig.prev = sig.value;
       sig.times = [0]; sig.vals = [sig.value];
     }
@@ -558,6 +559,7 @@ export class Elaborator {
         }
         case 'use': this.importPackage(scope, it.pkg, it.loc); break;
         case 'defparam': scope.defparams.set(it.path, this.constEval(it.value, scope)); break;
+        case 'alias': this.elabAlias(it, scope); break;
       }
     }
     // pass 2: structure and behaviour
@@ -865,6 +867,10 @@ export class Elaborator {
   // ---------------------------------------------------------- expressions
 
   ex(e: Expr, c: Ctx): Node {
+    if (c.lang === 'vhdl' && (e.k === 'id' || e.k === 'call' || e.k === 'index' || e.k === 'range' || e.k === 'field')) {
+      const d = this.deAlias(e, c);
+      if (d !== e) return this.ex(d, c);
+    }
     switch (e.k) {
       case 'num': {
         if (e.unsized && !e.v.known) {
@@ -966,6 +972,7 @@ export class Elaborator {
       case 'func': return this.funcCall(sym, [], c, loc);
       case 'type': err(`Type '${name}' used as a value.`, loc);
       case 'scope': err(`Scope '${name}' used as a value.`, loc);
+      case 'alias': return this.ex(sym.target, c);
     }
   }
 
@@ -1548,7 +1555,7 @@ export class Elaborator {
     const k = this.k;
     const A = (i: number) => { if (!args[i]) err(`${name}: missing argument`, loc); return this.ex(args[i], { ...c, strMode: false }); };
     const sigArg = (): Signal => {
-      const a = args[0];
+      const a = this.deAlias(args[0], c);
       const n = a.k === 'id' ? a.name : a.k === 'call' ? a.name : null;
       const sym = n ? this.lookupName(c.scope, n) : undefined;
       if (sym?.k !== 'sig') err(`${name}() requires a signal argument`, loc);
@@ -1645,10 +1652,73 @@ export class Elaborator {
     return sym?.k === 'sig' && sym.sig.isReal;
   }
 
+  // ---------------------------------------------------------- aliases
+
+  elabAlias(it: Extract<Item, { k: 'alias' }>, scope: Scope) {
+    const c = this.ctx(scope, 'alias');
+    let target = it.target;
+    if (target.k === 'call') {
+      const sym = this.lookupName(scope, target.name);
+      if (sym?.k === 'sig' || sym?.k === 'mem') target = this.vhdlIndexExpr(target, sym.k === 'mem');
+      else if (sym?.k !== 'alias') err(`Alias target '${target.name}' must be an object.`, it.loc);
+    }
+    const sym: Extract<Sym, { k: 'alias' }> = { k: 'alias', target };
+    if (target.k === 'range') {
+      sym.tMsb = this.constInt(target.msb, scope); sym.tLsb = this.constInt(target.lsb, scope);
+      const t = it.type ? this.resolveType(it.type, scope, it.loc) : undefined;
+      if (t && t.w && !t.scalar) {
+        if (t.w !== Math.abs(sym.tMsb - sym.tLsb) + 1) err(`Alias '${it.name}' subtype width ${t.w} does not match its target.`, it.loc);
+        sym.aMsb = t.msb; sym.aLsb = t.lsb;
+      } else { sym.aMsb = sym.tMsb; sym.aLsb = sym.tLsb; }
+    } else if (target.k !== 'id' && target.k !== 'index' && target.k !== 'field') {
+      err(`Unsupported alias target for '${it.name}'.`, it.loc);
+    }
+    void c;
+    scope.syms.set(it.name, sym);
+  }
+
+  /** Map an index written against an alias' own range onto the target's range. */
+  private aliasIndex(sym: Extract<Sym, { k: 'alias' }>, j: Expr): Expr {
+    if (sym.aMsb === undefined || sym.tMsb === undefined) return j;
+    const num = (v: number): Expr => ({ k: 'num', v: fromInt(v, 32, true), unsized: true });
+    const aDesc = sym.aMsb >= sym.aLsb!, tDesc = sym.tMsb >= sym.tLsb!;
+    // offset from the alias' right bound, applied from the target's right bound
+    const off: Expr = aDesc ? { k: 'bin', op: '-', l: j, r: num(sym.aLsb!) } : { k: 'bin', op: '-', l: num(sym.aLsb!), r: j };
+    return tDesc ? { k: 'bin', op: '+', l: num(sym.tLsb!), r: off } : { k: 'bin', op: '-', l: num(sym.tLsb!), r: off };
+  }
+
+  /** Replace references to aliases by their targets. */
+  deAlias(e: Expr, c: Ctx): Expr {
+    if (e.k === 'id') {
+      const sym = this.lookupName(c.scope, e.name);
+      return sym?.k === 'alias' ? this.deAlias(sym.target, c) : e;
+    }
+    if (e.k === 'call') {
+      const sym = this.lookupName(c.scope, e.name);
+      if (sym?.k !== 'alias') return e;
+      const t = sym.target;
+      if (t.k === 'id') return this.deAlias({ ...e, name: t.name }, c);
+      if (t.k === 'range') {
+        let out: Expr = t.base;
+        const a0 = e.args[0];
+        if (a0?.k === 'call' && (a0.name === '__downto' || a0.name === '__to')) out = { k: 'range', base: t.base, msb: this.aliasIndex(sym, a0.args[0]), lsb: this.aliasIndex(sym, a0.args[1]), loc: e.loc };
+        else if (a0) out = { k: 'index', base: t.base, index: this.aliasIndex(sym, a0), loc: e.loc };
+        return this.deAlias(out, c);
+      }
+      err(`Cannot index alias '${e.name}'.`, e.loc);
+    }
+    if (e.k === 'index' || e.k === 'range' || e.k === 'irange' || e.k === 'field') {
+      const b = this.deAlias(e.base, c);
+      return b === e.base ? e : { ...e, base: b } as Expr;
+    }
+    return e;
+  }
+
   // ---------------------------------------------------------- records
 
   /** Static type of a name-like expression (signals, constants, memory words, record fields). */
   typeOf(e: Expr, c: Ctx): RType | undefined {
+    if (c.lang === 'vhdl') { const d = this.deAlias(e, c); if (d !== e) return d.k === 'range' ? undefined : this.typeOf(d, c); }
     switch (e.k) {
       case 'id': {
         const sym = this.lookupName(c.scope, e.name);
@@ -1746,16 +1816,21 @@ export class Elaborator {
   getDriver(c: Ctx, sig: Signal, off: number, w: number): Driver | undefined {
     if (!c.driverMode || sig.isVar) return undefined;
     let d = c.drivers.get(sig);
+    const vhdl = c.lang === 'vhdl' && c.deferred;
     if (!d) {
-      d = new Driver(sig, allZ(sig.w), c.owner);
+      d = new Driver(sig, allZ(sig.w), c.owner, vhdl ? 0n : undefined);
       (sig.drivers ??= []).push(d);
       c.drivers.set(sig, d);
     }
-    if (c.lang === 'vhdl' && c.deferred) d.value = insert(d.value, off, slice(sig.value, off, w));
+    if (vhdl) {
+      d.value = insert(d.value, off, slice(sig.value, off, w));
+      d.cover |= L.mask(w) << BigInt(off);
+    }
     return d;
   }
 
   lv(e: Expr, c: Ctx): LNode {
+    if (c.lang === 'vhdl') { const d = this.deAlias(e, c); if (d !== e) return this.lv(d, c); }
     if (e.k === 'field' || (e.k === 'id' && e.name.includes('.') && !this.lookupName(c.scope, e.name))) {
       const fe = this.fieldSelect(e, c);
       if (fe) return this.lv(fe.expr, c);

@@ -316,7 +316,18 @@ class VhParser {
         items.push({ k: 'decl', kind: 'variable', type, names: names.map(n => ({ name: n, init })), fileMode: mode, loc });
         return;
       }
-      case 'attribute': case 'alias': case 'disconnect': case 'group':
+      case 'alias': {
+        this.pos++;
+        const name = this.ident();
+        const type = this.accept(':') ? this.subtype() : undefined;
+        this.expect('is');
+        const target = this.name();
+        if (this.is('[')) while (!this.accept(']')) this.pos++; // subprogram signature
+        this.expect(';');
+        items.push({ k: 'alias', name, type, target, loc });
+        return;
+      }
+      case 'attribute': case 'disconnect': case 'group':
         while (!this.accept(';')) this.pos++;
         return;
       case 'use': items.push(...this.useClause()); return;

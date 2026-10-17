@@ -1,5 +1,5 @@
 // Discrete-event simulation kernel: time wheel, delta cycles, regions.
-import { Vec, resolve, resize } from './logic';
+import { Vec, resolve, resize, mask } from './logic';
 
 export type Waker = (sig: Signal | Memory) => void;
 
@@ -63,7 +63,23 @@ export class Memory {
 }
 
 export class Driver {
-  constructor(public sig: Signal, public value: Vec, public owner: string) {}
+  /** Bits this driver drives; bits no driver covers keep the signal's own value (VHDL). */
+  cover: bigint;
+  constructor(public sig: Signal, public value: Vec, public owner: string, cover?: bigint) {
+    this.cover = cover ?? mask(sig.w);
+  }
+}
+
+/** Resolved value of a signal from its drivers; uncovered bits keep `sig.value`. */
+export function resolveDrivers(sig: Signal): Vec {
+  const drv = sig.drivers!;
+  let cov = 0n;
+  for (const d of drv) cov |= d.cover;
+  const r = drv.length === 1 ? drv[0].value : resolve(sig.w, drv.map(x => x.value));
+  const m = mask(sig.w);
+  if (cov === m) return r;
+  const keep = m & ~cov;
+  return new Vec(sig.w, (r.a & cov) | (sig.value.a & keep), (r.b & cov) | (sig.value.b & keep), r.signed);
 }
 
 export type Wait =
@@ -224,7 +240,7 @@ export class Kernel {
     d.value = v;
     const sig = d.sig;
     const drv = sig.drivers!;
-    const r = drv.length === 1 ? v : resolve(sig.w, drv.map(x => x.value));
+    const r = drv.length === 1 && d.cover === mask(sig.w) ? v : resolveDrivers(sig);
     this.set(sig, r);
   }
 
@@ -261,7 +277,7 @@ export class Kernel {
     if (!sig.forced) return;
     const underlying = sig.prev;
     sig.forced = null;
-    if (sig.drivers) this.commit(sig, sig.drivers.length === 1 ? sig.drivers[0].value : resolve(sig.w, sig.drivers.map(x => x.value)));
+    if (sig.drivers) this.commit(sig, resolveDrivers(sig));
     else this.commit(sig, underlying);
   }
 
