@@ -14,6 +14,7 @@ import { synthesize, parseArea, designFiles, placeAndRoute, FPGA_DEVICES, FPGA_F
 import { fmtReal, vecToReal } from './elab';
 import { CocotbRun } from './cocotb';
 import { LIB_NAME, liberty, verilogModels } from './asic/cells';
+import { runAsic, summary, type AsicResult } from './asic/flow';
 import type { Vec } from './logic';
 
 export interface VFS {
@@ -173,6 +174,7 @@ export class Session {
       case 'coverage': return this.coverageCmd(rest);
       case 'synth': return this.synth(rest);
       case 'pnr': return this.pnr(rest);
+      case 'asic': return this.asic(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -206,6 +208,7 @@ export class Session {
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
       '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
+      '  asic [-top m] [-util 0.6] [-layers 3]  educational ASIC flow: cells, placement, routing, DEF / GDSII',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -1052,6 +1055,55 @@ export class Session {
     this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log${target === 'asic' ? `; cell models synth/${LIB_NAME}.v` : ''}`);
     this.emit('synth');
     return true;
+  }
+
+  /** Result of the last asic command; the layout and GDSII stay here for the Layout window and downloads. */
+  lastAsic: { run: number; top: string; base: string; ok: boolean; summary: string[]; result?: AsicResult } | null = null;
+
+  /**
+   * asic [-top m] [-util 0.6] [-layers 2..4] [files]
+   * Educational ASIC flow: synth -target asic, floorplan and placement, routing, checks, timing estimate, DEF / LEF / GDSII.
+   */
+  async asic(args: string[]) {
+    let util: number | undefined, layers: number | undefined;
+    const synthArgs: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === '-util') util = Number(args[++i]);
+      else if (a === '-layers') layers = Number(args[++i]);
+      else if (a === '-top') synthArgs.push(a, args[++i]);
+      else if (a.startsWith('-')) throw new Error(`asic: unknown option ${a}`);
+      else synthArgs.push(a);
+    }
+    if (util !== undefined && !(util >= 0.1 && util <= 0.95)) throw new Error('asic: -util expects a target utilization between 0.1 and 0.95');
+    if (layers !== undefined && ![2, 3, 4].includes(layers)) throw new Error('asic: -layers expects 2, 3 or 4 routing layers (M2 up to M5)');
+    if (!(await this.synth([...synthArgs, '-target', 'asic']))) return false;
+    const s = this.lastSynth!;
+    const json = this.fs.read(`${s.base}.json`);
+    if (!json) throw new Error(`asic: ${s.base}.json was not written`);
+    this.out(`-- Floorplan, placement and routing of ${s.top} (${LIB_NAME} cells)`);
+    const base = `asic/${s.top}`;
+    let r: AsicResult;
+    try {
+      r = runAsic(json, s.top, { util, layers });
+    } catch (e) {
+      this.out(`** Error: (asic) ${(e as Error).message}`, 'err');
+      this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: false, summary: [] };
+      this.emit('synth');
+      return false;
+    }
+    const sum = summary(r);
+    for (const l of sum) this.out(l, !r.ok && /^(Routing|Checks)/.test(l) ? 'warn' : 'out');
+    if (this.fs.write) {
+      this.fs.write(`${base}.def`, r.def);
+      this.fs.write(`${base}.rpt`, r.report);
+      this.fs.write(`asic/${LIB_NAME}.lef`, r.lef);
+    }
+    this.out(`Wrote ${base}.def, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
+    if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. Try a lower -util or more -layers.`, 'err');
+    this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
+    this.emit('synth');
+    return r.ok;
   }
 
   /** coverage report [-details] [-file f] | coverage clear */

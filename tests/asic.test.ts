@@ -4,6 +4,7 @@ import { CELLS, liberty, verilogModels, TRACK, ROW_TRACKS } from '../src/engine/
 import { readNetlist } from '../src/engine/asic/netlist';
 import { abacus, place, pinXY, hpwl } from '../src/engine/asic/place';
 import { route, verifyRouting } from '../src/engine/asic/route';
+import { readGds, gdsReal, readGdsReal } from '../src/engine/asic/gds';
 
 function session(files: Record<string, string>) {
   const out: string[] = [];
@@ -207,4 +208,63 @@ describe('ASIC routing (#51)', () => {
     expect(r3.overflow).toBeGreaterThan(0);
     expect(verifyRouting(nl, pc, r3).shorts.length).toBeGreaterThan(0);
   }, 120_000);
+});
+
+describe('ASIC outputs: DEF, LEF, GDSII, timing and the asic command (#51)', () => {
+  it('runs the whole flow and writes consistent DEF / LEF / GDSII and a report', async () => {
+    const fs: Record<string, string> = { 'alu.v': ALU };
+    const { s, out } = session(fs);
+    await s.exec('vlog alu.v');
+    expect(await s.exec('asic -util 0.6'), out.join('\n')).toBe(true);
+    const text = out.join('\n');
+    expect(text).toMatch(/-- Floorplan, placement and routing of alu \(websim_edu cells\)/);
+    expect(text).toMatch(/Checks: 0 shorts, 0 opens, 0 unrouted nets/);
+    expect(text).toMatch(/Timing \(estimate\): critical path [\d.]+ ns, max frequency \d+ MHz/);
+    const a = s.lastAsic!.result!;
+    const ncomp = a.nl.cells.length + a.p.fillers.length;
+    // DEF
+    const def = fs['asic/alu.def'];
+    expect(def).toContain(`COMPONENTS ${ncomp} ;`);
+    expect(def).toContain(`NETS ${a.r.nets.length} ;`);
+    expect(def).toContain(`PINS ${a.nl.ports.length + 2} ;`);
+    expect(def).toMatch(/- \S+ DFFR \+ PLACED \( \d+ \d+ \) (N|FS) ;/);
+    expect(def).toMatch(/\+ ROUTED M\d \( \d+ \d+ \)/);
+    expect((def.match(/^ROW /gm) ?? []).length).toBe(a.p.rows);
+    // LEF
+    expect(fs['asic/websim_edu.lef']).toMatch(/MACRO DFFR[\s\S]*PIN RN[\s\S]*END DFFR/);
+    expect(fs['asic/websim_edu.lef']).toMatch(/VIA VIA23 DEFAULT/);
+    // report
+    expect(fs['asic/alu.rpt']).toMatch(/Critical path \(register \/ input to register\): [\d.]+ ns/);
+    // GDSII read back
+    const g = readGds(a.gds);
+    expect(g.units[0]).toBeCloseTo(1e-3, 12);
+    expect(g.units[1]).toBeCloseTo(1e-9, 18);
+    const top = g.structures.find(x => x.name === 'alu')!;
+    expect(top.srefs.length).toBe(ncomp);
+    expect(new Set(g.structures.map(x => x.name))).toEqual(new Set(['alu', ...new Set([...a.nl.cells.map(c => c.type), ...a.p.fillers.map(f => f.type)])]));
+    expect(top.boundaries.length).toBe(a.layout.shapes.length + 1);
+    for (const q of a.nl.ports) expect(top.texts.some(t => t.text === q.name)).toBe(true);
+    // a pin of a cell in a flipped row: the reflected cell label lands on the router's access point
+    const ci = a.nl.cells.findIndex((c, i) => a.p.cells[i].row % 2 === 1 && 'A' in c.def.pins);
+    const cell = a.nl.cells[ci];
+    const ref = top.srefs.find(r => r.name === cell.type && r.reflect && r.x === a.p.cells[ci].x * TRACK && r.y === (a.p.margin + (a.p.cells[ci].row + 1) * ROW_TRACKS) * TRACK)!;
+    expect(ref).toBeTruthy();
+    const lbl = g.structures.find(x => x.name === cell.type)!.texts.find(t => t.text === 'A')!;
+    const [px, py] = pinXY(a.p, a.nl, ci, 'A');
+    expect([ref.x + lbl.x, ref.y - lbl.y]).toEqual([px * TRACK + TRACK / 2, py * TRACK + TRACK / 2]);
+    // timing: register to register through the library delays
+    const crit = a.timing.critical!;
+    expect(crit.points[crit.points.length - 1].at).toMatch(/\/D \(setup\)$/);
+    expect(crit.delay).toBeGreaterThan(0.12 + 0.05);
+    expect(a.timing.fmax!).toBeGreaterThan(100);
+    expect(a.timing.fmax!).toBeLessThan(5000);
+    expect(a.timing.loops).toBe(0);
+    // bad options
+    expect(await s.exec('asic -util 2')).toBe(false);
+    expect(await s.exec('asic -layers 7')).toBe(false);
+  }, 120_000);
+
+  it('GDSII reals round-trip', () => {
+    for (const v of [1e-3, 1e-9, 0.5, 1, 1234.5678, -2.25]) expect(readGdsReal(gdsReal(v), 0)).toBeCloseTo(v, 12);
+  });
 });
