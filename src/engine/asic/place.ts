@@ -153,9 +153,10 @@ function boundarySlots(p: Placement): PortPin[] {
   const s: PortPin[] = [];
   const { dieW: W, dieH: H, margin: m } = p;
   for (let x = m; x < W - m; x += 2) s.push({ side: 'B', x, y: 0, layer: 3 });
-  for (let y = m; y < H - m; y += 2) s.push({ side: 'R', x: W - 1, y, layer: 2 });
+  // left / right pins on odd tracks: the power straps' rail vias sit on even tracks (see powerVias)
+  for (let y = m + 1; y <= H - m - 2; y += 2) s.push({ side: 'R', x: W - 1, y, layer: 2 });
   for (let x = W - m - 1; x >= m; x -= 2) s.push({ side: 'T', x, y: H - 1, layer: 3 });
-  for (let y = H - m - 1; y >= m; y -= 2) s.push({ side: 'L', x: 0, y, layer: 2 });
+  for (let y = m + 1 + 2 * Math.floor((H - 2 * m - 3) / 2); y >= m + 1; y -= 2) s.push({ side: 'L', x: 0, y, layer: 2 });
   return s;
 }
 

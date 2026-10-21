@@ -3,6 +3,7 @@ import { Session } from '../src/engine/commands';
 import { CELLS, liberty, verilogModels, TRACK, ROW_TRACKS } from '../src/engine/asic/cells';
 import { readNetlist } from '../src/engine/asic/netlist';
 import { abacus, place, pinXY, hpwl } from '../src/engine/asic/place';
+import { route, verifyRouting } from '../src/engine/asic/route';
 
 function session(files: Record<string, string>) {
   const out: string[] = [];
@@ -166,5 +167,44 @@ describe('ASIC floorplan and placement (#51)', () => {
     expect(p.hpwl).toBe(hpwl(p, nl));
     if ((globalThis as any).process?.env?.SHOW) console.log(nl.cells.length, p.rows, p.cols, p.util.toFixed(2), p.hpwl, hpwl(rnd, nl), Date.now() - t0);
     expect(p.hpwl).toBeLessThan(0.5 * hpwl(rnd, nl));
+  }, 120_000);
+});
+
+describe('ASIC routing (#51)', () => {
+  it('routes every net without shorts or opens on 3 and 2 layers; leftover congestion shows as shorts', async () => {
+    const json = await synthAsic({ 'alu.v': ALU }, 'alu');
+    const nl = readNetlist(json, 'alu');
+    const p = place(nl, { util: 0.6 });
+    const t0 = Date.now();
+    const r = route(nl, p, { layers: 3 });
+    const ms = Date.now() - t0;
+    if ((globalThis as any).process?.env?.SHOW) console.log('route', ms, 'ms', r.iterations, 'it', r.wirelength, 'wl', r.viaCount, 'vias', r.overflow, 'over');
+    expect(ms).toBeLessThan(30_000);
+    expect(r.overflow).toBe(0);
+    expect(r.unrouted).toEqual([]);
+    const v = verifyRouting(nl, p, r);
+    expect(v.shorts).toEqual([]);
+    expect(v.opens).toEqual([]);
+    // routed length cannot beat the half-perimeter bound by much (tree vs bounding box), nor be wildly longer
+    expect(r.wirelength).toBeGreaterThan(0.9 * p.hpwl);
+    expect(r.wirelength).toBeLessThan(3 * p.hpwl);
+    // the checker does catch a short and an open
+    const bad = { ...r, nets: r.nets.map(n => ({ ...n, wires: [...n.wires], vias: [...n.vias] })) };
+    const a = bad.nets.find(n => n.wires.length > 2)!, b = bad.nets.find(n => n !== a && n.wires.length > 2)!;
+    b.wires.push({ ...a.wires[0] });
+    a.wires.splice(1, 1);
+    const v2 = verifyRouting(nl, p, bad);
+    expect(v2.shorts.length).toBeGreaterThan(0);
+    expect(v2.opens).toContain(a.name);
+    // M2/M3 only still routes this placement
+    const r2 = route(nl, p, { layers: 2 });
+    expect(r2.overflow).toBe(0);
+    expect(verifyRouting(nl, p, r2)).toEqual({ shorts: [], opens: [] });
+    // a crowded core with too few iterations: what is left over is reported as overflow and found as shorts
+    const pc = place(nl, { util: 0.95 });
+    const r3 = route(nl, pc, { layers: 2, maxIterations: 1 });
+    if ((globalThis as any).process?.env?.SHOW) console.log('crowded', r3.overflow, 'over');
+    expect(r3.overflow).toBeGreaterThan(0);
+    expect(verifyRouting(nl, pc, r3).shorts.length).toBeGreaterThan(0);
   }, 120_000);
 });
