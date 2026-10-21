@@ -96,6 +96,104 @@ export function layoutNetlist(m: YModule): { nodes: SNode[]; edges: SEdge[]; wid
   return { nodes, edges, width: PAD * 2 + (maxLevel + 1) * COL + 100, height: height + PAD };
 }
 
+/** How a cell is drawn as a logic symbol (IEEE Std 91 distinctive shapes); null keeps the box. */
+export interface GateSym { kind: 'and' | 'or' | 'xor' | 'buf' | 'mux' | 'aoi' | 'oai' | 'ff' | 'latch' | 'tie'; inv: boolean; invIn?: number[]; value?: 0 | 1 }
+
+const SYMBOLS: Record<string, GateSym> = {
+  // Yosys generic gates
+  $_AND_: { kind: 'and', inv: false }, $_NAND_: { kind: 'and', inv: true }, $_OR_: { kind: 'or', inv: false }, $_NOR_: { kind: 'or', inv: true },
+  $_XOR_: { kind: 'xor', inv: false }, $_XNOR_: { kind: 'xor', inv: true }, $_NOT_: { kind: 'buf', inv: true }, $_BUF_: { kind: 'buf', inv: false },
+  $_ANDNOT_: { kind: 'and', inv: false, invIn: [1] }, $_ORNOT_: { kind: 'or', inv: false, invIn: [1] },
+  $_MUX_: { kind: 'mux', inv: false }, $_NMUX_: { kind: 'mux', inv: true }, $_AOI3_: { kind: 'aoi', inv: true }, $_OAI3_: { kind: 'oai', inv: true },
+  // WebSim educational standard cells (and the same names in other libraries)
+  INV: { kind: 'buf', inv: true }, BUF: { kind: 'buf', inv: false }, AND2: { kind: 'and', inv: false }, OR2: { kind: 'or', inv: false },
+  NAND2: { kind: 'and', inv: true }, NAND3: { kind: 'and', inv: true }, NOR2: { kind: 'or', inv: true }, NOR3: { kind: 'or', inv: true },
+  XOR2: { kind: 'xor', inv: false }, XNOR2: { kind: 'xor', inv: true }, AOI21: { kind: 'aoi', inv: true }, OAI21: { kind: 'oai', inv: true },
+  MUX2: { kind: 'mux', inv: false }, DFF: { kind: 'ff', inv: false }, DFFR: { kind: 'ff', inv: false },
+  TIEHI: { kind: 'tie', inv: false, value: 1 }, TIELO: { kind: 'tie', inv: false, value: 0 },
+};
+
+export function gateSymbol(type: string): GateSym | null {
+  if (SYMBOLS[type]) return SYMBOLS[type];
+  if (/^\$_(S?DFFS?R?E?|DFFE|SDFFC?E|ALDFFE?|DFFSRE?)_/.test(type)) return { kind: 'ff', inv: false };
+  if (/^\$_DLATCH/.test(type)) return { kind: 'latch', inv: false };
+  return null;
+}
+
+/** SVG elements of a gate symbol in a node box of width w, height h, with the given pin rows (local coordinates). */
+function gateShape(sym: GateSym, w: number, h: number, ins: string[], outs: string[], pinY: (i: number, n: number) => number): SVGElement[] {
+  const out: SVGElement[] = [];
+  const line = (x1: number, y1: number, x2: number, y2: number) => out.push(svg('line', { x1, y1, x2, y2, class: 'syn-wire' }));
+  const body = (d: string) => out.push(svg('path', { d, class: 'syn-gate' }));
+  const bubble = (cx: number, cy: number) => out.push(svg('circle', { cx, cy, r: 3, class: 'syn-gate' }));
+  const text = (x: number, y: number, s: string, cls = 'syn-pin', anchor = 'start') => out.push(svg('text', { x, y, class: cls, 'text-anchor': anchor }, s));
+  const x0 = Math.round(w * 0.3), x1 = Math.round(w * 0.7), y0 = 3, y1 = h - 3, ym = h / 2;
+  const yOut = pinY(0, outs.length);
+  // output stub, with an inversion bubble when needed
+  const outStub = (xEnd: number) => { if (sym.inv) { bubble(xEnd + 3, yOut); line(xEnd + 6, yOut, w, yOut); } else line(xEnd, yOut, w, yOut); };
+  const inStubs = (xTo: (y: number) => number, only?: number[]) => ins.forEach((_, i) => {
+    if (only && !only.includes(i)) return;
+    const y = pinY(i, ins.length), xe = xTo(y);
+    if (sym.invIn?.includes(i)) { line(0, y, xe - 6, y); bubble(xe - 3, y); } else line(0, y, xe, y);
+  });
+  // left edge of an OR body (a shallow curve) at height y
+  const orLeft = (y: number, xl = x0) => xl + 7 * (1 - Math.pow((y - ym) / (ym - y0), 2));
+  const andPath = (xa: number, xb: number, ya: number, yb: number) => { const r = (yb - ya) / 2; const xm = Math.max(xa, xb - r); return `M${xa},${ya} H${xm} A${r},${r} 0 0 1 ${xm},${yb} H${xa} Z`; };
+  const orPath = (xa: number, xb: number, ya: number, yb: number) => { const yc = (ya + yb) / 2, wd = xb - xa; return `M${xa},${ya} Q${xa + wd * 0.6},${ya} ${xb},${yc} Q${xa + wd * 0.6},${yb} ${xa},${yb} Q${xa + 9},${yc} ${xa},${ya} Z`; };
+  switch (sym.kind) {
+    case 'and':
+      inStubs(() => x0); body(andPath(x0, x1, y0, y1)); outStub(x1);
+      break;
+    case 'or': case 'xor':
+      inStubs(y => orLeft(y)); body(orPath(x0, x1, y0, y1)); outStub(x1);
+      if (sym.kind === 'xor') out.push(svg('path', { d: `M${x0 - 5},${y0} Q${x0 + 4},${ym} ${x0 - 5},${y1}`, class: 'syn-gate syn-open' }));
+      break;
+    case 'buf':
+      inStubs(() => x0 + 6); body(`M${x0 + 6},${ym - 10} L${x1 - 6},${ym} L${x0 + 6},${ym + 10} Z`); outStub(x1 - 6);
+      break;
+    case 'mux': {
+      // inputs A (0), B (1), S: the select arrives on the left edge too, labelled
+      inStubs(() => x0); body(`M${x0},${y0} L${x1},${y0 + 7} L${x1},${y1 - 7} L${x0},${y1} Z`); outStub(x1);
+      ins.forEach((p, i) => text(x0 + 3, pinY(i, ins.length) + 3, /^S/.test(p) ? 'S' : i === 0 ? '0' : '1'));
+      break;
+    }
+    case 'aoi': case 'oai': {
+      // first stage on the first two inputs, second stage (NOR / NAND) with the third input
+      const ya = pinY(0, ins.length) - 6, yb = pinY(1, ins.length) + 6, yc = (ya + yb) / 2;
+      const s1a = Math.round(w * 0.22), s1b = Math.round(w * 0.42), s2a = Math.round(w * 0.52);
+      inStubs(() => s1a, [0, 1]);
+      body(sym.kind === 'aoi' ? andPath(s1a, s1b, ya, yb) : orPath(s1a, s1b, ya, yb));
+      const yIn2 = pinY(2, ins.length);
+      line(s1b, yc, s2a + 4, yc);
+      line(0, yIn2, s2a + 4, yIn2);
+      body(sym.kind === 'aoi' ? orPath(s2a, x1, y0, y1) : andPath(s2a, x1, y0, y1));
+      outStub(x1);
+      break;
+    }
+    case 'ff': case 'latch': {
+      out.push(svg('rect', { x: x0 - 6, y: y0, width: x1 - x0 + 12, height: y1 - y0, rx: 2, class: 'syn-gate' }));
+      ins.forEach((p, i) => {
+        const y = pinY(i, ins.length);
+        const clk = /^(C|CLK|CK)$/.test(p), lowActive = /^(RN|R_N|SN|NRST|RESET_N)$/.test(p);
+        if (lowActive) { line(0, y, x0 - 12, y); bubble(x0 - 9, y); } else line(0, y, x0 - 6, y);
+        if (clk && sym.kind === 'ff') out.push(svg('path', { d: `M${x0 - 6},${y - 4} L${x0 + 1},${y} L${x0 - 6},${y + 4}`, class: 'syn-gate syn-open' }));
+        text(x0 + (clk ? 3 : -2), y + 3, clk ? '' : p.replace(/^\$/, ''), 'syn-pin');
+      });
+      outs.forEach((p, i) => { const y = pinY(i, outs.length); line(x1 + 6, y, w, y); text(x1 + 2, y + 3, p, 'syn-pin', 'end'); });
+      text((x0 + x1) / 2, y1 - 3, sym.kind === 'ff' ? 'FF' : 'L', 'syn-glabel', 'middle');
+      break;
+    }
+    case 'tie': {
+      line((x0 + x1) / 2, yOut, w, yOut);
+      if (sym.value) { line((x0 + x1) / 2, yOut, (x0 + x1) / 2, y0 + 1); line(x0 + 4, y0 + 1, x1 - 4, y0 + 1); }
+      else { line((x0 + x1) / 2, yOut, (x0 + x1) / 2, y1 - 5); for (let k = 0; k < 3; k++) line(x0 + 4 + k * 3, y1 - 5 + k * 2, x1 - 4 - k * 3, y1 - 5 + k * 2); }
+      text(x0 - 2, yOut + 3, String(sym.value), 'syn-glabel', 'end');
+      break;
+    }
+  }
+  return out;
+}
+
 export class SynthesisView {
   el: HTMLElement;
   private top: HTMLInputElement;
@@ -106,6 +204,7 @@ export class SynthesisView {
   private table: HTMLElement;
   private schematic: HTMLElement;
   private zoom = 1;
+  private symbols: HTMLInputElement;
   onOpenFile?: (name: string) => void;
 
   constructor(private session: Session, private fs: BrowserFS) {
@@ -113,6 +212,7 @@ export class SynthesisView {
     this.tops = h('datalist', { id: 'synth-tops' });
     this.target = h('select', { class: 'tb-field', 'aria-label': t('Target') }, TARGETS.map(x => h('option', { value: x }, x)));
     this.flatten = h('input', { type: 'checkbox', checked: true });
+    this.symbols = h('input', { type: 'checkbox', checked: true, onchange: () => this.render() });
     this.status = h('div', { class: 'synth-status kind' });
     this.table = h('div', { class: 'synth-cells scroll' });
     this.schematic = h('div', { class: 'synth-schematic scroll' });
@@ -124,6 +224,7 @@ export class SynthesisView {
         h('label', { class: 'synth-opt', title: t('Flatten the hierarchy into one module') }, this.flatten, ' ', t('Flatten')),
         h('button', { class: 'tb-btn', title: t('Synthesize with Yosys'), 'aria-label': t('Synthesize with Yosys'), onclick: () => void this.run() }, icon('compileall')),
         h('span', { class: 'grow' }),
+        h('label', { class: 'synth-opt', title: t('Draw logic gates with their standard symbols instead of boxes') }, this.symbols, ' ', t('Gate symbols')),
         btn(t('Netlist'), t('Open the synthesized Verilog netlist'), () => this.open('.v')),
         btn(t('Log'), t('Open the Yosys log'), () => this.open('.log')),
         btn(t('Simulate netlist'), t('Compile the netlist into work (it replaces the RTL module) for gate-level simulation'), () => void this.gateSim()),
@@ -207,7 +308,11 @@ export class SynthesisView {
     const nodes = svg('g', {});
     for (const nd of L.nodes) {
       const g = svg('g', { class: `syn-node syn-${nd.kind}`, transform: `translate(${nd.x},${nd.y})` }, svg('title', {}, nd.title));
-      if (nd.kind === 'cell') {
+      const sym = nd.kind === 'cell' && this.symbols.checked ? gateSymbol(nd.title.split(' ')[0]) : null;
+      if (sym) {
+        g.classList.add('syn-sym');
+        g.append(...gateShape(sym, W, nd.h, nd.ins, nd.outs, (i, n) => pinY(nd, i, n) - nd.y));
+      } else if (nd.kind === 'cell') {
         g.append(svg('rect', { width: W, height: nd.h, rx: 3 }), svg('text', { x: W / 2, y: nd.h / 2 + 4, 'text-anchor': 'middle', class: 'syn-type' }, nd.label.length > 14 ? nd.label.slice(0, 13) + '…' : nd.label));
         nd.ins.forEach((p, i) => g.append(svg('text', { x: 3, y: pinY(nd, i, nd.ins.length) - nd.y + 3, class: 'syn-pin' }, p)));
         nd.outs.forEach((p, i) => g.append(svg('text', { x: W - 3, y: pinY(nd, i, nd.outs.length) - nd.y + 3, class: 'syn-pin', 'text-anchor': 'end' }, p)));

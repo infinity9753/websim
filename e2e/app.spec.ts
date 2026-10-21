@@ -106,6 +106,11 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await expect(page.locator('.synth-view .synth-status')).toContainText('cells', { timeout: 90_000 });
   await expect(page.locator('.synth-view .synth-cells tbody tr').first()).toBeVisible();
   expect(await page.locator('.syn-node').count()).toBeGreaterThan(5);
+  // gates are drawn with their logic symbols; the toggle switches back to boxes
+  expect(await page.locator('.syn-sym').count()).toBeGreaterThan(5);
+  await page.locator('.synth-view label', { hasText: 'Gate symbols' }).locator('input').uncheck();
+  await expect(page.locator('.syn-sym')).toHaveCount(0);
+  await page.locator('.synth-view label', { hasText: 'Gate symbols' }).locator('input').check();
   await page.getByText('Simulate netlist').click();
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/cpu.v');
   await cmd(page, 'vsim work.tb_cpu');

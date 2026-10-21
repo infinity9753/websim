@@ -322,6 +322,11 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .syn-out .syn-port { fill: #2a2413; stroke: #ffd23f; }
 .syn-type { fill: #e6edf7; font-weight: 600; }
 .syn-pin { fill: #8fa0b8; font-size: 8px; }
+.syn-gate { fill: #1a2433; stroke: #6b8cff; stroke-width: 1.4; stroke-linejoin: round; }
+.syn-gate.syn-open { fill: none; }
+.syn-wire { stroke: #6b8cff; stroke-width: 1.2; }
+.syn-glabel { fill: #8fa0b8; font-size: 8px; }
+.syn-sym:hover .syn-gate { stroke: #ffd23f; }
 .synthesis .btn { padding: 2px 8px; font-size: 12px; }
 /* ASIC layout window (#51) */
 .chip-side { width: 170px; flex: none; border-right: 1px solid var(--border, #ccc); padding: 4px 6px; font-size: 12px; }

@@ -392,6 +392,8 @@ export const KO: Record<string, string> = {
   'Synthesis': '합성',
   'Synthesize (Yosys)…': '합성 (Yosys)…',
   'Place & Route': '배치 배선',
+  'Gate symbols': '게이트 기호',
+  'Draw logic gates with their standard symbols instead of boxes': '논리 게이트를 상자 대신 표준 기호로 그리기',
   'Layout': '레이아웃',
   'ASIC Flow (layout, GDSII)…': 'ASIC 흐름 (레이아웃, GDSII)…',
   'Target core utilization': '목표 코어 사용률',
