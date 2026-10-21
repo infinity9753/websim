@@ -63,6 +63,8 @@ run -all
 
 **Mixed language**: Verilog can instantiate VHDL entities and vice versa (see the ALU example).
 
+**Beyond simulation**: logic synthesis with Yosys (`synth`), FPGA place and route with nextpnr for iCE40, ECP5 and Gowin with bitstreams (`pnr`), cocotb-compatible Python testbenches (`vsim -cocotb`), and an educational ASIC flow — an invented standard-cell library, placement, routing, timing estimate and DEF / LEF / GDSII with a layout viewer (`asic`).
+
 **Kernel**: 4-state values, delta cycles with active / inactive / NBA / postponed regions, resolved multi-driver nets, forced signals, full value history for every signal (signals added to the wave after a run still show their complete waveform).
 
 ## Known limitations
