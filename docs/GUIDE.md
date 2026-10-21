@@ -223,9 +223,9 @@ run -all                                        ;# 테스트가 모두 끝나면
 오픈소스 합성기 [Yosys](https://github.com/YosysHQ/yosys)(YoWASP WebAssembly 빌드, ISC 라이선스)를 브라우저 안에서 실행합니다. 처음 한 번 약 77MB 를 내려받으며 이후에는 브라우저 캐시를 씁니다.
 
 1. 설계를 컴파일한 뒤 **컴파일 ▸ 합성 (Yosys)…** 로 합성 창을 엽니다(또는 트랜스크립트에서 `synth`).
-2. 최상위 모듈(비우면 자동: 테스트벤치가 아닌 최상위, 또는 테스트벤치가 인스턴스화한 모듈), 타깃(`generic`, `ice40`, `ecp5`, `gowin`, `xilinx`), 평탄화 여부를 고르고 합성 버튼을 누릅니다.
+2. 최상위 모듈(비우면 자동: 테스트벤치가 아닌 최상위, 또는 테스트벤치가 인스턴스화한 모듈), 타깃(`generic`, `asic`, `ice40`, `ecp5`, `gowin`, `xilinx`), 평탄화 여부를 고르고 합성 버튼을 누릅니다. `asic` 은 WebSim 교육용 표준 셀 라이브러리(`websim_edu`: INV, NAND/NOR, AOI/OAI, XOR, MUX2, DFF, 비동기 리셋 DFFR, TIE 셀 등, 가상의 공정)에 매핑하고 칩 면적을 보고하며, 셀 시뮬레이션 모델 `synth/websim_edu.v`(specify 지연 포함)와 Liberty 파일 `synth/websim_edu.lib` 도 씁니다.
 3. 셀 종류별 개수와 회로도가 표시되고, 결과는 프로젝트의 `synth/` 폴더에 `<top>.v`(넷리스트), `.json`, `.stat`, `.log` 로 저장됩니다(FPGA 타깃은 `<top>_<target>.*`).
-4. **넷리스트 시뮬레이션**: `generic` 결과의 넷리스트를 `work` 에 컴파일해 RTL 모듈을 대체하므로, 같은 테스트벤치로 게이트 레벨 시뮬레이션을 하고 RTL 결과와 비교할 수 있습니다. RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
+4. **넷리스트 시뮬레이션**: `generic`(또는 셀 모델과 함께 `asic`) 결과의 넷리스트를 `work` 에 컴파일해 RTL 모듈을 대체하므로, 같은 테스트벤치로 게이트 레벨 시뮬레이션을 하고 RTL 결과와 비교할 수 있습니다. RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
 
 ```tcl
 vlog counter.v tb_counter.v
@@ -327,7 +327,7 @@ Gowin 의 `gowin_pack` 은 Python 프로그램(apycula)이라 브라우저 안�
 
 | 명령 | 설명 |
 |---|---|
-| `synth [-top m] [-target generic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
+| `synth [-top m] [-target generic\|asic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
 
 ### 기타

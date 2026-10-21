@@ -48,6 +48,6 @@ endmodule`,
     out.length = 0;
     expect(await s.exec('synth -top bad bad.v')).toBe(false);
     expect(out.some(l => l.startsWith('** Error: (synth)') && /bad\.v/.test(l))).toBe(true);
-    expect(await s.exec('synth -target asic')).toBe(false);
+    expect(await s.exec('synth -target nonsense')).toBe(false);
   }, 60_000);
 });

@@ -1,11 +1,12 @@
 // Synthesis window: run Yosys on the design, show the cell usage and a schematic of the netlist.
 import { h, icon } from './dom';
 import { t } from './i18n';
+import { LIB_NAME } from '../engine/asic/cells';
 import type { RemoteSession as Session } from './remote';
 import type { BrowserFS } from './vfs';
 
 const SVG = 'http://www.w3.org/2000/svg';
-const TARGETS = ['generic', 'ice40', 'ecp5', 'gowin', 'xilinx'];
+const TARGETS = ['generic', 'asic', 'ice40', 'ecp5', 'gowin', 'xilinx'];
 const MAX_CELLS = 400;
 
 function svg(tag: string, attrs: Record<string, string | number>, ...kids: (Node | string)[]) {
@@ -157,8 +158,8 @@ export class SynthesisView {
   private async gateSim() {
     const s = this.session.lastSynth;
     if (!s?.ok) return;
-    if (s.target !== 'generic') { this.status.textContent = t('Gate-level simulation needs the generic target (FPGA cells have no simulation models here).'); return; }
-    await this.session.exec(`vlog ${s.base}.v`);
+    if (s.target !== 'generic' && s.target !== 'asic') { this.status.textContent = t('Gate-level simulation needs the generic or asic target (FPGA cells have no simulation models here).'); return; }
+    await this.session.exec(s.target === 'asic' ? `vlog synth/${LIB_NAME}.v ${s.base}.v` : `vlog ${s.base}.v`);
   }
 
   private setZoom(z: number) { this.zoom = Math.max(0.25, Math.min(3, z)); const svgEl = this.schematic.querySelector('svg'); if (svgEl) this.applyZoom(svgEl as SVGSVGElement); }

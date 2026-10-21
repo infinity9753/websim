@@ -433,7 +433,7 @@ export const KO: Record<string, string> = {
   'Compile the netlist into work (it replaces the RTL module) for gate-level simulation': '게이트 레벨 시뮬레이션용으로 넷리스트를 work에 컴파일 (RTL 모듈을 대체)',
   'Top': '최상위',
   'Running Yosys… (the first run downloads about 77 MB)': 'Yosys 실행 중… (처음 실행 시 약 77MB 다운로드)',
-  'Gate-level simulation needs the generic target (FPGA cells have no simulation models here).': '게이트 레벨 시뮬레이션은 generic 타깃에서만 가능합니다 (FPGA 셀의 시뮬레이션 모델이 없음).',
+  'Gate-level simulation needs the generic or asic target (FPGA cells have no simulation models here).': '게이트 레벨 시뮬레이션은 generic 또는 asic 타깃에서만 가능합니다 (FPGA 셀은 여기서 시뮬레이션 모델이 없습니다).',
   'Synthesize the design with Yosys: choose the top module and target, then press the button (or type "synth" in the transcript).': 'Yosys로 설계를 합성합니다. 최상위 모듈과 타깃을 고른 뒤 버튼을 누르세요 (또는 트랜스크립트에 "synth" 입력).',
   '{0} ({1}): {2} cells, {3} warnings — files in {4}.*': '{0} ({1}): 셀 {2}개, 경고 {3}개 — 파일: {4}.*',
   '{0} ({1}): synthesis failed — see {2}.log': '{0} ({1}): 합성 실패 — {2}.log 참조',

@@ -2,9 +2,10 @@
 import type { Item, Unit } from './ast';
 import type { LibraryManager } from './library';
 import { newPyodide, assetLocation } from './pyodide';
+import { asicScript, liberty } from './asic/cells';
 
-export type SynthTarget = 'generic' | 'ice40' | 'ecp5' | 'gowin' | 'xilinx';
-export const SYNTH_TARGETS: SynthTarget[] = ['generic', 'ice40', 'ecp5', 'gowin', 'xilinx'];
+export type SynthTarget = 'generic' | 'asic' | 'ice40' | 'ecp5' | 'gowin' | 'xilinx';
+export const SYNTH_TARGETS: SynthTarget[] = ['generic', 'asic', 'ice40', 'ecp5', 'gowin', 'xilinx'];
 
 export interface SynthOptions { top: string; target: SynthTarget; flatten: boolean; files: Record<string, string> }
 export interface SynthResult { ok: boolean; log: string; netlist?: string; json?: string; stat?: string; cells: [string, number][] }
@@ -58,26 +59,33 @@ export function designFiles(libs: LibraryManager, top: string): string[] {
 
 function script(o: SynthOptions, out: string): string {
   const read = Object.keys(o.files).map(f => `read_verilog -sv -defer "${f}"`).join('; ');
+  if (o.target === 'asic') return asicScript(o.top, read, out);
   // synth_gowin always flattens and has no -flatten option
   const flat = o.flatten && o.target !== 'gowin' ? ' -flatten' : '';
   const synth = o.target === 'generic' ? `synth -top ${o.top}${flat}` : `synth_${o.target} -top ${o.top}${flat}`;
   return `${read}; ${synth}; tee -o ${out}.stat stat; write_json ${out}.json; write_verilog -noattr ${out}.v`;
 }
 
-/** Cell counts from Yosys "stat" output ("   3   $_AND_" lines of the top module). */
+/** Cell counts from Yosys "stat" output ("   3   $_AND_" lines of the top module; with -liberty "   3   7.68   AND2"). */
 export function parseStat(stat: string): [string, number][] {
   const out: [string, number][] = [];
   const lines = stat.split('\n');
   // the cell breakdown follows the "N cells" line of the (last printed) top module
   let i = lines.length - 1;
-  while (i >= 0 && !/^\s+\d+\s+cells\s*$/.test(lines[i])) i--;
+  while (i >= 0 && !/^\s+\d+\s+(?:[\d.]+\s+)?cells\s*$/.test(lines[i])) i--;
   if (i < 0) return out;
   for (i++; i < lines.length; i++) {
-    const m = /^\s+(\d+)\s+(\$?[A-Za-z_][\w$]*)\s*$/.exec(lines[i]);
+    const m = /^\s+(\d+)\s+(?:[\d.]+\s+)?(\$?[A-Za-z_][\w$]*)\s*$/.exec(lines[i]);
     if (!m) break;
     out.push([m[2], Number(m[1])]);
   }
   return out;
+}
+
+/** "Chip area for module '\top': 184.32" from stat -liberty, in um^2. */
+export function parseArea(stat: string): number | undefined {
+  const m = /Chip area for (?:module|top module) [^:]*:\s*([\d.]+)/.exec(stat);
+  return m ? Number(m[1]) : undefined;
 }
 
 export async function synthesize(o: SynthOptions, progress?: (done: number, total: number) => void): Promise<SynthResult> {
@@ -89,7 +97,9 @@ export async function synthesize(o: SynthOptions, progress?: (done: number, tota
   const out = 'out';
   let files: Record<string, unknown>;
   try {
-    files = await run(['-p', script(o, out)], toTree(o.files), {
+    const tree = toTree(o.files);
+    if (o.target === 'asic') tree['edu.lib'] = liberty();
+    files = await run(['-p', script(o, out)], tree, {
       stdout: sink, stderr: sink,
       fetchProgress: progress ? (e: { totalLength: number; doneLength: number }) => progress(e.doneLength, e.totalLength) : undefined,
     });

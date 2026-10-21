@@ -10,9 +10,10 @@ import './vhdl';
 import { writeVcd, parseVcd, vcdBits, type VcdVar, type VcdScopeDecl } from './vcd';
 import { listRows, listText } from './list';
 import { aggregate, coverageReport } from './coverage';
-import { synthesize, designFiles, placeAndRoute, FPGA_DEVICES, FPGA_FAMILIES, SYNTH_TARGETS, type FpgaFamily, type SynthTarget } from './synth';
+import { synthesize, parseArea, designFiles, placeAndRoute, FPGA_DEVICES, FPGA_FAMILIES, SYNTH_TARGETS, type FpgaFamily, type SynthTarget } from './synth';
 import { fmtReal, vecToReal } from './elab';
 import { CocotbRun } from './cocotb';
+import { LIB_NAME, liberty, verilogModels } from './asic/cells';
 import type { Vec } from './logic';
 
 export interface VFS {
@@ -1039,12 +1040,16 @@ export class Session {
       this.fs.write(`${base}.v`, r.netlist ?? '');
       this.fs.write(`${base}.json`, r.json ?? '');
       this.fs.write(`${base}.stat`, r.stat ?? '');
+      // cell models for gate-level simulation and the Liberty used for mapping
+      if (target === 'asic') { this.fs.write(`synth/${LIB_NAME}.v`, verilogModels()); this.fs.write(`synth/${LIB_NAME}.lib`, liberty()); }
     }
     const warn = r.log.split('\n').filter(l => /^Warning:/.test(l));
     for (const w of warn.slice(0, 20)) this.out(`** Warning: (synth) ${w.replace(/^Warning:\s*/, '')}`, 'warn');
     const total = r.cells.reduce((s, [, n]) => s + n, 0);
     this.out(`Cells: ${total}${r.cells.length ? '  (' + r.cells.map(([c, n]) => `${c} ${n}`).join(', ') + ')' : ''}`);
-    this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log`);
+    const area = parseArea(r.stat ?? '');
+    if (area !== undefined) this.out(`Chip area: ${area.toFixed(2)} um^2 (${LIB_NAME} cells)`);
+    this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log${target === 'asic' ? `; cell models synth/${LIB_NAME}.v` : ''}`);
     this.emit('synth');
     return true;
   }
