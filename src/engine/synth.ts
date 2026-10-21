@@ -1,6 +1,7 @@
 // Logic synthesis with Yosys (YoWASP WebAssembly build, loaded on first use).
 import type { Item, Unit } from './ast';
 import type { LibraryManager } from './library';
+import { newPyodide, assetLocation } from './pyodide';
 
 export type SynthTarget = 'generic' | 'ice40' | 'ecp5' | 'gowin' | 'xilinx';
 export const SYNTH_TARGETS: SynthTarget[] = ['generic', 'ice40', 'ecp5', 'gowin', 'xilinx'];
@@ -57,7 +58,8 @@ export function designFiles(libs: LibraryManager, top: string): string[] {
 
 function script(o: SynthOptions, out: string): string {
   const read = Object.keys(o.files).map(f => `read_verilog -sv -defer "${f}"`).join('; ');
-  const flat = o.flatten ? ' -flatten' : '';
+  // synth_gowin always flattens and has no -flatten option
+  const flat = o.flatten && o.target !== 'gowin' ? ' -flatten' : '';
   const synth = o.target === 'generic' ? `synth -top ${o.top}${flat}` : `synth_${o.target} -top ${o.top}${flat}`;
   return `${read}; ${synth}; tee -o ${out}.stat stat; write_json ${out}.json; write_verilog -noattr ${out}.v`;
 }
@@ -103,66 +105,158 @@ export async function synthesize(o: SynthOptions, progress?: (done: number, tota
 
 // ---------------------------------------------------------------- FPGA place & route (nextpnr-ice40)
 
-export const ICE40_DEVICES: Record<string, { pkg: string; w: number; h: number }> = {
-  lp384: { pkg: 'qn32', w: 7, h: 9 },
-  lp1k: { pkg: 'cm81', w: 13, h: 17 },
-  hx1k: { pkg: 'tq144', w: 13, h: 17 },
-  lp8k: { pkg: 'cm81', w: 33, h: 33 },
-  hx8k: { pkg: 'ct256', w: 33, h: 33 },
-  u4k: { pkg: 'sg48', w: 25, h: 21 },
-  up5k: { pkg: 'sg48', w: 25, h: 31 },
+export type FpgaFamily = 'ice40' | 'ecp5' | 'gowin';
+export interface FpgaDevice {
+  family: FpgaFamily;
+  /** Display name, e.g. "iCE40 UP5K" or "Gowin GW1NR-9 (Tang Nano 9K)". */
+  name: string;
+  /** Default package (iCE40, ECP5) or full part number (Gowin). */
+  pkg: string;
+  /** nextpnr device option(s). */
+  args: string[];
+  /** gowin_pack device family. */
+  packFamily?: string;
+  /** Tile grid size, if known before placement. */
+  w?: number; h?: number;
+}
+
+const ice40 = (name: string, pkg: string, w: number, h: number): FpgaDevice => ({ family: 'ice40', name: `iCE40 ${name.toUpperCase()}`, pkg, args: [`--${name}`], w, h });
+const ecp5 = (k: string): FpgaDevice => ({ family: 'ecp5', name: `ECP5 LFE5U-${k}F`, pkg: 'CABGA381', args: [`--${k}k`] });
+const gowin = (name: string, part: string, family: string): FpgaDevice => ({ family: 'gowin', name: `Gowin ${name}`, pkg: part, args: ['--vopt', `family=${family}`], packFamily: family });
+
+/** Devices for pnr -device. */
+export const FPGA_DEVICES: Record<string, FpgaDevice> = {
+  lp384: ice40('lp384', 'qn32', 7, 9),
+  lp1k: ice40('lp1k', 'cm81', 13, 17),
+  hx1k: ice40('hx1k', 'tq144', 13, 17),
+  lp8k: ice40('lp8k', 'cm81', 33, 33),
+  hx8k: ice40('hx8k', 'ct256', 33, 33),
+  u4k: ice40('u4k', 'sg48', 25, 21),
+  up5k: ice40('up5k', 'sg48', 25, 31),
+  'lfe5u-12f': ecp5('12'),
+  'lfe5u-25f': ecp5('25'),
+  'lfe5u-45f': ecp5('45'),
+  'lfe5u-85f': ecp5('85'),
+  'gw1nz-1': gowin('GW1NZ-1 (Tang Nano 1K)', 'GW1NZ-LV1QN48C6/I5', 'GW1NZ-1'),
+  'gw1ns-4': gowin('GW1NS-4 (Tang Nano 4K)', 'GW1NSR-LV4CQN48PC7/I6', 'GW1NS-4'),
+  'gw1n-9c': gowin('GW1NR-9C (Tang Nano 9K)', 'GW1NR-LV9QN88PC6/I5', 'GW1N-9C'),
+  'gw2a-18c': gowin('GW2AR-18C (Tang Nano 20K)', 'GW2AR-LV18QN88C8/I7', 'GW2A-18C'),
 };
 
-export interface PnrOptions { device: string; pkg?: string; pcf?: string; freq?: number; seed?: number; json: string }
+/** Per family: Yosys target, pin constraint file type, bitstream and text configuration file types. */
+export const FPGA_FAMILIES: Record<FpgaFamily, { label: string; target: SynthTarget; constraints: string; bitstream: string; config?: string }> = {
+  ice40: { label: 'Lattice iCE40', target: 'ice40', constraints: 'pcf', bitstream: 'bin', config: 'asc' },
+  ecp5: { label: 'Lattice ECP5', target: 'ecp5', constraints: 'lpf', bitstream: 'bit', config: 'config' },
+  gowin: { label: 'Gowin', target: 'gowin', constraints: 'cst', bitstream: 'fs' },
+};
+
+/** A pin constraint file template listing every port bit, in the family's format. */
+export function constraintTemplate(family: FpgaFamily, top: string, bits: string[]): string {
+  const head = {
+    ice40: `# Pin constraints for ${top} (iCE40 .pcf): set_io <port> <package pin>`,
+    ecp5: `# Pin constraints for ${top} (ECP5 .lpf): LOCATE COMP "<port>" SITE "<ball>"; IOBUF PORT "<port>" IO_TYPE=LVCMOS33;`,
+    gowin: `// Pin constraints for ${top} (Gowin .cst): IO_LOC "<port>" <pin>; IO_PORT "<port>" IO_TYPE=LVCMOS33;\n// Gowin needs a location for every top-level port.`,
+  }[family];
+  const line = (b: string) => family === 'ice40' ? `# set_io ${b} <pin>` : family === 'ecp5' ? `# LOCATE COMP "${b}" SITE "<ball>";` : `// IO_LOC "${b}" <pin>;`;
+  return [head, ...bits.map(line)].join('\n') + '\n';
+}
+
+export interface PnrOptions { device: string; pkg?: string; constraints?: string; freq?: number; seed?: number; json: string }
 export interface PnrResult {
   ok: boolean; log: string;
-  asc?: string; bin?: Uint8Array; placed?: string;
+  /** Text configuration (iCE40 .asc, ECP5 .config) and the packed bitstream. */
+  config?: string; bin?: Uint8Array; placed?: string;
   util: [string, number, number][];          // cell type, used, available
   fmax: [string, number, number | null][];   // clock, achieved MHz, constraint MHz
 }
 
-type Pnr = { runNextpnrIce40: Runner; runIcepack: Runner };
-let pnrTools: Promise<Pnr> | null = null;
+type Tools = { pnr: Runner; pack: Runner };
+const toolCache = new Map<FpgaFamily, Promise<Tools>>();
 
-/** nextpnr-ice40 and icepack (about 235 MB with all ice40 chip databases), loaded on first use. */
-function nextpnr(): Promise<Pnr> {
-  pnrTools ??= import('@yowasp/nextpnr-ice40').then(m => m as unknown as Pnr);
-  return pnrTools;
+/** nextpnr and the bitstream packer of a family (about 175-235 MB with the chip databases), loaded on first use. */
+function tools(f: FpgaFamily): Promise<Tools> {
+  let p = toolCache.get(f);
+  if (!p) {
+    const r = (m: unknown, k: string) => (m as Record<string, Runner>)[k];
+    p = f === 'ice40' ? import('@yowasp/nextpnr-ice40').then(m => ({ pnr: r(m, 'runNextpnrIce40'), pack: r(m, 'runIcepack') }))
+      : f === 'ecp5' ? import('@yowasp/nextpnr-ecp5').then(m => ({ pnr: r(m, 'runNextpnrEcp5'), pack: r(m, 'runEcppack') }))
+        : import('@yowasp/nextpnr-himbaechel-gowin').then(m => ({ pnr: r(m, 'runNextpnrHimbaechelGowin'), pack: (m as unknown as { commands: Record<string, Runner> }).commands.gowin_pack }));
+    p.catch(() => toolCache.delete(f));
+    toolCache.set(f, p);
+  }
+  return p;
+}
+
+const MSGSPEC = new URL('../../vendor/msgspec-0.22.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl', import.meta.url);
+
+/**
+ * gowin_pack (apycula, Python) runs on Pyodide. Its dependencies are installed from files shipped with the app
+ * instead of micropip and the Pyodide CDN: msgspec from vendor/, apycula from the tool's own wheel.
+ */
+async function gowinPyodide(opts: Record<string, unknown>) {
+  const py = await newPyodide(opts);
+  await py.loadPackage([await assetLocation(MSGSPEC)], { messageCallback: () => {} });
+  py.loadPackage = async () => {};
+  py.runPython(`import sys, types, zipfile, site
+_m = types.ModuleType('micropip')
+async def _install(url, keep_going=False, **kw):
+    zipfile.ZipFile(url.removeprefix('emfs:')).extractall(site.getsitepackages()[0])
+_m.install = _install
+sys.modules['micropip'] = _m`);
+  return py;
 }
 
 export async function placeAndRoute(o: PnrOptions, progress?: (done: number, total: number) => void): Promise<PnrResult> {
-  const dev = ICE40_DEVICES[o.device];
-  if (!dev) throw new Error(`pnr: unknown device "${o.device}" (${Object.keys(ICE40_DEVICES).join(', ')})`);
-  const tools = await nextpnr();
+  const dev = FPGA_DEVICES[o.device];
+  if (!dev) throw new Error(`pnr: unknown device "${o.device}" (${Object.keys(FPGA_DEVICES).join(', ')})`);
+  const fam = dev.family;
+  const t = await tools(fam);
   const dec = new TextDecoder();
   let log = '';
   const sink = (b: Uint8Array | null) => { if (b) log += dec.decode(b, { stream: true }).replace(/\x1b\[[0-9;]*m/g, ''); };
-  const args = [`--${o.device}`, '--package', o.pkg ?? dev.pkg, '--json', 'in.json', '--asc', 'out.asc', '--report', 'report.json', '--write', 'placed.json', '--timing-allow-fail'];
+  const args = [...dev.args, '--json', 'in.json', '--report', 'report.json', '--write', 'placed.json', '--timing-allow-fail'];
   const files: Tree = { 'in.json': o.json };
-  if (o.pcf !== undefined) { args.push('--pcf', 'in.pcf', '--pcf-allow-unconstrained'); files['in.pcf'] = o.pcf; }
+  if (fam === 'gowin') args.push('--device', o.pkg ?? dev.pkg);
+  else args.push('--package', o.pkg ?? dev.pkg);
+  if (fam === 'ice40') args.push('--asc', 'out.cfg');
+  if (fam === 'ecp5') args.push('--textcfg', 'out.cfg');
+  if (o.constraints !== undefined) {
+    files['in.con'] = o.constraints;
+    if (fam === 'ice40') args.push('--pcf', 'in.con', '--pcf-allow-unconstrained');
+    else if (fam === 'ecp5') args.push('--lpf', 'in.con', '--lpf-allow-unconstrained');
+    else args.push('--vopt', 'cst=in.con');
+  }
   if (o.freq) args.push('--freq', String(o.freq));
   if (o.seed !== undefined) args.push('--seed', String(o.seed));
+  const fetchProgress = progress ? (e: { totalLength: number; doneLength: number }) => progress(e.doneLength, e.totalLength) : undefined;
   let out: Record<string, unknown>;
   try {
-    out = await tools.runNextpnrIce40(args, files, {
-      stdout: sink, stderr: sink,
-      fetchProgress: progress ? (e: { totalLength: number; doneLength: number }) => progress(e.doneLength, e.totalLength) : undefined,
-    });
+    out = await t.pnr(args, files, { stdout: sink, stderr: sink, fetchProgress });
   } catch (e) {
     if (!(e as { files?: unknown }).files) throw e;
     return { ok: false, log, util: [], fmax: [] };
   }
   const text = (n: string) => { const v = out[n]; return v === undefined ? undefined : typeof v === 'string' ? v : dec.decode(v as Uint8Array); };
-  const asc = text('out.asc');
+  const bytes = (v: unknown) => (typeof v === 'string' ? new TextEncoder().encode(v) : (v as Uint8Array | undefined));
+  const config = text('out.cfg');
+  const placed = text('placed.json');
   let bin: Uint8Array | undefined;
-  if (asc) {
-    const p = await tools.runIcepack(['out.asc', 'out.bin'], { 'out.asc': asc }, {});
-    const b = p['out.bin'];
-    bin = typeof b === 'string' ? new TextEncoder().encode(b) : (b as Uint8Array);
+  try {
+    if (fam === 'gowin') {
+      const p = await t.pack(['-d', dev.packFamily!, '-o', 'out.fs', 'placed.json'], { 'placed.json': placed ?? '' }, { stdout: sink, stderr: sink, loadPyodide: gowinPyodide });
+      bin = bytes(p['out.fs']);
+    } else if (config) {
+      const p = await t.pack(['out.cfg', 'out.bin'], { 'out.cfg': config }, { stdout: sink, stderr: sink });
+      bin = bytes(p['out.bin']);
+    }
+  } catch (e) {
+    if (!(e as { files?: unknown }).files) throw e;
+    log += `\nERROR: the bitstream packer failed\n`;
+    return { ok: false, log, util: [], fmax: [] };
   }
   const rep = JSON.parse(text('report.json') ?? '{}') as { utilization?: Record<string, { used: number; available: number }>; fmax?: Record<string, { achieved: number; constraint?: number }> };
   return {
-    ok: true, log, asc, bin, placed: text('placed.json'),
+    ok: true, log, config, bin, placed,
     util: Object.entries(rep.utilization ?? {}).map(([k, v]) => [k, v.used, v.available]),
     fmax: Object.entries(rep.fmax ?? {}).map(([k, v]) => [k, v.achieved, v.constraint ?? null]),
   };

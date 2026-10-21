@@ -158,3 +158,37 @@ test('runs the Python (cocotb) tests of an example in the browser', async ({ pag
   await expect(page.locator('.tr-out .tr-line', { hasText: 'TESTS=3 PASS=3' })).toHaveCount(2);
   expect(errors).toEqual([]);
 });
+
+test('places and routes for ECP5 and Gowin (constraints template, gowin_pack on Pyodide) and downloads the bitstreams', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await fresh(page);
+  await cmd(page, 'quit -sim');
+  await page.getByText('Compile', { exact: true }).first().click();
+  await page.getByText('Place & Route (nextpnr)…').click();
+  const run = page.locator('.pnr button[title="Synthesize, place and route"]');
+  const status = page.locator('.pnr .synth-status');
+  await page.locator('.pnr select[aria-label="Device"]').selectOption('lfe5u-25f');
+  await run.click();
+  await expect(status).toContainText('on ECP5 LFE5U-25F', { timeout: 240_000 });
+  await expect(page.locator('.pnr .synth-cells tbody')).toContainText('TRELLIS_COMB');
+  let dl = page.waitForEvent('download');
+  await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
+  expect((await dl).suggestedFilename()).toBe('counter.bit');
+  // Gowin: every port needs a pin; fill in the generated template
+  await page.locator('.pnr select[aria-label="Device"]').selectOption('gw1n-9c');
+  await page.locator('.pnr').getByText('New constraints', { exact: true }).click();
+  await expect(page.locator('.cm-content:visible')).toContainText('IO_LOC "q[3]" <pin>');
+  await page.locator('.cm-content:visible').click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.insertText(['clk 52', 'rst 4', 'en 3', 'q[0] 10', 'q[1] 11', 'q[2] 13', 'q[3] 14', 'tc 15'].map(l => { const [p, n] = l.split(' '); return `IO_LOC "${p}" ${n};`; }).join('\n') + '\n');
+  await page.keyboard.press('Control+S');
+  await page.locator('.pane-tab', { hasText: 'Place & Route' }).click();
+  await run.click();
+  await expect(status).toContainText('on Gowin GW1NR-9C', { timeout: 240_000 });
+  await expect(page.locator('.tr-out')).toContainText('pins from counter.cst');
+  expect(await page.locator('.pnr-used.pnr-io').count()).toBeGreaterThan(0);
+  dl = page.waitForEvent('download');
+  await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
+  expect((await dl).suggestedFilename()).toBe('counter.fs');
+  expect(errors).toEqual([]);
+});

@@ -3,11 +3,10 @@
 import type { Design, Scope } from './elab';
 import type { Memory, Signal } from './kernel';
 import { fromBits, fromInt, toBin } from './logic';
+import { newPyodide, type Py } from './pyodide';
 
 const PY_SOURCES = import.meta.glob('./cocotb/*.py', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Py = any;
 type Kind = 'out' | 'err' | 'warn' | 'note';
 let python: Promise<Py> | null = null;
 let print: (msg: string, kind?: Kind) => void = () => {};
@@ -15,17 +14,7 @@ let print: (msg: string, kind?: Kind) => void = () => {};
 /** Load Pyodide once per worker, with the cocotb-compatible package installed in /websim_py. */
 function loadPython(): Promise<Py> {
   python ??= (async () => {
-    const { loadPyodide } = await import('pyodide');
-    const opts: Record<string, unknown> = { stdout: (s: string) => print(s), stderr: (s: string) => print(s, 'err') };
-    // in the browser the runtime files are served next to the app (vite.config.ts copies them to pyodide/)
-    const node = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node;
-    if (node) {
-      // Node (tests): the package directory; a variable specifier keeps bundlers away from node:module
-      const nm = 'node:module';
-      const { createRequire } = await import(/* @vite-ignore */ nm);
-      opts.indexURL = createRequire(import.meta.url).resolve('pyodide').replace(/[^/\\]+$/, '');
-    } else opts.indexURL = new URL(import.meta.env.DEV ? '/pyodide/' : '../pyodide/', self.location.href).href;
-    const py = await loadPyodide(opts);
+    const py = await newPyodide({ stdout: (s: string) => print(s), stderr: (s: string) => print(s, 'err') });
     py.FS.mkdirTree('/websim_py/cocotb');
     for (const [p, src] of Object.entries(PY_SOURCES)) py.FS.writeFile(`/websim_py/cocotb/${p.split('/').pop()}`, src);
     py.runPython("import sys; sys.path[:0] = ['/websim_py', '/websim_proj']");

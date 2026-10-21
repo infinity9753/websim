@@ -10,7 +10,7 @@ import './vhdl';
 import { writeVcd, parseVcd, vcdBits, type VcdVar, type VcdScopeDecl } from './vcd';
 import { listRows, listText } from './list';
 import { aggregate, coverageReport } from './coverage';
-import { synthesize, designFiles, placeAndRoute, ICE40_DEVICES, SYNTH_TARGETS, type SynthTarget } from './synth';
+import { synthesize, designFiles, placeAndRoute, FPGA_DEVICES, FPGA_FAMILIES, SYNTH_TARGETS, type FpgaFamily, type SynthTarget } from './synth';
 import { fmtReal, vecToReal } from './elab';
 import { CocotbRun } from './cocotb';
 import type { Vec } from './logic';
@@ -204,7 +204,7 @@ export class Session {
       '  vsim -coverage ...                 count statement / branch / toggle coverage',
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
-      '  pnr [-top m] [-device up5k|hx1k|hx8k|...] [-pcf f] [-freq MHz]  iCE40 place & route + bitstream',
+      '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -914,53 +914,60 @@ export class Session {
   }
 
   /** Result of the last pnr command (for the P&R window); the bitstream stays here for download. */
-  lastPnr: { run: number; top: string; device: string; base: string; ok: boolean; util: [string, number, number][]; fmax: [string, number, number | null][]; bin?: Uint8Array } | null = null;
+  lastPnr: { run: number; top: string; device: string; family: FpgaFamily; base: string; ok: boolean; util: [string, number, number][]; fmax: [string, number, number | null][]; bin?: Uint8Array; bitstream: string } | null = null;
 
   /**
-   * pnr [-top m] [-device hx1k|hx8k|up5k|...] [-package p] [-pcf f] [-freq MHz] [-seed n]
-   * Synthesize for ice40, then place and route with nextpnr and pack the bitstream.
+   * pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-package p] [-pcf|-lpf|-cst f] [-freq MHz] [-seed n]
+   * Synthesize for the device's FPGA family, then place and route with nextpnr and pack the bitstream.
    */
   async pnr(args: string[]) {
-    let device = 'up5k', pkg: string | undefined, pcfFile: string | undefined, freq: number | undefined, seed: number | undefined;
+    let device = 'up5k', pkg: string | undefined, conFile: string | undefined, freq: number | undefined, seed: number | undefined;
     const synthArgs: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (a === '-device') device = args[++i];
+      if (a === '-device') device = args[++i]?.toLowerCase();
       else if (a === '-package') pkg = args[++i];
-      else if (a === '-pcf') pcfFile = args[++i];
+      else if (a === '-pcf' || a === '-lpf' || a === '-cst' || a === '-constraints') conFile = args[++i];
       else if (a === '-freq') freq = Number(args[++i]);
       else if (a === '-seed') seed = Number(args[++i]);
       else if (a === '-top') synthArgs.push(a, args[++i]);
       else if (a.startsWith('-')) throw new Error(`pnr: unknown option ${a}`);
       else synthArgs.push(a);
     }
-    if (!ICE40_DEVICES[device]) throw new Error(`pnr: unknown device "${device}" (${Object.keys(ICE40_DEVICES).join(', ')})`);
+    const dev = FPGA_DEVICES[device];
+    if (!dev) throw new Error(`pnr: unknown device "${device}" (${Object.keys(FPGA_DEVICES).join(', ')})`);
+    const fam = FPGA_FAMILIES[dev.family];
     if (freq !== undefined && !(freq > 0)) throw new Error('pnr: -freq expects a frequency in MHz');
-    if (!(await this.synth([...synthArgs, '-target', 'ice40', '-flatten']))) return false;
+    if (!(await this.synth([...synthArgs, '-target', fam.target, '-flatten']))) return false;
     const s = this.lastSynth!;
     const json = this.fs.read(`${s.base}.json`);
     if (!json) throw new Error(`pnr: ${s.base}.json was not written`);
-    // pin constraints: -pcf, or <top>.pcf / constraints/<top>.pcf in the project
-    pcfFile ??= [`${s.top}.pcf`, `constraints/${s.top}.pcf`].find(f => this.fs.read(f) !== undefined);
-    const pcf = pcfFile !== undefined ? this.fs.read(pcfFile) : undefined;
-    if (pcfFile !== undefined && pcf === undefined) throw new Error(`pnr: cannot read "${pcfFile}"`);
-    this.out(`-- Place and route ${s.top} on iCE40 ${device.toUpperCase()} (${pkg ?? ICE40_DEVICES[device].pkg})${pcfFile ? `, pins from ${pcfFile}` : ', pins unconstrained'}`);
+    // pin constraints: the option, or <top>.<pcf|lpf|cst> / constraints/<top>.<ext> in the project
+    conFile ??= [`${s.top}.${fam.constraints}`, `constraints/${s.top}.${fam.constraints}`].find(f => this.fs.read(f) !== undefined);
+    const constraints = conFile !== undefined ? this.fs.read(conFile) : undefined;
+    if (conFile !== undefined && constraints === undefined) throw new Error(`pnr: cannot read "${conFile}"`);
+    this.out(`-- Place and route ${s.top} on ${dev.name} (${pkg ?? dev.pkg})${conFile ? `, pins from ${conFile}` : ', pins unconstrained'}`);
     let shown = 0;
-    const r = await placeAndRoute({ device, pkg, pcf, freq, seed, json }, (done, total) => {
+    const r = await placeAndRoute({ device, pkg, constraints, freq, seed, json }, (done, total) => {
       const pct = Math.floor((100 * done) / Math.max(1, total));
       if (pct >= shown + 25 || (pct === 100 && shown < 100)) { shown = pct; this.out(`Loading nextpnr ${pct}% (${(total / 1e6).toFixed(0)} MB, first use only)`); }
     });
     const base = `pnr/${s.top}`;
     if (this.fs.write) this.fs.write(`${base}.log`, r.log);
-    this.lastPnr = { run: (this.lastPnr?.run ?? 0) + 1, top: s.top, device, base, ok: r.ok, util: r.util, fmax: r.fmax, bin: r.bin };
+    this.lastPnr = { run: (this.lastPnr?.run ?? 0) + 1, top: s.top, device, family: dev.family, base, ok: r.ok, util: r.util, fmax: r.fmax, bin: r.bin, bitstream: `${s.top}.${fam.bitstream}` };
     if (!r.ok) {
       const errs = r.log.split('\n').filter(l => /^ERROR/.test(l));
       for (const e of errs.length ? errs : ['nextpnr failed; see the log.']) this.out(`** Error: (pnr) ${e.replace(/^ERROR:\s*/, '')}`, 'err');
+      if (dev.family === 'gowin' && errs.some(e => /Unconstrained IO/.test(e))) this.out(`Gowin needs a pin for every top-level port: add them to ${s.top}.cst (the Place & Route window's "New constraints" makes a template).`);
       this.out(`Log: ${base}.log`);
       this.emit('synth');
       return false;
     }
-    if (this.fs.write) { this.fs.write(`${base}.asc`, r.asc ?? ''); this.fs.write(`${base}.placed.json`, r.placed ?? ''); }
+    const written = [`${base}.placed.json`, `${base}.log`];
+    if (this.fs.write) {
+      this.fs.write(`${base}.placed.json`, r.placed ?? '');
+      if (r.config !== undefined && fam.config) { this.fs.write(`${base}.${fam.config}`, r.config); written.unshift(`${base}.${fam.config}`); }
+    }
     for (const [t, used, avail] of r.util) if (used) this.out(`${t.padEnd(14)} ${String(used).padStart(6)} / ${String(avail).padEnd(6)} ${((100 * used) / Math.max(1, avail)).toFixed(0).padStart(3)}%`);
     let pass = true;
     for (const [clk, mhz, want] of r.fmax) {
@@ -968,7 +975,7 @@ export class Session {
       pass &&= ok;
       this.out(`Max frequency ${clk}: ${mhz.toFixed(2)} MHz${want !== null ? ` (${ok ? 'PASS' : 'FAIL'} at ${want} MHz)` : ''}`, ok ? 'out' : 'warn');
     }
-    this.out(`Wrote ${base}.asc, ${base}.placed.json, ${base}.log; bitstream ${r.bin?.length ?? 0} bytes`);
+    this.out(`Wrote ${written.join(', ')}; bitstream ${s.top}.${fam.bitstream} ${r.bin?.length ?? 0} bytes`);
     this.emit('synth');
     return pass;
   }

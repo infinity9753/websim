@@ -125,7 +125,7 @@ function flush() {
   if (ev.includes('synth')) {
     st.synth = session.lastSynth;
     const p = session.lastPnr;
-    st.pnr = p && { run: p.run, top: p.top, device: p.device, base: p.base, ok: p.ok, util: p.util, fmax: p.fmax };
+    st.pnr = p && { run: p.run, top: p.top, device: p.device, family: p.family, bitstream: p.bitstream, base: p.base, ok: p.ok, util: p.util, fmax: p.fmax };
   }
   if (simEv || ev.includes('list')) st.lists = session.lists.map(l => ({ path: l.path, name: l.name, sigId: l.sig.id, radix: l.radix }));
   st.defaultRadix = session.defaultRadix;

@@ -21,7 +21,8 @@ assets from any commercial simulator and is not affiliated with any vendor.
 
 - Logic synthesis uses [Yosys](https://github.com/YosysHQ/yosys) through the [YoWASP](https://yowasp.org/) WebAssembly package `@yowasp/yosys` (ISC license). It is downloaded by the browser (about 77 MB) only when `synth` is first used.
 - Python (cocotb-compatible) testbenches run on [Pyodide](https://pyodide.org/) (MPL-2.0), downloaded (about 13 MB) only when `vsim -cocotb` is first used. The cocotb API layer (`src/engine/cocotb/`) is WebSim's own implementation of cocotb's public API; it does not include cocotb code.
-- FPGA place and route uses [nextpnr](https://github.com/YosysHQ/nextpnr) (iCE40) and `icepack` from [Project IceStorm](https://github.com/YosysHQ/icestorm) through the YoWASP package `@yowasp/nextpnr-ice40` (ISC license), downloaded (about 235 MB) only when `pnr` is first used.
+- FPGA place and route uses [nextpnr](https://github.com/YosysHQ/nextpnr) with `icepack` ([Project IceStorm](https://github.com/YosysHQ/icestorm)), `ecppack` ([Project Trellis](https://github.com/YosysHQ/prjtrellis)) and `gowin_pack` ([Apicula](https://github.com/YosysHQ/apicula), MIT) through the YoWASP packages `@yowasp/nextpnr-ice40`, `@yowasp/nextpnr-ecp5` and `@yowasp/nextpnr-himbaechel-gowin` (ISC license). Each is downloaded (about 175–235 MB) only when `pnr` is first used for that FPGA family.
+- `vendor/msgspec-0.22.0-…-pyemscripten_2026_0_wasm32.whl` is the [msgspec](https://github.com/jcrist/msgspec) (BSD-3-Clause) WebAssembly wheel from PyPI, needed by `gowin_pack` on Pyodide; see `vendor/README.md`.
 
 ## Quick start
 

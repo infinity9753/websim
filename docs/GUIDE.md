@@ -236,21 +236,29 @@ vsim work.tb_counter; run -all
 
 VHDL 은 아직 합성할 수 없습니다(Yosys 의 Verilog 프런트엔드만 포함).
 
-### FPGA 배치 배선 (nextpnr, iCE40)
+### FPGA 배치 배선 (nextpnr: iCE40, ECP5, Gowin)
 
-[nextpnr](https://github.com/YosysHQ/nextpnr) 의 Lattice iCE40 버전과 `icepack`(YoWASP WebAssembly 빌드, ISC 라이선스)으로 합성 결과를 실제 FPGA 에 배치·배선하고 비트스트림을 만듭니다. 처음 한 번 약 235MB 를 추가로 내려받습니다.
+[nextpnr](https://github.com/YosysHQ/nextpnr) 와 각 계열의 비트스트림 도구(YoWASP WebAssembly 빌드, ISC 라이선스)로 합성 결과를 실제 FPGA 에 배치·배선하고 비트스트림을 만듭니다. 도구는 계열별로 처음 쓸 때 한 번 내려받습니다.
+
+| 계열 | `-device` | 제약 파일 | 비트스트림 | 첫 다운로드 |
+|---|---|---|---|---|
+| Lattice iCE40 | `lp384`, `lp1k`, `hx1k`, `lp8k`, `hx8k`, `u4k`, `up5k`(기본) | `.pcf` (`set_io clk 35`) | `.bin` (icepack) | 약 235MB |
+| Lattice ECP5 | `lfe5u-12f`, `lfe5u-25f`, `lfe5u-45f`, `lfe5u-85f` | `.lpf` (`LOCATE COMP "clk" SITE "G2";`) | `.bit` (ecppack) | 약 175MB |
+| Gowin | `gw1nz-1`(Tang Nano 1K), `gw1ns-4`(4K), `gw1n-9c`(9K), `gw2a-18c`(20K) | `.cst` (`IO_LOC "clk" 52;`) | `.fs` (gowin_pack) | 약 185MB + Python 13MB |
 
 1. **컴파일 ▸ 배치 배선 (nextpnr)…** 로 배치 배선 창을 엽니다(또는 트랜스크립트에서 `pnr`).
-2. 디바이스(`lp384`, `lp1k`, `hx1k`, `lp8k`, `hx8k`, `u4k`, `up5k`), 필요하면 패키지, 핀 제약 파일(`.pcf`), 목표 클록 주파수(MHz)를 고르고 버튼을 누릅니다. `synth -target ice40 -flatten` 이 먼저 실행됩니다.
-3. 핀 제약 파일을 고르지 않으면 프로젝트의 `<top>.pcf` 또는 `constraints/<top>.pcf` 를 자동으로 쓰고, 없으면 핀을 자유롭게 배치합니다. **새 PCF** 는 최상위 포트 목록으로 `set_io <포트> <핀>` 템플릿을 만듭니다.
-4. 자원 사용률 표(로직 셀, IO, RAM, 글로벌 버퍼 …)와 최대 동작 주파수(목표 주파수 대비 PASS/FAIL), 그리고 플로어플랜(사용된 타일: 파란색 로직, 초록색 IO, 보라색 RAM, 주황색 특수 블록; 노란 선은 타일 간 연결)이 표시됩니다. 타일에 마우스를 올리면 배치된 셀이 보입니다.
-5. 결과는 `pnr/` 폴더에 `<top>.asc`(텍스트 비트스트림), `<top>.placed.json`, `<top>.log` 로 저장되며, **비트스트림** 버튼으로 FPGA 프로그래밍용 `.bin` 을 내려받습니다(예: `iceprog counter.bin`).
+2. 디바이스, 필요하면 패키지(Gowin 은 전체 부품 번호), 핀 제약 파일, 목표 클록 주파수(MHz)를 고르고 버튼을 누릅니다. 해당 계열의 `synth -target <계열> -flatten` 이 먼저 실행됩니다.
+3. 핀 제약 파일을 고르지 않으면 프로젝트의 `<top>.<pcf|lpf|cst>` 또는 `constraints/<top>.<확장자>` 를 자동으로 씁니다. iCE40/ECP5 는 제약이 없으면 핀을 자유롭게 배치하지만, **Gowin 은 모든 최상위 포트에 핀이 있어야 합니다.** **새 핀 제약** 은 최상위 포트 목록으로 계열 형식의 템플릿을 만들어 편집기에서 엽니다.
+4. 자원 사용률 표(사용된 자원과 주요 자원)와 최대 동작 주파수(목표 주파수 대비 PASS/FAIL), 그리고 플로어플랜(사용된 타일: 파란색 로직, 초록색 IO, 보라색 RAM, 주황색 특수 블록; 노란 선은 타일 간 연결)이 표시됩니다. 타일에 마우스를 올리면 배치된 셀이 보입니다.
+5. 결과는 `pnr/` 폴더에 `<top>.placed.json`, `<top>.log`(iCE40 은 `<top>.asc`, ECP5 는 `<top>.config` 텍스트 구성도)로 저장되며, **비트스트림** 버튼으로 FPGA 프로그래밍용 파일을 내려받습니다(예: `openFPGALoader -b tangnano9k counter.fs`, `iceprog counter.bin`).
 
 ```tcl
 pnr -device hx8k -package ct256 -pcf counter.pcf -freq 50
+pnr -device lfe5u-85f -lpf ulx3s.lpf -freq 25
+pnr -device gw1n-9c -cst tangnano9k.cst -freq 27
 ```
 
-타이밍을 맞추지 못하면 `pnr` 은 실패(FAIL)를 표시하고 오류를 반환하지만 결과 파일은 그대로 저장됩니다. 현재는 iCE40 만 지원합니다(ECP5/Gowin 배치 배선과 ASIC 레이아웃은 포함하지 않음).
+Gowin 의 `gowin_pack` 은 Python 프로그램(apycula)이라 브라우저 안의 Python(Pyodide)으로 실행되며, 필요한 `msgspec` 패키지는 앱에 함께 들어 있습니다(외부 CDN 사용 없음). 타이밍을 맞추지 못하면 `pnr` 은 실패(FAIL)를 표시하고 오류를 반환하지만 결과 파일은 그대로 저장됩니다.
 
 ## 7. 프로젝트, 폴더, 검색
 
@@ -320,7 +328,7 @@ pnr -device hx8k -package ct256 -pcf counter.pcf -freq 50
 | 명령 | 설명 |
 |---|---|
 | `synth [-top m] [-target generic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
-| `pnr [-top m] [-device up5k\|hx1k\|hx8k\|...] [-package p] [-pcf file] [-freq MHz] [-seed n]` | iCE40 용으로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
+| `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
 
 ### 기타
 
