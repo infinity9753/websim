@@ -117,7 +117,7 @@ export class SynthesisView {
     this.table = h('div', { class: 'synth-cells scroll' });
     this.schematic = h('div', { class: 'synth-schematic scroll' });
     const btn = (label: string, title: string, f: () => void) => h('button', { class: 'btn', title, onclick: f }, label);
-    this.el = h('div', { class: 'synthesis' },
+    this.el = h('div', { class: 'synthesis synth-view' },
       h('div', { class: 'subbar' },
         h('label', { class: 'synth-opt' }, t('Top'), ' ', this.top, this.tops),
         h('label', { class: 'synth-opt' }, t('Target'), ' ', this.target),

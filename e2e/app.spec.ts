@@ -102,9 +102,9 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('Synthesize (Yosys)…').click();
-  await page.locator('.synthesis button[title="Synthesize with Yosys"]').click();
-  await expect(page.locator('.synthesis:not(.pnr) .synth-status')).toContainText('cells', { timeout: 90_000 });
-  await expect(page.locator('.synthesis:not(.pnr) .synth-cells tbody tr').first()).toBeVisible();
+  await page.locator('.synth-view button[title="Synthesize with Yosys"]').click();
+  await expect(page.locator('.synth-view .synth-status')).toContainText('cells', { timeout: 90_000 });
+  await expect(page.locator('.synth-view .synth-cells tbody tr').first()).toBeVisible();
   expect(await page.locator('.syn-node').count()).toBeGreaterThan(5);
   await page.getByText('Simulate netlist').click();
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter.v');
