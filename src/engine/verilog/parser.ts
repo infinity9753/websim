@@ -431,6 +431,14 @@ class VParser {
     if (t.t === 'dir') { this.pos++; return; }
     if (this.accept(';')) return;
     const v = t.v;
+    if (t.t === 'sys' && ['$fatal', '$error', '$warning', '$info'].includes(v)) {
+      this.pos++;
+      const args: Expr[] = [];
+      if (this.accept('(')) { if (!this.accept(')')) { do args.push(this.expr()); while (this.accept(',')); this.expect(')'); } }
+      this.expect(';');
+      items.push({ k: 'elabmsg', sev: v.slice(1) as 'fatal', args: v === '$fatal' && args.length && args[0].k === 'num' ? args.slice(1) : args, loc });
+      return;
+    }
     if (t.t !== 'id') this.err(`near "${t.v}": syntax error, unexpected ${t.v}`);
     if (this.peek().t === 'op' && this.peek().v === ':' && ['assert', 'assume', 'cover'].includes(this.peek(2).v)) {
       this.pos += 2;
@@ -515,6 +523,7 @@ class VParser {
       case 'genvar': this.pos++; do this.ident(); while (this.accept(',')); this.expect(';'); return;
       case 'for': items.push(this.parseGenFor()); return;
       case 'if': items.push(this.parseGenIf()); return;
+      case 'case': items.push(this.parseGenCase()); return;
       case 'begin': {
         this.pos++;
         if (this.accept(':')) this.ident();
@@ -849,6 +858,37 @@ class VParser {
       else e = block().items;
     }
     return { k: 'genif', c, then: t.items, else: e, name: t.name, loc };
+  }
+
+  /** case-generate (IEEE 1364-2005 12.4.2): lowered to an if-generate chain of === tests, default last. */
+  parseGenCase(): Item {
+    const loc = this.loc();
+    this.expect('case'); this.expect('(');
+    const sel = this.expr(); this.expect(')');
+    const arms: { labels: Expr[] | null; items: Item[]; name?: string }[] = [];
+    while (!this.accept('endcase')) {
+      let labels: Expr[] | null = null;
+      if (this.accept('default')) this.accept(':');
+      else {
+        labels = [this.expr()];
+        while (this.accept(',')) labels.push(this.expr());
+        this.expect(':');
+      }
+      const items: Item[] = []; let name: string | undefined;
+      if (this.accept('begin')) {
+        if (this.accept(':')) name = this.ident();
+        while (!this.accept('end')) this.parseModuleItem(items, null, new Map());
+        if (this.accept(':')) this.ident();
+      } else if (!this.accept(';')) this.parseModuleItem(items, null, new Map());
+      arms.push({ labels, items, name });
+    }
+    const dflt = arms.find(a => !a.labels);
+    let chain: Item[] | undefined = dflt?.items;
+    for (const a of arms.filter(x => x.labels).reverse()) {
+      const c = a.labels!.map(l => ({ k: 'bin', op: '===', l: sel, r: l }) as Expr).reduce((x, y) => ({ k: 'bin', op: '||', l: x, r: y }) as Expr);
+      chain = [{ k: 'genif', c, then: a.items, else: chain, name: a.name, loc }];
+    }
+    return chain?.length === 1 ? chain[0] : { k: 'genif', c: num(0), then: [], else: chain, loc };
   }
 
   parseFunc(isTask: boolean, protoOnly = false): FuncDecl {

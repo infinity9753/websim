@@ -110,7 +110,23 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter.v');
   await cmd(page, 'vsim work.tb_counter');
   await cmd(page, 'run -all');
-  await expect(page.locator('.tr-out')).toContainText('$finish');
+  // the example's own run, then the generic netlist
+  await expect(page.locator('.tr-out .tr-line', { hasText: '$finish' })).toHaveCount(2);
+  // an FPGA netlist simulates with the primitive models written next to it
+  await cmd(page, 'quit -sim');
+  await page.locator('.pane-tab', { hasText: 'Synthesis' }).click();
+  await page.locator('.synth-view select[aria-label="Target"]').selectOption('ice40');
+  await page.locator('.synth-view button[title="Synthesize with Yosys"]').click();
+  await expect(page.locator('.synth-view .synth-status')).toContainText('counter (ice40)', { timeout: 90_000 });
+  await expect(page.locator('.synth-view .synth-cells')).toContainText('SB_LUT4');
+  await page.getByText('Simulate netlist').click();
+  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/ice40_cells.v');
+  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter_ice40.v');
+  await cmd(page, 'vsim work.tb_counter');
+  await expect(page.locator('.tr-out')).toContainText('Loading work.SB_LUT4');
+  await cmd(page, 'run -all');
+  await expect(page.locator('.tr-out .tr-line', { hasText: '$finish' })).toHaveCount(3);
+  await expect(page.locator('.tr-out')).toContainText('terminal count reached');
 });
 
 test('places and routes the example on iCE40 and draws the floorplan', async ({ page }) => {

@@ -88,6 +88,20 @@ export function parseArea(stat: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/**
+ * Yosys netlists have no parameters, so a testbench that overrides them cannot instantiate the netlist. Declare the
+ * top module's parameters again, with the values it was synthesized with (Yosys JSON parameter_default_values).
+ */
+export function keepParams(netlist: string, json: string, top: string): string {
+  const mod = (JSON.parse(json) as { modules: Record<string, { parameter_default_values?: Record<string, string> }> }).modules[top];
+  const params = Object.entries(mod?.parameter_default_values ?? {});
+  if (!params.length) return netlist;
+  // bit strings are constants; strings that look like bits carry a trailing space in Yosys JSON
+  const lit = (v: string) => (/^[01xz]+$/.test(v) ? `${v.length}'b${v}` : JSON.stringify(v.replace(/ $/, '')));
+  const decl = ['  // parameters of the RTL module, with the values this netlist was synthesized with (overrides have no effect)', ...params.map(([n, v]) => `  parameter ${n} = ${lit(v)};`)].join('\n');
+  return netlist.replace(new RegExp(`^(module\\s+${top.replace(/[$]/g, '\\$')}\\b[^;]*;)`, 'm'), `$1\n${decl}`);
+}
+
 export async function synthesize(o: SynthOptions, progress?: (done: number, total: number) => void): Promise<SynthResult> {
   const run = await yosys();
   let log = '';
@@ -110,7 +124,9 @@ export async function synthesize(o: SynthOptions, progress?: (done: number, tota
   }
   const text = (n: string) => { const v = files[n]; return v === undefined ? undefined : typeof v === 'string' ? v : dec.decode(v as Uint8Array); };
   const stat = text(`${out}.stat`) ?? '';
-  return { ok: true, log, netlist: text(`${out}.v`), json: text(`${out}.json`), stat, cells: parseStat(stat) };
+  const json = text(`${out}.json`);
+  const netlist = text(`${out}.v`);
+  return { ok: true, log, netlist: netlist && json ? keepParams(netlist, json, o.top) : netlist, json, stat, cells: parseStat(stat) };
 }
 
 // ---------------------------------------------------------------- FPGA place & route (nextpnr-ice40)

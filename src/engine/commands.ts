@@ -13,6 +13,7 @@ import { aggregate, coverageReport } from './coverage';
 import { synthesize, parseArea, designFiles, placeAndRoute, FPGA_DEVICES, FPGA_FAMILIES, SYNTH_TARGETS, type FpgaFamily, type SynthTarget } from './synth';
 import { fmtReal, vecToReal } from './elab';
 import { CocotbRun } from './cocotb';
+import { FPGA_SIM_TARGETS, fpgaSimModels } from './fpgasim';
 import { LIB_NAME, liberty, verilogModels } from './asic/cells';
 import { runAsic, summary, type AsicResult } from './asic/flow';
 import type { Vec } from './logic';
@@ -353,7 +354,7 @@ export class Session {
     return this.load({ top, lib, generics, res, cocotb, testcases });
   }
 
-  private load(o: NonNullable<Session['lastVsim']>): Promise<boolean> | void {
+  private load(o: NonNullable<Session['lastVsim']>): Promise<boolean> | boolean | void {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
     const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
     let d: Design;
@@ -363,7 +364,7 @@ export class Session {
       const ce = e as Error & { loc?: { file: string; line: number } };
       this.out(`** Error: ${ce.loc ? `${ce.loc.file}(${ce.loc.line}): ` : ''}${ce.message}`, 'err');
       this.out('Error loading design', 'err');
-      return;
+      return false;
     }
     for (const l of d.loaded) this.out(`Loading ${l}`);
     for (const w of d.warnings) this.out(`** Warning: ${w}`, 'warn');
@@ -1045,6 +1046,7 @@ export class Session {
       this.fs.write(`${base}.stat`, r.stat ?? '');
       // cell models for gate-level simulation and the Liberty used for mapping
       if (target === 'asic') { this.fs.write(`synth/${LIB_NAME}.v`, verilogModels()); this.fs.write(`synth/${LIB_NAME}.lib`, liberty()); }
+      if (FPGA_SIM_TARGETS.includes(target)) this.fs.write(`synth/${target}_cells.v`, fpgaSimModels(target));
     }
     const warn = r.log.split('\n').filter(l => /^Warning:/.test(l));
     for (const w of warn.slice(0, 20)) this.out(`** Warning: (synth) ${w.replace(/^Warning:\s*/, '')}`, 'warn');
@@ -1052,7 +1054,8 @@ export class Session {
     this.out(`Cells: ${total}${r.cells.length ? '  (' + r.cells.map(([c, n]) => `${c} ${n}`).join(', ') + ')' : ''}`);
     const area = parseArea(r.stat ?? '');
     if (area !== undefined) this.out(`Chip area: ${area.toFixed(2)} um^2 (${LIB_NAME} cells)`);
-    this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log${target === 'asic' ? `; cell models synth/${LIB_NAME}.v` : ''}`);
+    const models = target === 'asic' ? `synth/${LIB_NAME}.v` : FPGA_SIM_TARGETS.includes(target) ? `synth/${target}_cells.v` : '';
+    this.out(`Wrote ${base}.v, ${base}.json, ${base}.stat, ${base}.log${models ? `; cell models ${models}` : ''}`);
     this.emit('synth');
     return true;
   }

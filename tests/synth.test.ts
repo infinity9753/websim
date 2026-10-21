@@ -50,4 +50,23 @@ endmodule`,
     expect(out.some(l => l.startsWith('** Error: (synth)') && /bad\.v/.test(l))).toBe(true);
     expect(await s.exec('synth -target nonsense')).toBe(false);
   }, 60_000);
+
+  it('keeps the top module parameters in the netlist, so testbench overrides still bind (#52)', async () => {
+    const fs: Record<string, string> = {
+      'c.v': 'module c #(parameter WIDTH = 4, parameter [7:0] STEP = 8\'h3, parameter NAME = "01") (input clk, output reg [WIDTH-1:0] q = 0); always @(posedge clk) q <= q + STEP; endmodule',
+      'tb.v': 'module tb; reg clk = 0; wire [3:0] q; c #(.WIDTH(4), .NAME("01")) u(.clk(clk), .q(q)); always #5 clk = ~clk; initial begin #52 $display("q=%0d", q); $finish; end endmodule',
+    };
+    const out: string[] = [];
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, m => out.push(m));
+    await s.exec('vlog c.v tb.v; vsim tb; run -all');
+    expect(out).toContain('q=15');
+    await s.exec('quit -sim');
+    expect(await s.exec('synth -top c')).toBe(true);
+    expect(fs['synth/c.v'], fs['synth/c.v'].slice(0, 600)).toMatch(/parameter WIDTH = 32'b0+100;/);
+    expect(fs['synth/c.v']).toContain('parameter NAME = "01";');
+    expect(fs['synth/c.v']).toContain("parameter STEP = 8'b00000011;");
+    out.length = 0;
+    expect(await s.exec('vlog synth/c.v; vsim tb; run -all'), out.join('\n')).toBe(true);
+    expect(out).toContain('q=15');
+  }, 60_000);
 });

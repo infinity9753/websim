@@ -372,6 +372,10 @@ export class Kernel {
   // ---------- processes ----------
   addProcess(p: Process) {
     this.processes.push(p);
+    // always @(...) / @*: wait from the start, so the time-0 evaluation of continuous assignments (constant port
+    // connections, net declaration assignments) wakes them whatever the order of the time-0 events (#52)
+    const l = p.loop;
+    if (l && !l.runFirst && !l.delay && l.sigs.length) { p.started = true; this.arm(p, l); return; }
     this.activate(() => this.resume(p));
   }
 

@@ -225,7 +225,19 @@ run -all                                        ;# 테스트가 모두 끝나면
 1. 설계를 컴파일한 뒤 **컴파일 ▸ 합성 (Yosys)…** 로 합성 창을 엽니다(또는 트랜스크립트에서 `synth`).
 2. 최상위 모듈(비우면 자동: 테스트벤치가 아닌 최상위, 또는 테스트벤치가 인스턴스화한 모듈), 타깃(`generic`, `asic`, `ice40`, `ecp5`, `gowin`, `xilinx`), 평탄화 여부를 고르고 합성 버튼을 누릅니다. `asic` 은 WebSim 교육용 표준 셀 라이브러리(`websim_edu`: INV, NAND/NOR, AOI/OAI, XOR, MUX2, DFF, 비동기 리셋 DFFR, TIE 셀 등, 가상의 공정)에 매핑하고 칩 면적을 보고하며, 셀 시뮬레이션 모델 `synth/websim_edu.v`(specify 지연 포함)와 Liberty 파일 `synth/websim_edu.lib` 도 씁니다.
 3. 셀 종류별 개수와 회로도가 표시되고, 결과는 프로젝트의 `synth/` 폴더에 `<top>.v`(넷리스트), `.json`, `.stat`, `.log` 로 저장됩니다(FPGA 타깃은 `<top>_<target>.*`).
-4. **넷리스트 시뮬레이션**: `generic`(또는 셀 모델과 함께 `asic`) 결과의 넷리스트를 `work` 에 컴파일해 RTL 모듈을 대체하므로, 같은 테스트벤치로 게이트 레벨 시뮬레이션을 하고 RTL 결과와 비교할 수 있습니다. RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
+4. **넷리스트 시뮬레이션**: **넷리스트 시뮬레이션** 버튼은 합성 결과의 넷리스트를 `work` 에 컴파일해 RTL 모듈을 대체하므로, 같은 테스트벤치로 게이트 레벨 시뮬레이션을 하고 RTL 결과와 비교할 수 있습니다. 모든 타깃에서 됩니다.
+   - `generic`: Yosys 기본 게이트(`$_AND_` 등)는 WebSim 이 바로 시뮬레이션합니다.
+   - `asic`: 셀 모델 `synth/websim_edu.v` 를 함께 컴파일합니다.
+   - `ice40`, `ecp5`, `gowin`, `xilinx`: 합성할 때 그 FPGA 의 기본 소자(LUT, 플립플롭, 캐리, IO 버퍼, DSP …) 모델을 `synth/<타깃>_cells.v` 로 써 두고 함께 컴파일합니다. 모델은 Yosys 가 배포하는 `cells_sim.v`(ISC)이며, Yosys 에 블랙박스만 있는 DSP 곱셈기(ECP5 `MULT18X18D`, Gowin `MULT9X9/18X18/36X36`)는 Yosys 가 쓰는 조합 곱셈 모드에 대해 WebSim 이 모델을 붙입니다(레지스터 모드는 오류로 알림).
+   - FPGA 모델에는 실제에 가까운 셀 지연(ps 단위, LUT 하나에 수백 ps~1 ns)이 들어 있어, 클록 에지 직후 너무 일찍 출력을 확인하면 아직 바뀌지 않은 값을 볼 수 있습니다. 클록 주기와 샘플 시점에 여유를 두세요.
+   - 넷리스트에는 최상위 모듈의 파라미터가 합성에 쓴 값으로 선언되어 있어, `#(.WIDTH(4))` 처럼 파라미터를 지정하는 테스트벤치도 그대로 쓸 수 있습니다(다른 값을 주어도 넷리스트는 바뀌지 않습니다).
+   - RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
+
+   ```tcl
+   synth -target ice40
+   vlog synth/ice40_cells.v synth/counter_ice40.v
+   vsim work.tb_counter; run -all
+   ```
 
 ```tcl
 vlog counter.v tb_counter.v

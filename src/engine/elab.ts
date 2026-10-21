@@ -63,6 +63,23 @@ export type Sym =
 export interface ModInfo { lang: 'verilog' | 'vhdl'; unit: Unit; arch?: string; tsUnit: number; tsPrec: number; file: string; libName: string }
 export interface ObjEntry { name: string; sig: Signal; dir: 'in' | 'out' | 'inout' | 'internal'; t: RType }
 
+/**
+ * The largest of several (constant) delay expressions. Literals are compared here; the others become a balanced
+ * tree of `a > b ? a : b`, which stays quadratic in size instead of doubling with every path (#52).
+ */
+export function maxExpr(ds: Expr[]): Expr {
+  const lit = ds.filter((d): d is Extract<Expr, { k: 'num' }> => d.k === 'num' && d.v.b === 0n);
+  const rest = [...new Map(ds.filter(d => !lit.includes(d as never)).map(d => [JSON.stringify(d), d])).values()];
+  const items: Expr[] = [...rest];
+  if (lit.length) items.push(lit.reduce((a, b) => (b.v.a > a.v.a ? b : a)));
+  const tree = (xs: Expr[]): Expr => {
+    if (xs.length === 1) return xs[0];
+    const a = tree(xs.slice(0, xs.length >> 1)), b = tree(xs.slice(xs.length >> 1));
+    return { k: 'tern', c: { k: 'bin', op: '>', l: a, r: b }, t: a, f: b };
+  };
+  return tree(items);
+}
+
 export class Scope {
   syms = new Map<string, Sym>();
   children: Scope[] = [];
@@ -458,14 +475,16 @@ export class Elaborator {
     // specify module paths: output port -> delays (the largest of all paths, per rise/fall/turn-off)
     const paths = new Map<string, Expr[]>();
     if (lang === 'verilog' && !this.opts.noSpecify) {
-      const max = (a: Expr, b: Expr): Expr => ({ k: 'tern', c: { k: 'bin', op: '>', l: a, r: b }, t: a, f: b });
+      // all delays of the paths to each output, per rise / fall / turn-off position
+      const lists = new Map<string, Expr[][]>();
       for (const it of unit.items) {
         if (it.k !== 'specpath') continue;
         for (const o of it.outs) {
-          const cur = paths.get(o);
-          paths.set(o, cur ? it.delays.map((d, i) => (cur[i] ? max(cur[i], d) : d)) : it.delays);
+          const l = lists.get(o) ?? lists.set(o, []).get(o)!;
+          it.delays.forEach((d, i) => (l[i] ??= []).push(d));
         }
       }
+      for (const [o, l] of lists) paths.set(o, l.map(maxExpr));
     }
     // ports
     const byName = conns.some(c => c.name && c.name !== '*');
@@ -755,6 +774,22 @@ export class Elaborator {
       switch (it.k) {
         case 'inst': if (!isIface(it)) this.elabInst(it, scope); break;
         case 'genfor': this.elabGenFor(it, scope); break;
+        case 'elabmsg': {
+          // only reached in the chosen generate branches: the message uses constant arguments
+          const vals = it.args.map(a => (a.k === 'str' ? null : this.constEval(a, scope)));
+          let k = 1;
+          const fmt = it.args[0]?.k === 'str' ? it.args[0].s : '';
+          const msg = (fmt || '').replace(/%[0-9]*([sdhbo%])/g, (m, f) => {
+            if (f === '%') return '%';
+            const v = vals[k++];
+            if (!v) return m;
+            return f === 's' ? L.toAscii(v).replace(/^\0+/, '') : f === 'h' ? v.a.toString(16) : f === 'b' ? v.a.toString(2) : f === 'o' ? v.a.toString(8) : v.a.toString();
+          });
+          const text = `${scope.path}: ${msg || `$${it.sev}`}`;
+          if (it.sev === 'fatal' || it.sev === 'error') throw Object.assign(new Error(`(vsim-8323) ${text}`), { loc: it.loc });
+          this.warnings.push(`(vsim-8323) ${it.sev === 'info' ? 'Info' : 'Warning'}: ${text}`);
+          break;
+        }
         case 'genif': {
           const c = this.constEval(it.c, scope);
           const branch = L.isTrue(c) ? it.then : it.else;

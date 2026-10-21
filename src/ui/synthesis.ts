@@ -158,8 +158,9 @@ export class SynthesisView {
   private async gateSim() {
     const s = this.session.lastSynth;
     if (!s?.ok) return;
-    if (s.target !== 'generic' && s.target !== 'asic') { this.status.textContent = t('Gate-level simulation needs the generic or asic target (FPGA cells have no simulation models here).'); return; }
-    await this.session.exec(s.target === 'asic' ? `vlog synth/${LIB_NAME}.v ${s.base}.v` : `vlog ${s.base}.v`);
+    // asic and FPGA netlists need the cell models (written by synth) compiled first
+    const models = s.target === 'asic' ? `synth/${LIB_NAME}.v` : s.target === 'generic' ? '' : `synth/${s.target}_cells.v`;
+    await this.session.exec(`vlog ${models ? models + ' ' : ''}${s.base}.v`);
   }
 
   private setZoom(z: number) { this.zoom = Math.max(0.25, Math.min(3, z)); const svgEl = this.schematic.querySelector('svg'); if (svgEl) this.applyZoom(svgEl as SVGSVGElement); }

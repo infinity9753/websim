@@ -112,6 +112,8 @@ export type Item =
   | FuncDecl
   | { k: 'genfor'; v: string; init: Expr; cond: Expr; stepExpr: Expr; name?: string; items: Item[]; vhdl?: { from: Expr; to: Expr; down: boolean }; loc?: Loc }
   | { k: 'genif'; c: Expr; then: Item[]; else?: Item[]; name?: string; loc?: Loc }
+  /** Elaboration-time $fatal / $error / $warning / $info (a module or generate item). */
+  | { k: 'elabmsg'; sev: 'fatal' | 'error' | 'warning' | 'info'; args: Expr[]; loc?: Loc }
   | { k: 'typedef'; name: string; type?: TypeSpec; units?: { name: string; n?: Expr; of?: string }[]; array?: { range?: [Expr, Expr]; elem: TypeSpec }; record?: { name: string; type: TypeSpec }[]; loc?: Loc }
   | { k: 'use'; pkg: string; loc?: Loc }
   | { k: 'sva'; kind: 'assert' | 'assume' | 'cover'; prop: PropSpec; pass?: Stmt; fail?: Stmt; label?: string; loc?: Loc };  // concurrent assertion

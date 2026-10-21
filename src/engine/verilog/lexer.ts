@@ -241,6 +241,20 @@ export function lexVerilog(text: string, file: string): Token[] {
       while (i < n && !(text[i] === '*' && text[i + 1] === '/')) { if (text[i] === '\n') line++; i++; }
       i += 2; continue;
     }
+    // attribute instances (* name = value, ... *) carry tool hints only: skip them (but not the event control @(*))
+    if (c === '(' && text[i + 1] === '*') {
+      let j = i + 2;
+      while (j < n && /\s/.test(text[j])) j++;
+      if (text[j] !== ')') {
+        j = i + 2;
+        while (j < n && !(text[j] === '*' && text[j + 1] === ')')) {
+          if (text[j] === '"') { j++; while (j < n && text[j] !== '"') { if (text[j] === '\\') j++; j++; } }
+          if (text[j] === '\n') line++;
+          j++;
+        }
+        i = j + 2; continue;
+      }
+    }
     if (c === '"') {
       let j = i + 1, s = '';
       while (j < n && text[j] !== '"') {
