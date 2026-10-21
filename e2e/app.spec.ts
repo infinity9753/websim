@@ -13,7 +13,7 @@ async function fresh(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('/');
-  // the first visit loads the counter example and runs its do-file
+  // the first visit loads the 8-bit CPU example and runs its do-file
   await expect(page.locator('.tr-out')).toContainText('Loaded example');
   await expect(page.locator('.tr-out')).toContainText('$finish', { timeout: 30_000 });
   return errors;
@@ -23,7 +23,7 @@ test('first visit loads and runs the example', async ({ page }) => {
   const errors = await fresh(page);
   const project = page.locator('.pane-tab', { hasText: 'Project' });
   await project.click();
-  for (const f of ['counter.v', 'tb_counter.v', 'run_counter.do']) await expect(page.locator('.pane-left .pane-page.active')).toContainText(f);
+  for (const f of ['cpu.v', 'tb_cpu.v', 'run_cpu.do']) await expect(page.locator('.pane-left .pane-page.active')).toContainText(f);
   await page.locator('.pane-tab', { hasText: 'Wave' }).click();
   await expect(page.locator('.wave-names .wave-row').first()).toBeVisible();
   expect(await page.locator('.wave-names .wave-row').count()).toBeGreaterThan(3);
@@ -51,8 +51,8 @@ test('Start Simulation dialog loads the selected unit', async ({ page }) => {
   await cmd(page, 'quit -sim');
   await page.locator('button[title="Start simulation…"]').click();
   const dlg = page.locator('.modal');
-  await expect(dlg).toContainText('tb_counter');
-  await dlg.locator('tr', { hasText: 'tb_counter' }).first().click();
+  await expect(dlg).toContainText('tb_cpu');
+  await dlg.locator('tr', { hasText: 'tb_cpu' }).first().click();
   await dlg.locator('.btn.primary').click();
   await expect(page.locator('.tr-in .prompt')).toHaveText('VSIM 1>');
   await expect(page.locator('.pane-mid .pane-page.active')).toContainText('clk');
@@ -74,13 +74,13 @@ test('wave cursor shows values and the time', async ({ page }) => {
 
 test('list, dataflow and coverage views', async ({ page }) => {
   await fresh(page);
-  await cmd(page, 'vsim -coverage work.tb_counter');
-  await cmd(page, 'add list /tb_counter/q');
+  await cmd(page, 'vsim -coverage work.tb_cpu');
+  await cmd(page, 'add list -radix unsigned /tb_cpu/out');
   await cmd(page, 'run 100 ns');
   await expect(page.locator('.list-grid tbody tr').first()).toBeVisible();
-  await page.locator('.pane-mid .pane-page.active tr', { hasText: 'q' }).first().click({ button: 'right' });
+  await page.locator('.pane-mid .pane-page.active tr').filter({ has: page.locator('td', { hasText: /^rdata$/ }) }).first().click({ button: 'right' });
   await page.locator('.ctx-menu .menu-item', { hasText: 'Show in Dataflow' }).click();
-  await expect(page.locator('.df-title')).toHaveText('/tb_counter/q');
+  await expect(page.locator('.df-title')).toHaveText('/tb_cpu/rdata');
   await expect(page.locator('.df-proc').first()).toBeVisible();
   await cmd(page, 'coverage report');
   await expect(page.locator('.tr-out')).toContainText('Toggle bits');
@@ -107,26 +107,29 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await expect(page.locator('.synth-view .synth-cells tbody tr').first()).toBeVisible();
   expect(await page.locator('.syn-node').count()).toBeGreaterThan(5);
   await page.getByText('Simulate netlist').click();
-  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter.v');
-  await cmd(page, 'vsim work.tb_counter');
+  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/cpu.v');
+  await cmd(page, 'vsim work.tb_cpu');
   await cmd(page, 'run -all');
-  // the example's own run, then the generic netlist
-  await expect(page.locator('.tr-out .tr-line', { hasText: '$finish' })).toHaveCount(2);
-  // an FPGA netlist simulates with the primitive models written next to it
+  // the example's own run, then the generic netlist: both pass the testbench's checks
+  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(2);
+  // the library now holds the netlist: synthesizing it again is refused until the RTL is compiled
   await cmd(page, 'quit -sim');
+  await cmd(page, 'synth -target ice40');
+  await expect(page.locator('.tr-out')).toContainText("'cpu' in the library is the gate-level netlist synth/cpu.v");
+  await cmd(page, 'vlog cpu.v');
+  // an FPGA netlist simulates with the primitive models written next to it
   await page.locator('.pane-tab', { hasText: 'Synthesis' }).click();
   await page.locator('.synth-view select[aria-label="Target"]').selectOption('ice40');
   await page.locator('.synth-view button[title="Synthesize with Yosys"]').click();
-  await expect(page.locator('.synth-view .synth-status')).toContainText('counter (ice40)', { timeout: 90_000 });
+  await expect(page.locator('.synth-view .synth-status')).toContainText('cpu (ice40)', { timeout: 90_000 });
   await expect(page.locator('.synth-view .synth-cells')).toContainText('SB_LUT4');
   await page.getByText('Simulate netlist').click();
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/ice40_cells.v');
-  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/counter_ice40.v');
-  await cmd(page, 'vsim work.tb_counter');
+  await expect(page.locator('.tr-out')).toContainText('Compiling file synth/cpu_ice40.v');
+  await cmd(page, 'vsim work.tb_cpu');
   await expect(page.locator('.tr-out')).toContainText('Loading work.SB_LUT4');
   await cmd(page, 'run -all');
-  await expect(page.locator('.tr-out .tr-line', { hasText: '$finish' })).toHaveCount(3);
-  await expect(page.locator('.tr-out')).toContainText('terminal count reached');
+  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(3);
 });
 
 test('places and routes the example on iCE40 and draws the floorplan', async ({ page }) => {
@@ -189,23 +192,26 @@ test('places and routes for ECP5 and Gowin (constraints template, gowin_pack on 
   await expect(page.locator('.pnr .synth-cells tbody')).toContainText('TRELLIS_COMB');
   let dl = page.waitForEvent('download');
   await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
-  expect((await dl).suggestedFilename()).toBe('counter.bit');
+  expect((await dl).suggestedFilename()).toBe('cpu.bit');
   // Gowin: every port needs a pin; fill in the generated template
   await page.locator('.pnr select[aria-label="Device"]').selectOption('gw1n-9c');
   await page.locator('.pnr').getByText('New constraints', { exact: true }).click();
-  await expect(page.locator('.cm-content:visible')).toContainText('IO_LOC "q[3]" <pin>');
+  await expect(page.locator('.cm-content:visible')).toContainText('IO_LOC "out[7]" <pin>');
   await page.locator('.cm-content:visible').click();
   await page.keyboard.press('Control+A');
-  await page.keyboard.insertText(['clk 52', 'rst 4', 'en 3', 'q[0] 10', 'q[1] 11', 'q[2] 13', 'q[3] 14', 'tc 15'].map(l => { const [p, n] = l.split(' '); return `IO_LOC "${p}" ${n};`; }).join('\n') + '\n');
+  // Tang Nano 9K user IO pins for the 33 port bits of the CPU
+  const pins = [52, 4, 3, 10, 11, 13, 14, 15, 16, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 38, 39, 40, 41, 42, 48, 49, 51, 53, 54, 55, 56, 57];
+  const ports = ['clk', 'rst', ...[0, 1, 2, 3].map(i => `addr[${i}]`), ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [`rdata[${i}]`, `wdata[${i}]`, `out[${i}]`]), 'we', 'out_valid', 'halted'];
+  await page.keyboard.insertText(ports.map((p, i) => `IO_LOC "${p}" ${pins[i]};`).join('\n') + '\n');
   await page.keyboard.press('Control+S');
   await page.locator('.pane-tab', { hasText: 'Place & Route' }).click();
   await run.click();
   await expect(status).toContainText('on Gowin GW1NR-9C', { timeout: 240_000 });
-  await expect(page.locator('.tr-out')).toContainText('pins from counter.cst');
+  await expect(page.locator('.tr-out')).toContainText('pins from cpu.cst');
   expect(await page.locator('.pnr-used.pnr-io').count()).toBeGreaterThan(0);
   dl = page.waitForEvent('download');
   await page.locator('.pnr').getByText('Bitstream', { exact: true }).click();
-  expect((await dl).suggestedFilename()).toBe('counter.fs');
+  expect((await dl).suggestedFilename()).toBe('cpu.fs');
   expect(errors).toEqual([]);
 });
 
@@ -237,8 +243,8 @@ test('runs the educational ASIC flow and explores the layout', async ({ page }) 
   await page.locator('.chip').getByText('Critical path', { exact: true }).click();
   const dl = page.waitForEvent('download');
   await page.locator('.chip').getByText('GDSII', { exact: true }).click();
-  expect((await dl).suggestedFilename()).toBe('counter.gds');
+  expect((await dl).suggestedFilename()).toBe('cpu.gds');
   await page.locator('.chip').getByText('Report', { exact: true }).click();
-  await expect(page.locator('.cm-content:visible')).toContainText('ASIC flow report: counter');
+  await expect(page.locator('.cm-content:visible')).toContainText('ASIC flow report: cpu');
   expect(errors).toEqual([]);
 });

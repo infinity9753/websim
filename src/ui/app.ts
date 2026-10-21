@@ -666,7 +666,7 @@ export class App {
     this.fs.clear();
     this.session.resetLibraries();
     this.transcript.clear();
-    await this.loadExample('counter', true);
+    await this.loadExample('cpu', true);
   }
 
   togglePane(which: 'left' | 'mid') {
@@ -774,7 +774,7 @@ export class App {
     if (!this.state.seen) {
       this.state.seen = true;
       this.persist();
-      if (this.fs.empty) { await this.loadExample('counter', true); return; }
+      if (this.fs.empty) { await this.loadExample('cpu', true); return; }
     }
     if (this.state.compiled.length) {
       this.session.rebuild(this.state.compiled);

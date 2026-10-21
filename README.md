@@ -35,13 +35,13 @@ npm run test:e2e # UI end-to-end tests (Playwright; run "npx playwright install 
 npm run build    # static site in dist/ (deployable anywhere, e.g. GitHub Pages)
 ```
 
-On first launch WebSim loads the counter example and runs it. Try the other
-examples under **File ▸ Load Example**, or type in the transcript:
+On first launch WebSim loads the 8-bit CPU example (an accumulator machine running a Fibonacci program) and runs it.
+Try the other examples under **File ▸ Load Example**, or type in the transcript:
 
 ```tcl
 vlib work
-vlog counter.v tb_counter.v
-vsim work.tb_counter
+vlog cpu.v tb_cpu.v
+vsim work.tb_cpu
 add wave -r /*
 run -all
 ```

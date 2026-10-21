@@ -38,7 +38,24 @@ WebSim 은 브라우저에서 동작하는 Verilog / SystemVerilog / VHDL 이벤
 | 아래: 트랜스크립트 | 명령 입력 창과 시뮬레이터 출력. `file(line)` 형태의 위치는 클릭하면 해당 줄로 이동합니다. ↑/↓ 명령 기록, Tab 자동 완성. |
 | 상태 표시줄 | 실행 상태, 현재 시간, 델타, 현재 영역, 파형 히스토리 크기, 프로젝트와 라이브러리. |
 
-처음 방문하면 카운터 예제가 로드되고 `run_counter.do` 가 실행됩니다. 다른 예제는 **파일 ▸ 예제 불러오기** 에서 고를 수 있습니다.
+처음 방문하면 **8비트 CPU 예제**가 로드되고 `run_cpu.do` 가 실행됩니다. 다른 예제는 **파일 ▸ 예제 불러오기** 에서 고를 수 있습니다.
+
+### 예제: 8비트 CPU
+
+`cpu.v` 는 누산기(accumulator) 하나를 가진 작은 8비트 CPU 이고, `tb_cpu.v` 는 16바이트 메모리와 프로그램을 가진 테스트벤치입니다. 명령 하나는 8비트(`상위 4비트 = 명령 코드`, `하위 4비트 = 주소/값`)이고, 인출(FETCH)과 실행(EXEC) 두 클록에 한 명령씩 처리합니다.
+
+| 코드 | 명령 | 동작 | 코드 | 명령 | 동작 |
+|---|---|---|---|---|---|
+| `0` | NOP | 없음 | `6` | JMP a | PC = a |
+| `1` | LDA a | acc = M[a] | `7` | JC a | 캐리(C)면 PC = a |
+| `2` | ADD a | acc = acc + M[a] (C, Z 갱신) | `8` | JZ a | 0(Z)이면 PC = a |
+| `3` | SUB a | acc = acc − M[a] (C, Z 갱신) | `E` | OUT | out = acc (out_valid 1클록) |
+| `4` | STA a | M[a] = acc | `F` | HLT | 정지(halted) |
+| `5` | LDI n | acc = n (0~15) | | | |
+
+들어 있는 프로그램은 8비트를 넘을 때까지 피보나치 수(1, 1, 2, 3, 5, … 233)를 `OUT` 으로 내보내고, 테스트벤치가 결과를 확인해 `PASS`/`FAIL` 을 출력합니다. 파형 창에서 `state`(0 인출, 1 실행, 2 정지), `pc`, `ir`, `acc`, 플래그 `c`/`z`, 메모리 버스(`addr`, `rdata`, `we`)를 따라가 보세요. 테스트벤치의 `mem[...]` 값을 바꾸면 다른 프로그램을 실행할 수 있습니다.
+
+CPU 코어(`cpu.v`)는 합성 가능한 RTL 이라, 아래의 논리 합성·게이트 레벨 시뮬레이션·FPGA 배치 배선·ASIC 흐름을 그대로 적용해 볼 수 있습니다(메모리는 테스트벤치 쪽에 있음).
 
 ## 2. 튜토리얼 1 — Verilog 카운터
 
@@ -231,19 +248,20 @@ run -all                                        ;# 테스트가 모두 끝나면
    - `ice40`, `ecp5`, `gowin`, `xilinx`: 합성할 때 그 FPGA 의 기본 소자(LUT, 플립플롭, 캐리, IO 버퍼, DSP …) 모델을 `synth/<타깃>_cells.v` 로 써 두고 함께 컴파일합니다. 모델은 Yosys 가 배포하는 `cells_sim.v`(ISC)이며, Yosys 에 블랙박스만 있는 DSP 곱셈기(ECP5 `MULT18X18D`, Gowin `MULT9X9/18X18/36X36`)는 Yosys 가 쓰는 조합 곱셈 모드에 대해 WebSim 이 모델을 붙입니다(레지스터 모드는 오류로 알림).
    - FPGA 모델에는 실제에 가까운 셀 지연(ps 단위, LUT 하나에 수백 ps~1 ns)이 들어 있어, 클록 에지 직후 너무 일찍 출력을 확인하면 아직 바뀌지 않은 값을 볼 수 있습니다. 클록 주기와 샘플 시점에 여유를 두세요.
    - 넷리스트에는 최상위 모듈의 파라미터가 합성에 쓴 값으로 선언되어 있어, `#(.WIDTH(4))` 처럼 파라미터를 지정하는 테스트벤치도 그대로 쓸 수 있습니다(다른 값을 주어도 넷리스트는 바뀌지 않습니다).
-   - RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요.
+   - RTL 로 돌아가려면 원래 파일을 다시 컴파일하세요. 라이브러리에 넷리스트가 들어 있는 동안 `synth` 는 넷리스트를 다시 합성하지 않고 RTL 을 먼저 컴파일하라고 알려 줍니다.
 
    ```tcl
    synth -target ice40
-   vlog synth/ice40_cells.v synth/counter_ice40.v
-   vsim work.tb_counter; run -all
+   vlog synth/ice40_cells.v synth/cpu_ice40.v
+   vsim work.tb_cpu; run -all
    ```
 
 ```tcl
-vlog counter.v tb_counter.v
-synth -flatten                    ;# synth/counter.v ...
-vlog synth/counter.v              ;# 게이트 레벨 넷리스트로 교체
-vsim work.tb_counter; run -all
+vlog cpu.v tb_cpu.v
+synth -flatten                    ;# synth/cpu.v ...
+vlog synth/cpu.v                  ;# 게이트 레벨 넷리스트로 교체
+vsim work.tb_cpu; run -all        ;# 같은 PASS 가 나와야 합니다
+vlog cpu.v                        ;# RTL 로 되돌리기
 ```
 
 VHDL 은 아직 합성할 수 없습니다(Yosys 의 Verilog 프런트엔드만 포함).
@@ -292,8 +310,8 @@ FPGA 대신 표준 셀 칩을 만드는 과정(합성 → 배치 → 배선 → 
 5. 결과 파일: `asic/<top>.def`(배치·배선), `asic/<top>.rpt`(면적, 셀 수, 층별 배선 길이, IO 위치, 임계 경로), `asic/websim_edu.lef`(층과 셀 추상 뷰). 합성 넷리스트와 셀 시뮬레이션 모델(`synth/websim_edu.v`)로 게이트 레벨 시뮬레이션도 할 수 있습니다.
 
 ```tcl
-vlog counter.v
-asic -top counter -util 0.7 -layers 3
+vlog cpu.v
+asic -top cpu -util 0.7 -layers 3
 ```
 
 단락·개방·미배선이 남으면 `asic` 은 오류를 반환합니다. 이때는 사용률을 낮추거나(`-util 0.5`) 배선 층을 늘리세요(`-layers 4`). 래치처럼 라이브러리에 없는 기억 소자는 합성 단계에서 거부됩니다.

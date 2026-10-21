@@ -1003,7 +1003,8 @@ export class Session {
     if (!top) {
       // the design top: a work top level that is not a testbench, or the unit the last testbench instantiates
       const isTb = (n: string) => /(^|_)(tb|test|bench)|(tb|test|bench)($|_)/i.test(n);
-      const all = this.libs.topLevels('work');
+      // cell models and netlists written under synth/ are never the design top
+      const all = this.libs.topLevels('work').filter(n => !/^synth\//.test(this.libs.findDesign(n)?.unit.file ?? ''));
       let tops = all.filter(n => !isTb(n));
       if (!tops.length) {
         // only testbenches at the top: take what they instantiate

@@ -43,6 +43,8 @@ export function designFiles(libs: LibraryManager, top: string): string[] {
     if (!found) return;
     if (found.unit.lang !== 'verilog') throw new Error(`synth: '${name}' is VHDL; only Verilog / SystemVerilog can be synthesized.`);
     if (found.unit.udp) return;
+    // after "Simulate netlist" the library holds a gate-level netlist; synthesizing it again maps cells, not the RTL
+    if (/^synth\//.test(found.unit.file)) throw new Error(`synth: '${name}' in the library is the gate-level netlist ${found.unit.file}; compile the RTL source again first (vlog <file>).`);
     if (!files.includes(found.unit.file)) files.push(found.unit.file);
     const walk = (items: Item[]) => {
       for (const it of items) {
