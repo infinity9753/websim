@@ -323,6 +323,14 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .syn-type { fill: #e6edf7; font-weight: 600; }
 .syn-pin { fill: #8fa0b8; font-size: 8px; }
 .synthesis .btn { padding: 2px 8px; font-size: 12px; }
+/* ASIC layout window (#51) */
+.chip-side { width: 170px; flex: none; border-right: 1px solid var(--border, #ccc); padding: 4px 6px; font-size: 12px; }
+.chip-title { font-weight: 600; margin: 4px 0; }
+.chip-layer { display: flex; align-items: center; gap: 5px; padding: 1px 0; cursor: pointer; }
+.chip-swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.chip-info { margin-top: 10px; }
+.chip-view { flex: 1; min-width: 0; position: relative; background: #0b0f14; }
+.chip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
 /* place & route floorplan (#48) */
 .pnr-svg { display: block; }
 .pnr-tile { fill: #121922; stroke: #1e2a38; }

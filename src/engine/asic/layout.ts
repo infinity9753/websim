@@ -143,3 +143,15 @@ export function instanceRects(i: Instance): Rect[] {
   const def = CELL.get(i.type)!;
   return cellLayout(def).rects.map(([l, a, b, c, d]) => (i.flip ? [l, i.x + a, i.y + ROW_H - d, i.x + c, i.y + ROW_H - b] : [l, i.x + a, i.y + b, i.x + c, i.y + d]));
 }
+
+/** What the Layout window needs: the layout, the drawn shapes of each used cell, and the critical path's cells. */
+export interface LayoutData { layout: Layout; cells: Record<string, Rect[]>; critical: string[]; criticalDelay: number | null }
+
+export function layoutData(l: Layout, critical?: { delay: number; points: { cell?: string }[] } | null): LayoutData {
+  return {
+    layout: l,
+    cells: Object.fromEntries(usedCells(l).map(c => [c.name, cellLayout(c).rects])),
+    critical: critical ? critical.points.map(p => p.cell).filter((c): c is string => !!c) : [],
+    criticalDelay: critical?.delay ?? null,
+  };
+}

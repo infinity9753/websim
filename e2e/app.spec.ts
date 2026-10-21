@@ -192,3 +192,37 @@ test('places and routes for ECP5 and Gowin (constraints template, gowin_pack on 
   expect((await dl).suggestedFilename()).toBe('counter.fs');
   expect(errors).toEqual([]);
 });
+
+test('runs the educational ASIC flow and explores the layout', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = await fresh(page);
+  await cmd(page, 'quit -sim');
+  await page.getByText('Compile', { exact: true }).first().click();
+  await page.getByText('ASIC Flow (layout, GDSII)…').click();
+  await page.locator('.chip button[title="Synthesize, place and route (ASIC)"]').click();
+  const status = page.locator('.chip .synth-status');
+  await expect(status).toContainText('Checks: 0 shorts, 0 opens, 0 unrouted nets', { timeout: 90_000 });
+  await expect(status).toContainText('max frequency');
+  // something is drawn on the canvas
+  const lit = await page.locator('.chip-canvas').evaluate((c: HTMLCanvasElement) => {
+    const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 200) n++;
+    return n;
+  });
+  expect(lit).toBeGreaterThan(1000);
+  // highlight a net by name
+  await page.locator('.chip input[aria-label="Highlight net"]').fill('clk');
+  await page.locator('.chip input[aria-label="Highlight net"]').press('Enter');
+  await expect(page.locator('.chip-info')).toContainText('Net clk');
+  await expect(page.locator('.chip-info')).toContainText('Vias:');
+  // layer toggles and the critical path
+  await page.locator('.chip-layer', { hasText: 'M3' }).locator('input').uncheck();
+  await page.locator('.chip').getByText('Critical path', { exact: true }).click();
+  const dl = page.waitForEvent('download');
+  await page.locator('.chip').getByText('GDSII', { exact: true }).click();
+  expect((await dl).suggestedFilename()).toBe('counter.gds');
+  await page.locator('.chip').getByText('Report', { exact: true }).click();
+  await expect(page.locator('.cm-content:visible')).toContainText('ASIC flow report: counter');
+  expect(errors).toEqual([]);
+});

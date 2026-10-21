@@ -3,6 +3,7 @@ import { Session, isMarker, waveAttrs } from './commands';
 import type { Scope } from './elab';
 import type { Signal } from './kernel';
 import type { Vec } from './logic';
+import { layoutData } from './asic/layout';
 import type { FromWorker, PDesign, PHist, PScope, PState, PVec, ToWorker } from './protocol';
 
 const post = (m: FromWorker) => (self as unknown as Worker).postMessage(m);
@@ -125,6 +126,8 @@ function flush() {
   if (ev.includes('synth')) {
     st.synth = session.lastSynth;
     const p = session.lastPnr;
+    const a = session.lastAsic;
+    st.asic = a && { run: a.run, top: a.top, base: a.base, ok: a.ok, summary: a.summary };
     st.pnr = p && { run: p.run, top: p.top, device: p.device, family: p.family, bitstream: p.bitstream, base: p.base, ok: p.ok, util: p.util, fmax: p.fmax };
   }
   if (simEv || ev.includes('list')) st.lists = session.lists.map(l => ({ path: l.path, name: l.name, sigId: l.sig.id, radix: l.radix }));
@@ -150,6 +153,8 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   vcdText: (all: boolean) => session.vcdText(all),
   coverageLines: () => session.coverageLines(),
   pnrBitstream: () => session.lastPnr?.bin ?? null,
+  asicLayout: () => { const r = session.lastAsic?.result; return r ? layoutData(r.layout, r.timing.critical) : null; },
+  asicGds: () => session.lastAsic?.result?.gds ?? null,
   listMemories: () => session.listMemories(),
   memWords: (path: string, from: number, count: number) => { const r = session.memWords(path, from, count); return r && { ...r, words: r.words.map(pv) }; },
   memDeposit: (path: string, addr: number, value: string) => session.memDeposit(path, addr, value),

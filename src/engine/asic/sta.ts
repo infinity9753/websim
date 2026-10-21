@@ -8,7 +8,7 @@ export const WIRE_FF = 0.03;      // fF per track of routed wire
 export const OUT_FF = 10;         // load on an output port, fF
 export const SETUP = 0.05;        // flip-flop setup time, ns
 
-export interface TimingPath { delay: number; points: { at: string; time: number }[] }
+export interface TimingPath { delay: number; points: { at: string; time: number; cell?: string }[] }
 export interface Timing {
   /** Worst register-to-register (or input-to-register) path including setup, ns. */
   critical: TimingPath | null;
@@ -62,7 +62,7 @@ export function analyze(nl: Netlist, r?: Routing): Timing {
     let cur: number | null = id;
     while (cur !== null) {
       const pv = prev.get(cur);
-      pts.unshift({ at: pv ? `${nl.cells[pv.cell].name}/${nl.cells[pv.cell].def.output} (${nl.cells[pv.cell].type})` : netById.get(cur)!.name, time: arr.get(cur)! });
+      pts.unshift({ at: pv ? `${nl.cells[pv.cell].name}/${nl.cells[pv.cell].def.output} (${nl.cells[pv.cell].type})` : netById.get(cur)!.name, time: arr.get(cur)!, cell: pv ? nl.cells[pv.cell].name : undefined });
       cur = pv ? pv.net : null;
       if (pv && pv.net === null) break;
     }
@@ -76,7 +76,7 @@ export function analyze(nl: Netlist, r?: Routing): Timing {
     const d = c.pins[c.def.ff.d];
     if (d === undefined) return;
     const t = visit(d) + SETUP;
-    if (!critical || t > critical.delay) critical = trace(d, `${c.name}/${c.def.ff.d} (setup)`, SETUP);
+    if (!critical || t > critical.delay) { critical = trace(d, `${c.name}/${c.def.ff.d} (setup)`, SETUP); critical.points[critical.points.length - 1].cell = c.name; }
   });
   for (const q of nl.ports) {
     if (q.dir !== 'output') continue;

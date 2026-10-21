@@ -2,6 +2,7 @@
 // It mirrors the worker's state (hierarchy, signal histories, waves, libraries, debug state)
 // so panels can read it synchronously, and forwards commands and edits to the worker.
 import { Vec, type Radix } from '../engine/logic';
+import type { LayoutData } from '../engine/asic/layout';
 import type { MsgKind, Breakpoint } from '../engine/commands';
 import type { UnitInfo } from '../engine/library';
 import type { FromWorker, PScope, PState, PVec, ToWorker } from '../engine/protocol';
@@ -77,6 +78,7 @@ export class RemoteSession {
   lists: MList[] = [];
   lastSynth: PState['synth'] = null;
   lastPnr: PState['pnr'] = null;
+  lastAsic: PState['asic'] = null;
   running = false;
   defaultRadix: Radix = 'binary';
   history: string[] = [];
@@ -131,6 +133,8 @@ export class RemoteSession {
   setScope(s: MScope) { this.scope = s; this.emitLocal('scope'); void this.call('setScope', s.path); }
   addWavePaths(paths: string[]) { void this.call('addWavePaths', paths); }
   pnrBitstream() { return this.call<Uint8Array | null>('pnrBitstream'); }
+  asicLayout() { return this.call<LayoutData | null>('asicLayout'); }
+  asicGds() { return this.call<Uint8Array | null>('asicGds'); }
   coverageLines() { return this.call<{ file: string; lines: [number, number][]; branches: [number, string[]][] }[] | null>('coverageLines'); }
   toggleBreakpoint(file: string, line: number) { void this.call('toggleBreakpoint', file, line); }
   loadBreakpoints(list: { file: string; line: number; cond?: string }[]) { void this.call('loadBreakpoints', list); }
@@ -198,6 +202,7 @@ export class RemoteSession {
       }
       if (st.synth !== undefined) this.lastSynth = st.synth;
       if (st.pnr !== undefined) this.lastPnr = st.pnr;
+      if (st.asic !== undefined) this.lastAsic = st.asic;
       if (st.lists) this.lists = st.lists.flatMap(l => { const sig = this.sigs.get(l.sigId); return sig ? [{ path: l.path, name: l.name, sig, radix: l.radix }] : []; });
       if (st.running !== undefined) this.running = st.running;
       if (st.paused !== undefined) this.paused = st.paused;

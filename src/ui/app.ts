@@ -11,6 +11,7 @@ import { ListView } from './list';
 import { DataflowView } from './dataflow';
 import { SynthesisView } from './synthesis';
 import { PnrView } from './pnr';
+import { LayoutView } from './chip';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
 import { EXAMPLES } from './samples';
 import { fmtTime } from '../engine/format';
@@ -45,6 +46,7 @@ export class App {
   dataflow: DataflowView;
   synthesis: SynthesisView;
   pnr: PnrView;
+  chip: LayoutView;
   left = new Pane('pane-left');
   mid = new Pane('pane-mid');
   right = new Pane('pane-right');
@@ -80,6 +82,7 @@ export class App {
     this.dataflow = new DataflowView(this.session);
     this.synthesis = new SynthesisView(this.session, this.fs);
     this.pnr = new PnrView(this.session, this.fs);
+    this.chip = new LayoutView(this.session);
     this.project = new ProjectPanel(this.fs, this.session);
     this.library = new LibraryPanel(this.session);
     this.structure = new StructurePanel(this.session);
@@ -108,6 +111,7 @@ export class App {
     this.right.add('dataflow', t('Dataflow'), this.dataflow.el, { activate: false });
     this.right.add('synthesis', t('Synthesis'), this.synthesis.el, { activate: false });
     this.right.add('pnr', t('Place & Route'), this.pnr.el, { activate: false });
+    this.right.add('layout', t('Layout'), this.chip.el, { activate: false });
     this.bottom.add('transcript', t('Transcript'), this.transcript.el);
 
     const s1 = h('div', { class: 'split-v1', role: 'separator', 'aria-orientation': 'vertical' });
@@ -202,6 +206,7 @@ export class App {
         { label: t('Dataflow'), action: () => this.right.activate('dataflow') },
         { label: t('Synthesis'), action: () => this.right.activate('synthesis') },
         { label: t('Place & Route'), action: () => this.right.activate('pnr') },
+        { label: t('Layout'), action: () => this.right.activate('layout') },
         '-',
         { label: t('Theme: Auto'), action: () => this.setTheme('auto') },
         { label: t('Theme: Light'), action: () => this.setTheme('light') },
@@ -217,6 +222,7 @@ export class App {
         '-',
         { label: t('Synthesize (Yosys)…'), action: () => this.right.activate('synthesis') },
         { label: t('Place & Route (nextpnr)…'), action: () => this.right.activate('pnr') },
+        { label: t('ASIC Flow (layout, GDSII)…'), action: () => this.right.activate('layout') },
         '-',
         { label: t('Clear Library "work"'), action: () => void this.cmd('vdel -lib work -all') },
       ]],
@@ -326,9 +332,14 @@ export class App {
     this.search.onOpen = (f, l) => this.editors.open(f, l);
     this.synthesis.onOpenFile = (f) => this.editors.open(f);
     this.pnr.onOpenFile = (f) => this.editors.open(f);
-    // a pnr run also synthesizes: show the P&R window when its result is new, the netlist otherwise
-    let pnrRun = 0;
-    s.on('synth', () => { const r = s.lastPnr?.run ?? 0; this.right.activate(r !== pnrRun ? 'pnr' : 'synthesis'); pnrRun = r; });
+    this.chip.onOpenFile = (f) => this.editors.open(f);
+    // pnr and asic runs also synthesize: show their window when their result is new, the netlist otherwise
+    let pnrRun = 0, asicRun = 0;
+    s.on('synth', () => {
+      const r = s.lastPnr?.run ?? 0, a = s.lastAsic?.run ?? 0;
+      this.right.activate(a !== asicRun ? 'layout' : r !== pnrRun ? 'pnr' : 'synthesis');
+      pnrRun = r; asicRun = a;
+    });
     // Dataflow follows the signal selected in Objects or the Wave window and shows values at the wave cursor
     const showDf = (p: string) => { this.dataflow.show(p); this.right.activate('dataflow'); };
     this.dataflow.getTime = () => this.wave.cursor ?? s.now;
