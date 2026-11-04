@@ -7,6 +7,7 @@ export const TRACK = 400;          // routing pitch (and site width)
 export const ROW_TRACKS = 8;       // row height in tracks
 export const ROW_H = TRACK * ROW_TRACKS;
 export const LIB_NAME = 'websim_edu';
+const PIN_CAP_PF = 0.002;
 
 export type CellKind = 'comb' | 'ff' | 'tie' | 'fill';
 
@@ -31,6 +32,13 @@ export interface CellDef {
   delay: number;
   slope: number;
   description: string;
+  /** Input pin capacitance, pF (default PIN_CAP). */
+  cap?: number;
+  /** Drive-strength variant: the base cell and the multiple (timing repair upsizes X1 -> X2 -> X4). */
+  base?: string;
+  drive?: number;
+  /** Not used by synthesis (only by timing repair). */
+  dontUse?: boolean;
 }
 
 /** Pins on distinct columns from 1 on: inputs on rows 3/4 alternating, the output on row 4 in the last column. */
@@ -71,10 +79,29 @@ export const CELLS: CellDef[] = [
   { name: 'FILL4', kind: 'fill', width: 4, inputs: [], pins: {}, delay: 0, slope: 0, description: 'filler (4 sites)' },
 ];
 
+// Timing repair (#68): stronger copies of the combinational cells (slope / k, larger input pins, wider) and a delay
+// cell for hold fixing. Synthesis does not use them (dont_use).
+for (const c of CELLS.filter(c => c.kind === 'comb')) {
+  for (const k of [2, 4]) {
+    const extra = c.width - c.inputs.length - 2 + k / 2;
+    const v = comb(`${c.name}_X${k}`, c.inputs, c.fn!, c.expr!, c.delay, `${c.description}, ${k}x drive`, extra);
+    CELLS.push({ ...v, slope: c.slope / k, cap: PIN_CAP_PF * (1 + 0.7 * (k - 1)), base: c.name, drive: k, dontUse: true });
+  }
+}
+CELLS.push({ ...comb('DLY', ['A'], 'A', 'A', 0.150, 'delay cell (hold fixing)', 2), dontUse: true });
+
 export const CELL = new Map(CELLS.map(c => [c.name, c]));
 
+/** The next stronger variant of a cell, or undefined. */
+export function upsize(c: CellDef): CellDef | undefined {
+  const base = c.base ?? c.name, k = c.drive ?? 1;
+  return k < 4 ? CELL.get(`${base}_X${k * 2}`) : undefined;
+}
+
 /** Input pin capacitance, pF. */
-export const PIN_CAP = 0.002;
+export const PIN_CAP = PIN_CAP_PF;
+/** Input capacitance of a pin of a cell, pF. */
+export const pinCap = (c: CellDef) => c.cap ?? PIN_CAP;
 
 // NLDM tables (#57): delay and output transition by input transition (ns) and output load (pF), from an invented
 // smooth model; the STA interpolates in these tables like a Liberty-based tool. Fall values are 0.9 x rise.
@@ -155,13 +182,13 @@ export function liberty(): string {
   };
   for (const c of CELLS) {
     o.push(`  cell(${c.name}) {`, `    area : ${um2(c).toFixed(3)};`);
-    if (c.kind === 'tie' || c.kind === 'fill') o.push('    dont_use : true;');
+    if (c.kind === 'tie' || c.kind === 'fill' || c.dontUse) o.push('    dont_use : true;');
     if (c.ff) {
       o.push('    ff(IQ, IQN) {', `      next_state : "${c.ff.d}";`, `      clocked_on : "${c.ff.clk}";`);
       if (c.ff.reset) o.push(`      clear : "!${c.ff.reset}";`);
       o.push('    }');
     }
-    for (const p of c.inputs) o.push(`    pin(${p}) {`, '      direction : input;', `      capacitance : ${PIN_CAP};`, ...(p === c.ff?.clk ? ['      clock : true;'] : []), ...checks(c, p), '    }');
+    for (const p of c.inputs) o.push(`    pin(${p}) {`, '      direction : input;', `      capacitance : ${pinCap(c)};`, ...(p === c.ff?.clk ? ['      clock : true;'] : []), ...checks(c, p), '    }');
     if (c.output) {
       o.push(`    pin(${c.output}) {`, '      direction : output;', `      function : "${c.ff ? 'IQ' : c.fn}";`);
       if (c.ff) {

@@ -1,7 +1,7 @@
 // Parasitic extraction for the ASIC flow (#58): an RC tree per routed net from the wire and via geometry (invented
 // layer constants: sheet resistance, area and fringe capacitance to ground, via resistance; no coupling), Elmore delays
 // from the driver to every sink, and SPEF (IEEE 1481) output.
-import { PIN_CAP, TRACK } from './cells';
+import { TRACK, pinCap } from './cells';
 import type { Netlist } from './netlist';
 import type { Placement } from './place';
 import { pinXY } from './place';
@@ -80,7 +80,7 @@ export function extract(nl: Netlist, p: Placement, r: Routing): Parasitics {
       const [x, y] = pinXY(p, nl, t.cell, t.pin), c = nl.cells[t.cell];
       const out = c.def.output === t.pin;
       terms.push({ name: `${c.name}:${t.pin}`, node: node(`1,${x},${y}`), dir: out ? 'O' : 'I', port: false, elmore: 0 });
-      if (!out) nodes[idx.get(`1,${x},${y}`)!].c += PIN_CAP * 1000;
+      if (!out) nodes[idx.get(`1,${x},${y}`)!].c += pinCap(c.def) * 1000;
     }
     for (const q of net.ports) {
       const pp = p.ports[q], port = nl.ports[q];
@@ -139,11 +139,12 @@ export function writeSpef(nl: Netlist, px: Parasitics, date = new Date()): strin
     o.push(`*D_NET ${map.get(n.name)} ${f(n.wireC)}`, '*CONN');
     for (const t of n.terms) {
       if (t.port) o.push(`*P ${t.name} ${t.dir}`);
-      else { const cell = nl.cells.find(c => c.name === t.name.split(':')[0]); o.push(`*I ${t.name} ${t.dir}${t.dir === 'I' ? ` *L ${f(PIN_CAP * 1000)}` : ` *D ${cell?.type ?? ''}`}`); }
+      else { const cell = nl.cells.find(c => c.name === t.name.split(':')[0]); o.push(`*I ${t.name} ${t.dir}${t.dir === 'I' ? ` *L ${f((cell ? pinCap(cell.def) : 0) * 1000)}` : ` *D ${cell?.type ?? ''}`}`); }
     }
     o.push('*CAP');
     let k = 0;
-    n.nodes.forEach((nd, i) => { const c = nd.c - (n.terms.some(t => t.node === i && !t.port && t.dir === 'I') ? PIN_CAP * 1000 : 0); if (c > 1e-9) o.push(`${++k} ${ref(n, i)} ${f(c)}`); });
+    const pinC = (i: number) => { const t = n.terms.find(t => t.node === i && !t.port && t.dir === 'I'); const cell = t && nl.cells.find(c => c.name === t.name.split(':')[0]); return cell ? pinCap(cell.def) * 1000 : 0; };
+    n.nodes.forEach((nd, i) => { const c = nd.c - pinC(i); if (c > 1e-9) o.push(`${++k} ${ref(n, i)} ${f(c)}`); });
     o.push('*RES');
     n.res.forEach((e, i) => o.push(`${i + 1} ${ref(n, e.a)} ${ref(n, e.b)} ${f(e.r)}`));
     o.push('*END', '');

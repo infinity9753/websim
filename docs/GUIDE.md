@@ -367,6 +367,9 @@ sta -paths 3
 - 지원 SDC: `create_clock`, `set_input_delay`, `set_output_delay`, `set_load`, `set_input_transition`, `set_clock_uncertainty`,
   `set_false_path`, `set_max_delay`, `set_min_delay`, 그리고 `get_ports`/`get_cells`/`get_pins`/`get_clocks`/`all_inputs`/`all_outputs`.
 
+타이밍이 모자라면 `asic -sdc cpu.sdc -repair` 가 셀 크기 키우기(X2/X4)와 지연 셀 삽입으로 위반을 줄입니다. 수정된 넷리스트는
+`asic/<top>.v` 에 쓰이고, 배치 후 시뮬레이션은 이 파일을 씁니다.
+
 이 전체 과정(RTL 시뮬레이션, ASIC 흐름, 배치 후 시뮬레이션, 출력 비교)은 `signoff -sdc cpu.sdc` 한 줄로도 돌릴 수 있습니다.
 결과는 PASS/FAIL 과 함께 `asic/cpu_signoff.rpt` 에 남습니다.
 
@@ -374,7 +377,7 @@ sta -paths 3
 `** Warning` 으로 알려 줍니다.
 
 ```tcl
-vlog synth/websim_edu.v synth/cpu_asic.v tb_cpu.v
+vlog synth/websim_edu.v asic/cpu.v tb_cpu.v
 vsim -sdftyp /tb_cpu/dut=asic/cpu.sdf work.tb_cpu
 run -all
 ```
@@ -448,7 +451,7 @@ run -all
 |---|---|
 | `synth [-top m] [-target generic\|asic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
-| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [-auto] [files...]` | `-auto`: 레이아웃이 깨끗하지 않으면 층을 4개로, 그다음 사용률을 0.1씩 낮추며(0.3까지) 자동 재시도. 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
+| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [-repair] [-auto] [files...]` | `-repair`: SDC 기준으로 타이밍 자동 수정(셋업 위반 경로의 셀을 X2/X4 로 키우기, 홀드 위반 플립플롭 입력 앞에 DLY 지연 셀 넣기). 레이아웃의 넷리스트는 `asic/<top>.v`. `-auto`: 레이아웃이 깨끗하지 않으면 층을 4개로, 그다음 사용률을 0.1씩 낮추며(0.3까지) 자동 재시도. 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
 | `sta [-sdc 파일] [-paths n] [-setup\|-hold]` | 마지막 `asic` 레이아웃의 정적 타이밍 분석. SDC 제약(클럭, 입출력 지연, 부하, 전환 시간, 불확실성, false path / max·min delay)으로 셋업·홀드 여유(WNS/TNS, WHS/THS)와 최악 경로 보고서를 출력하고 `asic/<top>_sta.rpt` 에 모든 끝점의 여유를 씀. 위반이 있으면 실패 |
 | `openlane [-top m] [-period ns] [-sdc 파일] [-util %]` | 설계를 OpenLane 2 / LibreLane(sky130) 프로젝트로 내보내기: `openlane/<top>/`(config.json, src/, SDC, README) 와 zip. 메뉴 **컴파일 ▸ OpenLane 로 내보내기 (sky130)** 는 zip 을 내려받음 |
 | `signoff [-top m] [-tb t] [-sdc 파일]` | 한 번에 사인오프: RTL 시뮬레이션 → `asic` → SDF 를 넣은 배치 후 시뮬레이션 → 테스트벤치 출력 비교. 레이아웃 정상, 타이밍 충족, 타이밍 검사 위반 없음, 출력 동일이면 PASS. `asic/<top>_signoff.rpt` |

@@ -7,42 +7,57 @@ import { buildLayout, type Layout } from './layout';
 import { readNetlist, type Netlist } from './netlist';
 import { place, type Placement } from './place';
 import { route, verifyRouting, type Routing } from './route';
-import { analyze, reportPath, staSummary, type Timing } from './sta';
+import { analyze, reportPath, sta, staSummary, type Timing } from './sta';
 import { readSdc, type Sdc } from './sdc';
 import { extract, writeSpef, type Parasitics } from './rc';
+import { repairTiming, type RepairResult } from './repair';
+import { writeVerilog } from './verilog';
 import { writeSdf } from './sdf';
 
-export interface AsicOptions { util?: number; layers?: number; /** SDC text: constrained STA instead of the ideal-clock estimate. */ sdc?: string }
+export interface AsicOptions { util?: number; layers?: number; /** SDC text: constrained STA instead of the ideal-clock estimate. */ sdc?: string; /** Timing repair before placement (needs clocks in the SDC). */ repair?: boolean }
 export interface AsicResult {
   nl: Netlist; p: Placement; r: Routing; layout: Layout; timing: Timing;
   shorts: number; opens: string[];
-  def: string; lef: string; sdf: string; spef: string; gds: Uint8Array; report: string;
+  def: string; lef: string; sdf: string; spef: string; /** Gate-level netlist of the layout. */ verilog: string; gds: Uint8Array; report: string;
   /** Clean: everything routed, no overflow, shorts or opens. */
   ok: boolean;
   ms: { place: number; route: number };
   sdc?: Sdc;
   px: Parasitics;
+  repair?: RepairResult;
 }
 
 const um = (tracks: number) => (tracks * TRACK) / 1000;
 
 export function runAsic(json: string, top: string, o: AsicOptions = {}): AsicResult {
   const nl = readNetlist(json, top);
+  const sdc = o.sdc !== undefined ? readSdc(o.sdc, nl) : undefined;
+  if (o.repair && !sdc?.clocks.length) throw new Error('timing repair needs clocks: give an SDC with create_clock');
+  let repair = o.repair ? repairTiming(nl, sdc!) : undefined;
   let t = Date.now();
-  const p = place(nl, { util: o.util });
-  const tPlace = Date.now() - t;
+  let p = place(nl, { util: o.util });
+  let tPlace = Date.now() - t;
   t = Date.now();
-  const r = route(nl, p, { layers: o.layers });
-  const tRoute = Date.now() - t;
+  let r = route(nl, p, { layers: o.layers });
+  let tRoute = Date.now() - t;
+  if (repair) {
+    // second round with the extracted wires of this layout, then place and route the changed netlist again
+    const px0 = extract(nl, p, r);
+    const r2 = repairTiming(nl, sdc!, { run: () => sta(nl, r, sdc!, { px: px0 }).res });
+    if (r2.upsized || r2.buffers) {
+      repair = { upsized: repair.upsized + r2.upsized, buffers: repair.buffers + r2.buffers, before: { wns: Math.min(repair.before.wns, r2.before.wns), whs: Math.min(repair.before.whs, r2.before.whs) }, after: r2.after, log: [...repair.log, '-- after routing (extracted wires):', ...r2.log] };
+      t = Date.now(); p = place(nl, { util: o.util }); tPlace += Date.now() - t;
+      t = Date.now(); r = route(nl, p, { layers: o.layers }); tRoute += Date.now() - t;
+    }
+  }
   const v = verifyRouting(nl, p, r);
   const layout = buildLayout(nl, p, r);
-  const sdc = o.sdc !== undefined ? readSdc(o.sdc, nl) : undefined;
   const px = extract(nl, p, r);
   const timing = analyze(nl, r, sdc, px);
   const ok = r.overflow === 0 && !r.unrouted.length && !v.shorts.length && !v.opens.length;
   const res: AsicResult = {
-    nl, p, r, layout, timing, sdc, px, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
-    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r, sdc, px), spef: writeSpef(nl, px), gds: writeGds(layout), report: '',
+    nl, p, r, layout, timing, sdc, px, repair, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
+    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r, sdc, px), spef: writeSpef(nl, px), verilog: writeVerilog(nl), gds: writeGds(layout), report: '',
   };
   res.report = report(res);
   return res;
@@ -57,6 +72,10 @@ export function summary(a: AsicResult): string[] {
     `Routing: ${r.layers} layers (M2-M${r.layers + 1}), ${r.iterations} iterations, wirelength ${um(r.wirelength).toFixed(1)} um, ${r.viaCount} vias, overflow ${r.overflow} (${a.ms.route} ms)`,
     `Checks: ${a.shorts} shorts, ${a.opens.length} opens, ${r.unrouted.length} unrouted nets`,
   ];
+  if (a.repair) {
+    const x = a.repair, f = (v: number) => v.toFixed(3);
+    lines.push(`Timing repair: ${x.upsized} cells upsized, ${x.buffers} delay cells; worst before repair WNS ${f(x.before.wns)} ns, WHS ${f(x.before.whs)} ns`);
+  }
   const rc = [...a.px.nets.values()];
   if (rc.length) {
     const worst = rc.map(n => ({ n, d: Math.max(0, ...n.terms.map(t => t.elmore)) })).reduce((x, y) => (y.d > x.d ? y : x));
@@ -94,6 +113,7 @@ function report(a: AsicResult): string {
   };
   if (a.sdc?.clocks.length) {
     const st = a.timing.sta;
+    if (a.repair) o.push('', 'Timing repair (before placement, estimated delays):', ...(a.repair.log.length ? a.repair.log : ['nothing to repair']).map(l => `  ${l}`));
     o.push('', 'Static timing analysis (SDC):', ...staSummary(st).map(l => `  ${l}`));
     if (st.warnings.length) o.push('', 'SDC warnings:', ...st.warnings.map(w => `  ${w}`));
     for (const p of [st.setup[0], st.hold[0]]) if (p) o.push('', reportPath(p));

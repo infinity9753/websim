@@ -41,7 +41,7 @@ endmodule` };
     await s.exec('vlog c.v');
     expect(await s.exec('asic'), out.join('\n')).toBe(true);
     expect(out.join('\n')).toMatch(/Parasitics: wire [\d.]+ fF, \d+ resistors; worst wire delay [\d.]+ ps/);
-    expect(out.join('\n')).toMatch(/Wrote asic\/c\.def, asic\/c\.sdf, asic\/c\.spef/);
+    expect(out.join('\n')).toMatch(/Wrote asic\/c\.v, asic\/c\.def, asic\/c\.sdf, asic\/c\.spef/);
     const a = s.lastAsic!.result!;
     expect(a.px.nets.size).toBe(a.r.nets.length);
     for (const rn of a.r.nets) {

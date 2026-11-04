@@ -115,6 +115,9 @@ const SYMBOLS: Record<string, GateSym> = {
 
 export function gateSymbol(type: string): GateSym | null {
   if (SYMBOLS[type]) return SYMBOLS[type];
+  // drive-strength variants and the delay cell of the ASIC library draw like their base gate
+  const base = type.replace(/_X\d+$/, '').replace(/^DLY$/, 'BUF');
+  if (base !== type && SYMBOLS[base]) return SYMBOLS[base];
   if (/^\$_(S?DFFS?R?E?|DFFE|SDFFC?E|ALDFFE?|DFFSRE?)_/.test(type)) return { kind: 'ff', inv: false };
   if (/^\$_DLATCH/.test(type)) return { kind: 'latch', inv: false };
   return null;

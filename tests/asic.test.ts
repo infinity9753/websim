@@ -46,10 +46,11 @@ describe('ASIC standard-cell library and synthesis (#51)', () => {
       const m = /^(\w+) ([01]{3}) ([01x])$/.exec(l);
       if (!m) continue;
       const v = parseInt(m[2], 2);
-      expect(m[3], l).toBe(String(ref[m[1]](v & 1, (v >> 1) & 1, (v >> 2) & 1)));
+      expect(m[3], l).toBe(String(ref[m[1].replace(/_X\d$/, '').replace('DLY', 'BUF')](v & 1, (v >> 1) & 1, (v >> 2) & 1)));
       n++;
     }
-    expect(n).toBe(8 * Object.keys(ref).length);
+    expect(n).toBe(8 * CELLS.filter(c => c.kind === 'comb').length);
+    expect(CELLS.filter(c => c.kind === 'comb').length).toBe(Object.keys(ref).length * 3 + 1); // X1, X2, X4 and DLY
   }, 60_000);
 
   it('maps a design onto the library and the gate-level netlist simulates like the RTL', async () => {

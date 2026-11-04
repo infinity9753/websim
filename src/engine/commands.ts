@@ -217,10 +217,10 @@ export class Session {
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
       '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
-      '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f] [-auto]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
+      '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f] [-repair] [-auto]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
       '  sta [-sdc f] [-paths n] [-setup|-hold]  static timing analysis of the layout: slack, path reports',
       '  openlane [-top m] [-period ns] [-sdc f]  export an OpenLane 2 / LibreLane project (sky130) as a zip',
-      '  signoff [-top m] [-tb t] [-sdc f]  RTL sim, ASIC flow, post-layout SDF sim, compare: PASS / FAIL',
+      '  signoff [-top m] [-tb t] [-sdc f] [-repair]  RTL sim, ASIC flow, post-layout SDF sim, compare: PASS / FAIL',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -1096,16 +1096,17 @@ export class Session {
   lastAsic: { run: number; top: string; base: string; ok: boolean; summary: string[]; result?: AsicResult } | null = null;
 
   /**
-   * asic [-top m] [-util 0.6] [-layers 2..4] [-sdc file] [-auto] [files]
+   * asic [-top m] [-util 0.6] [-layers 2..4] [-sdc file] [-repair] [-auto] [files]
    * Educational ASIC flow: synth -target asic, floorplan and placement, routing, checks, timing estimate, DEF / LEF / GDSII.
    */
   async asic(args: string[]) {
-    let util: number | undefined, layers: number | undefined, sdcFile: string | undefined, auto = false;
+    let util: number | undefined, layers: number | undefined, sdcFile: string | undefined, auto = false, repair = false;
     const synthArgs: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '-util') util = Number(args[++i]);
       else if (a === '-auto') auto = true;
+      else if (a === '-repair') repair = true;
       else if (a === '-sdc') sdcFile = args[++i];
       else if (a === '-layers') layers = Number(args[++i]);
       else if (a === '-top') synthArgs.push(a, args[++i]);
@@ -1116,6 +1117,7 @@ export class Session {
     if (layers !== undefined && ![2, 3, 4].includes(layers)) throw new Error('asic: -layers expects 2, 3 or 4 routing layers (M2 up to M5)');
     const sdc = sdcFile === undefined ? undefined : this.fs.read(sdcFile);
     if (sdcFile !== undefined && sdc === undefined) throw new Error(`asic: cannot read SDC file ${sdcFile}`);
+    if (repair && sdc === undefined) throw new Error('asic: -repair needs timing constraints (-sdc file)');
     if (!(await this.synth([...synthArgs, '-target', 'asic']))) return false;
     const s = this.lastSynth!;
     const json = this.fs.read(`${s.base}.json`);
@@ -1133,7 +1135,7 @@ export class Session {
     try {
       for (const [i, [u, l]] of tries.entries()) {
         if (i) this.out(`-- asic -auto: attempt ${i + 1}/${tries.length} with utilization ${u} and ${l} routing layers`);
-        try { r = runAsic(json, s.top, { util: u, layers: l, sdc }); } catch (e) {
+        try { r = runAsic(json, s.top, { util: u, layers: l, sdc, repair }); } catch (e) {
           if (!auto || i === tries.length - 1) throw e;
           this.out(`-- asic -auto: ${(e as Error).message}`, 'warn');
           continue;
@@ -1155,9 +1157,10 @@ export class Session {
       this.fs.write(`${base}.rpt`, r.report);
       this.fs.write(`${base}.sdf`, r.sdf);
       this.fs.write(`${base}.spef`, r.spef);
+      this.fs.write(`${base}.v`, r.verilog);
       this.fs.write(`asic/${LIB_NAME}.lef`, r.lef);
     }
-    this.out(`Wrote ${base}.def, ${base}.sdf, ${base}.spef, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
+    this.out(`Wrote ${base}.v, ${base}.def, ${base}.sdf, ${base}.spef, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
     if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. ${auto ? 'No attempt of -auto was clean.' : 'Try a lower -util or more -layers, or -auto.'}`, 'err');
     this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
     this.emit('synth');
@@ -1225,7 +1228,7 @@ export class Session {
   }
 
   /**
-   * signoff [-top m] [-tb t] [-sdc f] [-util u] [-layers n] [-mtm min|typ|max] [-time t]
+   * signoff [-top m] [-tb t] [-sdc f] [-repair] [-auto] [-util u] [-layers n] [-mtm min|typ|max] [-time t]
    * RTL simulation, the ASIC flow, post-layout simulation of the netlist with the SDF, and a comparison of the
    * testbench output; PASS when the layout is clean, timing is met and the outputs are identical.
    */
@@ -1237,6 +1240,7 @@ export class Session {
       if (a === '-top') top = args[++i];
       else if (a === '-tb') tb = args[++i];
       else if (a === '-sdc' || a === '-util' || a === '-layers') asicArgs.push(a, args[++i]);
+      else if (a === '-repair' || a === '-auto') asicArgs.push(a);
       else if (a === '-mtm') { mtm = args[++i]; if (!['min', 'typ', 'max'].includes(mtm)) throw new Error('signoff: -mtm expects min, typ or max'); }
       else if (a === '-time') time = args[++i];
       else throw new Error(`signoff: unknown option ${a}`);
@@ -1275,7 +1279,7 @@ export class Session {
     try {
       if (a) {
         this.out(`-- Signoff of ${top}: post-layout simulation with asic/${top}.sdf (${mtm})`);
-        if (!this.compile('verilog', [`synth/${LIB_NAME}.v`, `synth/${top}_asic.v`], true)) throw new Error('signoff: the netlist does not compile');
+        if (!this.compile('verilog', [`synth/${LIB_NAME}.v`, `asic/${top}.v`], true)) throw new Error('signoff: the netlist does not compile');
         gls = await simulate([`-sdf${mtm}`, `/${tb}/${inst}=asic/${top}.sdf`, tb]);
       }
     } finally {

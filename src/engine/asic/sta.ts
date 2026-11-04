@@ -2,7 +2,7 @@
 // tables (input transition x output load); loads are pin capacitance, routed wire and output-port loads. Constraints
 // come from SDC: clocks (ideal: no clock-tree delay), input/output delays, loads, input transitions, uncertainty and
 // false-path / max / min-delay exceptions. Setup uses the largest delays and transitions, hold the smallest.
-import { PIN_CAP, lookup, nldm, type CellDef } from './cells';
+import { PIN_CAP, lookup, nldm, pinCap, type CellDef } from './cells';
 import type { NCell, Netlist } from './netlist';
 import type { Routing } from './route';
 import { wireSlew, type Parasitics } from './rc';
@@ -62,10 +62,10 @@ export class Graph {
     const N = nl.nets.length;
     this.load = new Float64Array(N); this.slewMax = new Float64Array(N); this.slewMin = new Float64Array(N);
     nl.nets.forEach((n, i) => {
-      const pins = n.pins.filter(t => nl.cells[t.cell].def.output !== t.pin).length;
+      const pins = n.pins.reduce((c, t) => c + (nl.cells[t.cell].def.output !== t.pin ? pinCap(nl.cells[t.cell].def) : 0), 0);
       const outs = n.ports.filter(q => nl.ports[q].dir === 'output').reduce((s, q) => s + (sdc.load.get(nl.ports[q].name) ?? OUT_FF / 1000), 0);
       const rc = px?.nets.get(n.id);
-      this.load[i] = pins * PIN_CAP + outs + (rc ? rc.wireC / 1000 : (len.get(n.id) ?? 0) * WIRE_FF / 1000);
+      this.load[i] = pins + outs + (rc ? rc.wireC / 1000 : (len.get(n.id) ?? 0) * WIRE_FF / 1000);
       if (rc) {
         for (const t of n.pins) if (nl.cells[t.cell].def.output !== t.pin) this.wire.set(`${t.cell}:${t.pin}`, px!.delay(n.id, `${nl.cells[t.cell].name}/${t.pin}`));
         for (const q of n.ports) if (nl.ports[q].dir === 'output') this.wire.set(`port:${q}`, px!.delay(n.id, nl.ports[q].name));
