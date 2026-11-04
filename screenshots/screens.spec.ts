@@ -61,6 +61,25 @@ test('documentation screenshots', async ({ page }) => {
   await page.waitForTimeout(500);
   await shot(page, 'asic-layout');
 
+  // a cross-section through a diffusion band of a row, in the educational scale and to scale
+  await page.locator('.chip').getByText('Critical path', { exact: true }).click();
+  const cv = (await page.locator('.chip-canvas').boundingBox())!;
+  for (let i = 0; i < 11; i++) { await page.mouse.move(cv.x + cv.width / 2, cv.y + cv.height * 0.3); await page.mouse.wheel(0, -100); }
+  await page.locator('.chip').getByText('Cross-section', { exact: true }).click();
+  await page.mouse.move(cv.x + cv.width * 0.08, cv.y + cv.height * 0.08);
+  await page.mouse.down();
+  await page.keyboard.down('Shift');
+  await page.mouse.move(cv.x + cv.width * 0.62, cv.y + cv.height * 0.08, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await expect(page.locator('.xs-panel')).toBeVisible();
+  await page.waitForTimeout(400);
+  await shot(page, 'asic-xsect');
+  await page.locator('.xs-panel select').selectOption('real');
+  await page.waitForTimeout(400);
+  await shot(page, 'asic-xsect-real');
+  await page.locator('.xs-panel').getByText('Close', { exact: true }).click();
+
   // a static timing path report in a tall transcript
   await page.evaluate(() => (document.querySelector('.main') as HTMLElement).style.setProperty('--bottom-h', '800px'));
   await cmd(page, 'sta -paths 1 -hold');

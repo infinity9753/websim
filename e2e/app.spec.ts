@@ -261,6 +261,29 @@ test('runs the educational ASIC flow and explores the layout', async ({ page }) 
   await page.locator('.chip input[aria-label="Highlight net"]').press('Enter');
   await expect(page.locator('.chip-info')).toContainText('Net clk');
   await expect(page.locator('.chip-info')).toContainText('Vias:');
+  // a cross-section along a line drawn with the mouse (Shift: horizontal), in both scales
+  const cv = (await page.locator('.chip-canvas').boundingBox())!;
+  await page.locator('.chip').getByText('Cross-section', { exact: true }).click();
+  await page.mouse.move(cv.x + cv.width * 0.2, cv.y + cv.height * 0.5);
+  await page.mouse.down();
+  await page.keyboard.down('Shift');
+  await page.mouse.move(cv.x + cv.width * 0.8, cv.y + cv.height * 0.52, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await expect(page.locator('.xs-panel')).toBeVisible();
+  await expect(page.locator('.xs-title')).toContainText(/Cross-section A–B: [\d.]+ µm, \d+ shapes/);
+  const painted = () => page.locator('.xs-canvas').evaluate((c: HTMLCanvasElement) => {
+    const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    const seen = new Set<string>();
+    for (let i = 0; i < d.length; i += 4 * 7) seen.add(`${d[i] >> 4},${d[i + 1] >> 4},${d[i + 2] >> 4}`);
+    return seen.size;
+  });
+  expect(await painted()).toBeGreaterThan(4);   // dielectric, silicon and several layer colours
+  await page.locator('.xs-panel select').selectOption('real');
+  expect(await painted()).toBeGreaterThan(3);
+  await page.locator('.xs-panel').getByText('Close', { exact: true }).click();
+  await expect(page.locator('.xs-panel')).toBeHidden();
+  await page.locator('.chip').getByText('Cross-section', { exact: true }).click();
   // layer toggles and the critical path
   await page.locator('.chip-layer', { hasText: 'M3' }).locator('input').uncheck();
   await page.locator('.chip').getByText('Critical path', { exact: true }).click();

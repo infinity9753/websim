@@ -336,6 +336,11 @@ table.grid tr.folder.drop-hi td { outline: 1px dashed var(--accent, #4a8cff); ba
 .chip-info { margin-top: 10px; }
 .chip-view { flex: 1; min-width: 0; position: relative; background: #0b0f14; }
 .chip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.chip .btn.on { background: var(--sel, #cfe0ff); }
+.xs-panel { position: absolute; left: 0; right: 0; bottom: 0; height: 44%; display: flex; flex-direction: column; background: #10151c; border-top: 2px solid #ffd34d; color: #c8d3e2; }
+.xs-bar { display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; background: var(--bg2, #eef2f7); color: var(--fg, #1c2430); }
+.xs-view { flex: 1; position: relative; min-height: 0; }
+.xs-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
 /* place & route floorplan (#48) */
 .pnr-svg { display: block; }
 .pnr-tile { fill: #121922; stroke: #1e2a38; }

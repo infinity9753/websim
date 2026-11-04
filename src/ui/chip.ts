@@ -5,6 +5,7 @@ import { t } from './i18n';
 import type { RemoteSession as Session } from './remote';
 import { LAYERS, LAYER, type LayoutData, type Rect } from '../engine/asic/layout';
 import { ROW_H } from '../engine/asic/cells';
+import { crossSection, schematicX, schematicZ, BANDS, SCHEMATIC_TOP, STACK, STACK_BOTTOM, STACK_TOP, type XSection, type XSeg } from '../engine/asic/xsect';
 
 const MIN_DETAIL = 0.035;   // px per nm from which cell internals are drawn
 
@@ -28,6 +29,18 @@ export class LayoutView {
   private showCritical = false;
   private drag: { x: number; y: number; ox: number; oy: number; moved: boolean } | null = null;
   private frame = 0;
+  // cross-section (#75): the cut being drawn, the section shown and its panel
+  private cutMode = false;
+  private cut: { a: [number, number]; b: [number, number] } | null = null;
+  private cutting = false;
+  private xs: XSection | null = null;
+  private xsScale: 'real' | 'schematic' = 'schematic';
+  private xsZoom = 1; private xsPan = 0;
+  private xsDrag: { x: number; pan: number } | null = null;
+  private cutBtn!: HTMLButtonElement;
+  private xsPanel!: HTMLElement;
+  private xsCanvas!: HTMLCanvasElement;
+  private xsTitle!: HTMLElement;
 
   constructor(private session: Session) {
     this.util = h('input', { class: 'tb-field', type: 'number', min: '0.1', max: '0.95', step: '0.05', value: '0.6', title: t('Target core utilization'), style: { width: '60px' } });
@@ -48,6 +61,7 @@ export class LayoutView {
         h('span', { class: 'grow' }),
         this.search,
         btn(t('Critical path'), t('Highlight the cells of the critical timing path'), () => { this.showCritical = !this.showCritical; this.draw(); }),
+        this.cutBtn = btn(t('Cross-section'), t('Draw a line on the layout to see the cross-section along it (Shift: horizontal / vertical)'), () => this.setCutMode(!this.cutMode)) as HTMLButtonElement,
         btn(t('GDSII'), t('Download the layout as a GDSII stream'), () => void this.downloadGds()),
         btn('DEF', t('Open the DEF file'), () => this.open('.def')),
         btn(t('Report'), t('Open the report'), () => this.open('.rpt')),
@@ -55,11 +69,24 @@ export class LayoutView {
         h('button', { class: 'tb-btn', title: t('Zoom in'), onclick: () => this.zoomAt(1.5) }, icon('zoomin')),
         h('button', { class: 'tb-btn', title: t('Zoom out'), onclick: () => this.zoomAt(1 / 1.5) }, icon('zoomout'))),
       this.status,
-      h('div', { class: 'synth-body' }, h('div', { class: 'chip-side scroll' }, this.layerBox, this.info), h('div', { class: 'chip-view' }, this.canvas)));
+      h('div', { class: 'synth-body' }, h('div', { class: 'chip-side scroll' }, this.layerBox, this.info), h('div', { class: 'chip-view' }, this.canvas, this.xsBuild())));
     this.canvas.addEventListener('wheel', e => { e.preventDefault(); this.zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.offsetX, e.offsetY); }, { passive: false });
-    this.canvas.addEventListener('mousedown', e => { this.drag = { x: e.clientX, y: e.clientY, ox: this.ox, oy: this.oy, moved: false }; });
+    this.canvas.addEventListener('mousedown', e => {
+      if (this.cutMode) { const p = this.toNm(e.offsetX, e.offsetY); this.cut = { a: p, b: p }; this.cutting = true; return; }
+      this.drag = { x: e.clientX, y: e.clientY, ox: this.ox, oy: this.oy, moved: false };
+    });
     window.addEventListener('mousemove', e => {
-      if (this.drag) {
+      if (this.cutting && this.cut) {
+        const r = this.canvas.getBoundingClientRect();
+        let b = this.toNm(e.clientX - r.left, e.clientY - r.top);
+        // Shift: a horizontal or vertical cut
+        if (e.shiftKey) b = Math.abs(b[0] - this.cut.a[0]) >= Math.abs(b[1] - this.cut.a[1]) ? [b[0], this.cut.a[1]] : [this.cut.a[0], b[1]];
+        this.cut.b = b;
+        this.draw();
+      } else if (this.xsDrag) {
+        this.xsPan = this.xsDrag.pan + (e.clientX - this.xsDrag.x);
+        this.xsDraw();
+      } else if (this.drag) {
         const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
         if (Math.abs(dx) + Math.abs(dy) > 3) this.drag.moved = true;
         this.ox = this.drag.ox + dx; this.oy = this.drag.oy + dy;
@@ -67,10 +94,12 @@ export class LayoutView {
       } else if (e.target === this.canvas) this.hover(e.offsetX, e.offsetY);
     });
     window.addEventListener('mouseup', e => {
+      if (this.cutting) { this.cutting = false; this.finishCut(); return; }
+      this.xsDrag = null;
       if (this.drag && !this.drag.moved && e.target === this.canvas) this.pick(e.offsetX, e.offsetY);
       this.drag = null;
     });
-    new ResizeObserver(() => this.draw()).observe(this.canvas);
+    new ResizeObserver(() => { this.draw(); this.xsDraw(); }).observe(this.canvas);
     session.on('synth', () => void this.load());
     this.renderLayers();
     void this.load();
@@ -199,6 +228,130 @@ export class LayoutView {
       ...Object.entries(len).sort().map(([l, n]) => h('div', {}, `${l}: ${(n / 1000).toFixed(1)} µm`)), h('div', {}, `${t('Vias')}: ${vias}`));
   }
 
+  // ------------------------------------------------------------ cross-section (#75)
+
+  private xsBuild(): HTMLElement {
+    this.xsCanvas = h('canvas', { class: 'xs-canvas', 'aria-label': t('Cross-section') });
+    this.xsTitle = h('span', { class: 'xs-title' });
+    const scale = h('select', { class: 'tb-field', style: { width: 'auto' }, 'aria-label': t('Cross-section scale'), onchange: (e: Event) => { this.xsScale = (e.target as HTMLSelectElement).value as 'real' | 'schematic'; this.xsZoom = 1; this.xsPan = 0; this.xsDraw(); } },
+      h('option', { value: 'schematic', selected: true }, t('Schematic (educational)')),
+      h('option', { value: 'real' }, t('Real scale (1:1)')));
+    this.xsPanel = h('div', { class: 'xs-panel', style: { display: 'none' } },
+      h('div', { class: 'xs-bar' }, this.xsTitle, h('span', { class: 'grow' }), scale,
+        h('button', { class: 'btn', onclick: () => { this.xs = null; this.cut = null; this.xsPanel.style.display = 'none'; this.draw(); } }, t('Close'))),
+      h('div', { class: 'xs-view' }, this.xsCanvas));
+    this.xsCanvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const f = e.deltaY < 0 ? 1.25 : 0.8;
+      this.xsPan = e.offsetX - (e.offsetX - this.xsPan) * f;
+      this.xsZoom *= f;
+      this.xsDraw();
+    }, { passive: false });
+    this.xsCanvas.addEventListener('mousedown', e => { this.xsDrag = { x: e.clientX, pan: this.xsPan }; });
+    this.xsCanvas.addEventListener('mousemove', e => { if (!this.xsDrag) this.xsHover(e.offsetX, e.offsetY); });
+    this.xsCanvas.addEventListener('click', e => { const g = this.xsSegAt(e.offsetX, e.offsetY); if (g?.net) { this.net = g.net; this.search.value = g.net; this.describe(); this.draw(); this.xsDraw(); } });
+    return this.xsPanel;
+  }
+
+  private setCutMode(on: boolean) {
+    this.cutMode = on;
+    this.cutBtn.classList.toggle('on', on);
+    this.canvas.style.cursor = on ? 'cell' : '';
+    if (on) this.info.textContent = t('Draw the cut line on the layout: press, drag and release (Shift: horizontal / vertical).');
+  }
+
+  private finishCut() {
+    const d = this.data, c = this.cut;
+    if (!d || !c || Math.hypot(c.b[0] - c.a[0], c.b[1] - c.a[1]) * this.scale < 4) { this.cut = null; this.draw(); return; }
+    this.xs = crossSection(d.layout, d.cells, c.a, c.b);
+    this.xsZoom = 1; this.xsPan = 0;
+    this.xsTitle.textContent = t('Cross-section A–B: {0} µm, {1} shapes', (this.xs.length / 1000).toFixed(2), this.xs.segs.length);
+    this.xsPanel.style.display = '';
+    this.draw();
+    this.xsDraw();
+  }
+
+  /** Section coordinates -> panel pixels for the current scale: x(s) and z(layer edge) functions plus the drawing area. */
+  private xsGeom() {
+    const xs = this.xs!, r = this.xsCanvas.getBoundingClientRect();
+    const ml = this.xsScale === 'schematic' ? 64 : 52, mr = 12, mt = 10, mb = 22;
+    const w = Math.max(10, r.width - ml - mr), hgt = Math.max(10, r.height - mt - mb);
+    if (this.xsScale === 'schematic') {
+      const sx = schematicX(xs), total = sx(xs.length) || 1;
+      const kx = (w / total) * this.xsZoom;
+      return { r, ml, mt, hgt, X: (s: number) => ml + this.xsPan + sx(s) * kx, Z: (z: number) => mt + hgt - (z / SCHEMATIC_TOP) * hgt, zOf: (l: string) => schematicZ(l) };
+    }
+    // true scale: one factor for both axes, the whole cut fitted in the width (zoom with the wheel)
+    const k0 = Math.min(w / Math.max(1, xs.length), hgt / (STACK_TOP - STACK_BOTTOM)), k = k0 * this.xsZoom;
+    const centre = Math.max(0, (w - xs.length * k0) / 2);
+    return { r, ml, mt, hgt, X: (s: number) => ml + centre + this.xsPan + s * k, Z: (z: number) => mt + hgt - (z - STACK_BOTTOM) * k, zOf: (l: string) => [STACK[l].z0, STACK[l].z1] as [number, number] };
+  }
+
+  private xsDraw() {
+    const xs = this.xs, c = this.xsCanvas;
+    if (!xs || this.xsPanel.style.display === 'none') return;
+    const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    if (!r.width || !r.height) return;
+    if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) { c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr); }
+    const g = c.getContext('2d')!;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = '#10151c';
+    g.fillRect(0, 0, r.width, r.height);
+    const G = this.xsGeom(), x0 = G.X(0), x1 = G.X(xs.length);
+    const real = this.xsScale === 'real';
+    // dielectric above the silicon surface, silicon below
+    const [sb, st] = real ? [STACK_BOTTOM, 0] : [0, 2];
+    const top = real ? STACK_TOP : SCHEMATIC_TOP;
+    g.fillStyle = '#1d2a38'; g.fillRect(x0, G.Z(top), x1 - x0, G.Z(st) - G.Z(top));
+    g.fillStyle = '#3a3226'; g.fillRect(x0, G.Z(st), x1 - x0, G.Z(sb) - G.Z(st));
+    for (const seg of xs.segs) {
+      const [z0, z1] = G.zOf(seg.layer), ld = LAYER.get(seg.layer)!;
+      const on = !!this.net && seg.net === this.net;
+      g.globalAlpha = seg.layer === 'NWELL' ? 0.45 : 0.92;
+      g.fillStyle = on ? '#ffffff' : ld.color;
+      const px0 = G.X(seg.s0), px1 = G.X(seg.s1);
+      g.fillRect(px0, G.Z(z1), Math.max(1, px1 - px0), Math.max(1, G.Z(z0) - G.Z(z1)));
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = '#c8d3e2';
+    g.font = '10px ui-monospace, monospace';
+    if (real) {
+      // axes in µm: height on the left, distance along the cut at the bottom
+      for (let z = -1000; z <= STACK_TOP; z += 1000) { g.fillText(`${z / 1000}`, 4, G.Z(z) + 3); g.fillRect(G.ml - 6, G.Z(z), 4, 1); }
+      // ticks at least 48 px apart
+      const span = xs.length / 1000, pxPerUm = G.X(1000) - G.X(0);
+      const step = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100].find(v => v * pxPerUm >= 48) ?? 200;
+      for (let s = 0; s <= span + 1e-9; s += step) { const x = G.X(s * 1000); if (x > G.ml - 1 && x < G.r.width) g.fillText(`${+s.toFixed(2)}`, x - 6, G.r.height - 6); }
+      g.fillText('µm', 4, G.r.height - 6);
+    } else {
+      // band names on the left
+      for (const b of BANDS) { const [z0, z1] = schematicZ(b === 'SUB' ? 'NWELL' : b); g.fillText(b === 'SUB' ? 'Si' : b, 4, (G.Z(z0) + G.Z(z1)) / 2 + 3); }
+    }
+    g.fillText('A', x0 - 10, G.mt + 10);
+    g.fillText('B', x1 + 3, G.mt + 10);
+  }
+
+  private xsSegAt(px: number, py: number): XSeg | null {
+    if (!this.xs) return null;
+    const G = this.xsGeom();
+    let best: XSeg | null = null;
+    for (const seg of this.xs.segs) {
+      const [z0, z1] = G.zOf(seg.layer);
+      if (px >= G.X(seg.s0) - 1 && px <= G.X(seg.s1) + 1 && py >= G.Z(z1) && py <= G.Z(z0)) best = seg;
+    }
+    return best;
+  }
+
+  private xsHover(px: number, py: number) {
+    const g = this.xsSegAt(px, py);
+    this.xsCanvas.title = g ? [
+      `${g.layer}: ${STACK[g.layer].material}`,
+      g.net ? `${t('Net')}: ${g.net}` : g.inst ? `${t('Cell')}: ${g.inst} (${g.type})` : '',
+      `${t('Width along the cut')}: ${((g.s1 - g.s0) / 1000).toFixed(3)} µm`,
+      `${t('Height')}: ${STACK[g.layer].z0} … ${STACK[g.layer].z1} nm`,
+    ].filter(Boolean).join('\n') : '';
+  }
+
   draw() {
     cancelAnimationFrame(this.frame);
     this.frame = requestAnimationFrame(() => this.paint());
@@ -283,5 +436,17 @@ export class LayoutView {
       for (const lb of d.layout.labels) if (visible(lb.x, lb.y, lb.x, lb.y)) g.fillText(lb.text, X(lb.x) + 4, Y(lb.y) - 4);
     }
     g.globalAlpha = 1;
+    if (this.cut) {
+      const { a, b } = this.cut;
+      g.strokeStyle = '#ffd34d';
+      g.lineWidth = 2;
+      g.setLineDash([6, 4]);
+      g.beginPath(); g.moveTo(X(a[0]), Y(a[1])); g.lineTo(X(b[0]), Y(b[1])); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = '#ffd34d';
+      g.font = 'bold 12px ui-monospace, monospace';
+      g.fillText('A', X(a[0]) - 12, Y(a[1]) - 6);
+      g.fillText('B', X(b[0]) + 6, Y(b[1]) - 6);
+    }
   }
 }
