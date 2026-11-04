@@ -5,6 +5,7 @@
 import { PIN_CAP, lookup, nldm, type CellDef } from './cells';
 import type { NCell, Netlist } from './netlist';
 import type { Routing } from './route';
+import { wireSlew, type Parasitics } from './rc';
 import { emptySdc, type Clock, type Exception, type Sdc } from './sdc';
 
 export const PIN_FF = PIN_CAP * 1000;   // input pin capacitance, fF
@@ -12,7 +13,7 @@ export const WIRE_FF = 0.03;            // fF per track of routed wire
 export const OUT_FF = 10;               // default load on an output port, fF
 export const SETUP = 0.05;              // default flip-flop setup time, ns
 
-export interface PathPoint { at: string; incr: number; time: number; cell?: string; slew?: number; load?: number }
+export interface PathPoint { at: string; incr: number; time: number; cell?: string; slew?: number; load?: number; /** A cell output pin (a stage of the path). */ out?: boolean }
 export interface PathCheck {
   check: 'setup' | 'hold';
   startpoint: string; endpoint: string; startKind: string; endKind: string;
@@ -53,7 +54,9 @@ export class Graph {
   /** Combinational cells in topological order. */
   readonly order: number[] = [];
   loops = 0;
-  constructor(readonly nl: Netlist, r: Routing | undefined, readonly sdc: Sdc) {
+  /** Elmore wire delay from the net's driver to a cell input pin (key "cell:pin") or an output port (key "port"), ns. */
+  readonly wire = new Map<string, number>();
+  constructor(readonly nl: Netlist, r: Routing | undefined, readonly sdc: Sdc, readonly px?: Parasitics) {
     const len = new Map(r?.nets.map(n => [n.id, n.length]) ?? []);
     nl.nets.forEach((n, i) => this.netIdx.set(n.id, i));
     const N = nl.nets.length;
@@ -61,7 +64,12 @@ export class Graph {
     nl.nets.forEach((n, i) => {
       const pins = n.pins.filter(t => nl.cells[t.cell].def.output !== t.pin).length;
       const outs = n.ports.filter(q => nl.ports[q].dir === 'output').reduce((s, q) => s + (sdc.load.get(nl.ports[q].name) ?? OUT_FF / 1000), 0);
-      this.load[i] = pins * PIN_CAP + outs + (len.get(n.id) ?? 0) * WIRE_FF / 1000;
+      const rc = px?.nets.get(n.id);
+      this.load[i] = pins * PIN_CAP + outs + (rc ? rc.wireC / 1000 : (len.get(n.id) ?? 0) * WIRE_FF / 1000);
+      if (rc) {
+        for (const t of n.pins) if (nl.cells[t.cell].def.output !== t.pin) this.wire.set(`${t.cell}:${t.pin}`, px!.delay(n.id, `${nl.cells[t.cell].name}/${t.pin}`));
+        for (const q of n.ports) if (nl.ports[q].dir === 'output') this.wire.set(`port:${q}`, px!.delay(n.id, nl.ports[q].name));
+      }
     });
     for (const q of nl.ports) if (q.dir === 'input') { const i = this.netIdx.get(q.net)!; this.slewMax[i] = this.slewMin[i] = sdc.transition.get(q.name) ?? 0; }
     // topological order of the combinational cells (DFS from each cell's inputs); flip-flops and ties start paths
@@ -83,7 +91,7 @@ export class Graph {
       if (!c.def.ff) return;
       const o = this.idx(c.pins[c.def.output!]);
       const t = nldm(c.def), l = o < 0 ? 0 : this.load[o];
-      const cs = this.slewOf(c.pins[c.def.ff.clk]);
+      const cs = this.slewAt(c.pins[c.def.ff.clk], this.wd(i, c.def.ff.clk));
       this.arcs[i].set(c.def.ff.clk, { max: lookup(t.rise, cs[0], l), min: lookup(t.fall, cs[1], l) });
       if (o >= 0) { this.slewMax[o] = lookup(t.riseTr, cs[0], l); this.slewMin[o] = lookup(t.fallTr, cs[1], l); }
     });
@@ -96,7 +104,7 @@ export class Graph {
       let smax = 0, smin = Infinity;
       for (const p of c.def.inputs) {
         if (c.pins[p] === undefined) continue;
-        const [imax, imin] = this.slewOf(c.pins[p]);
+        const [imax, imin] = this.slewAt(c.pins[p], this.wd(ci, p));
         this.arcs[ci].set(p, { max: lookup(t.rise, imax, l), min: lookup(t.fall, imin, l) });
         smax = Math.max(smax, lookup(t.riseTr, imax, l)); smin = Math.min(smin, lookup(t.fallTr, imin, l));
       }
@@ -105,6 +113,10 @@ export class Graph {
   }
   idx(net: number | undefined) { return net === undefined ? -1 : this.netIdx.get(net) ?? -1; }
   slewOf(net: number | undefined): [number, number] { const i = this.idx(net); return i < 0 ? [0, 0] : [this.slewMax[i], this.slewMin[i]]; }
+  /** Transition at a sink: the driver's transition degraded by the wire. */
+  slewAt(net: number | undefined, wd: number): [number, number] { const [a, b] = this.slewOf(net); return [wireSlew(a, wd), wireSlew(b, wd)]; }
+  /** Wire delay to an input pin of a cell. */
+  wd(ci: number, pin: string) { return this.wire.get(`${ci}:${pin}`) ?? 0; }
   /** Largest arc delay of a cell (for its SDF IOPATH and the old summary). */
   cellDelay(ci: number, pin?: string): number {
     const a = this.arcs[ci];
@@ -132,8 +144,8 @@ export function separation(l: Clock, c: Clock): { setup: number; hold: number; e
   return { setup, hold, edge };
 }
 
-export function sta(nl: Netlist, r: Routing | undefined, sdc: Sdc, opts: { idealAll?: boolean } = {}): { g: Graph; res: StaResult } {
-  const g = new Graph(nl, r, sdc);
+export function sta(nl: Netlist, r: Routing | undefined, sdc: Sdc, opts: { idealAll?: boolean; px?: Parasitics } = {}): { g: Graph; res: StaResult } {
+  const g = new Graph(nl, r, sdc, opts.px);
   const warnings = [...sdc.warnings];
   const N = nl.nets.length;
   const portByName = new Map(nl.ports.map(p => [p.name, p]));
@@ -213,42 +225,43 @@ export function sta(nl: Netlist, r: Routing | undefined, sdc: Sdc, opts: { ideal
           const n = g.idx(c.pins[p]);
           if (n < 0 || !has[n]) continue;
           const a = g.arcs[ci].get(p)!;
-          const vmax = arrMax[n] + a.max, vmin = arrMin[n] + a.min;
+          const w = g.wd(ci, p), vmax = arrMax[n] + w + a.max, vmin = arrMin[n] + w + a.min;
           if (!has[o] || vmax > arrMax[o]) { arrMax[o] = vmax; prevMax[o] = { cell: ci, pin: p, net: n }; }
           if (!has[o] || vmin < arrMin[o]) { arrMin[o] = vmin; prevMin[o] = { cell: ci, pin: p, net: n }; }
           has[o] = 1;
         }
       }
-      const trace = (end: number, max: boolean, endLabel: string, edge: number): { s: Start; points: PathPoint[] } => {
+      const trace = (end: number, max: boolean, endLabel: string, edge: number, endWire: number): { s: Start; points: PathPoint[] } => {
         const arr = max ? arrMax : arrMin, prev = max ? prevMax : prevMin;
-        const pts: PathPoint[] = [{ at: endLabel, incr: 0, time: edge + arr[end] }];
+        const pts: PathPoint[] = [{ at: endLabel, incr: endWire, time: edge + arr[end] + endWire }];
         let cur = end, s: Start | undefined;
         for (;;) {
           const p = prev[cur]!;
           if ('start' in p) { s = ss[p.start]; break; }
           const c = nl.cells[p.cell];
-          pts.unshift({ at: label(c, c.def.output!), incr: arr[cur] - arr[p.net], time: edge + arr[cur], cell: c.name, slew: max ? g.slewMax[cur] : g.slewMin[cur], load: g.load[cur] });
-          pts.unshift({ at: label(c, p.pin), incr: 0, time: edge + arr[p.net], cell: c.name });
+          const w = g.wd(p.cell, p.pin);
+          pts.unshift({ at: label(c, c.def.output!), incr: arr[cur] - arr[p.net] - w, time: edge + arr[cur], cell: c.name, slew: max ? g.slewMax[cur] : g.slewMin[cur], load: g.load[cur], out: true });
+          pts.unshift({ at: label(c, p.pin), incr: w, time: edge + arr[p.net] + w, cell: c.name, slew: g.slewAt(c.pins[p.pin], w)[max ? 0 : 1] });
           cur = p.net;
         }
         const head: PathPoint[] = [{ at: `clock ${launch.name} (rise edge)`, incr: edge, time: edge }];
         if (s.kind === 'ff') {
           const c = nl.cells[s.index];
           head.push({ at: 'clock network delay (ideal)', incr: 0, time: edge }, { at: label(c, c.def.ff!.clk), incr: 0, time: edge, cell: c.name });
-          head.push({ at: label(c, c.def.output!), incr: max ? s.max : s.min, time: edge + (max ? s.max : s.min), cell: c.name, slew: max ? g.slewMax[cur] : g.slewMin[cur], load: g.load[cur] });
+          head.push({ at: label(c, c.def.output!), incr: max ? s.max : s.min, time: edge + (max ? s.max : s.min), cell: c.name, slew: max ? g.slewMax[cur] : g.slewMin[cur], load: g.load[cur], out: true });
         } else head.push({ at: 'input external delay', incr: max ? s.max : s.min, time: edge + (max ? s.max : s.min) }, { at: `${s.name} (in)`, incr: 0, time: edge + (max ? s.max : s.min) });
         return { s, points: [...head, ...pts] };
       };
       // endpoints: flip-flop data (setup / hold) and reset (recovery / removal) pins, constrained outputs
-      const evaluate = (net: number | undefined, endName: string, endPin: string | undefined, endLabel: string, capture: Clock, lim: { setup: number; hold: number; what: [string, string] }, endKind: string) => {
+      const evaluate = (net: number | undefined, endName: string, endPin: string | undefined, endLabel: string, capture: Clock, lim: { setup: number; hold: number; what: [string, string] }, endKind: string, endWire: number) => {
         const i = g.idx(net);
         if (i < 0 || !has[i]) return;
         const sep = separation(launch, capture);
         for (const check of ['setup', 'hold'] as const) {
-          const { s, points } = trace(i, check === 'setup', endLabel, sep.edge);
+          const { s, points } = trace(i, check === 'setup', endLabel, sep.edge, endWire);
           const x = exceptionFor(grp, s, endName, endPin, capture.name, check);
           if (x?.kind === 'false') continue;
-          const arrival = sep.edge + (check === 'setup' ? arrMax[i] : arrMin[i]);
+          const arrival = sep.edge + endWire + (check === 'setup' ? arrMax[i] : arrMin[i]);
           const capEdge = sep.edge + (check === 'setup' ? sep.setup : sep.hold);
           let req: PathPoint[], required: number;
           if (x) {
@@ -276,15 +289,15 @@ export function sta(nl: Netlist, r: Routing | undefined, sdc: Sdc, opts: { ideal
         const f = c.def.ff, k = c.def.checks, cap = ffClock[ci];
         if (!f || !cap) return;
         const kind = `rising edge-triggered flip-flop clocked by ${cap.name}`;
-        evaluate(c.pins[f.d], c.name, f.d, label(c, f.d), cap, { setup: k?.setup ?? SETUP, hold: k?.hold ?? 0, what: ['library setup time', 'library hold time'] }, kind);
-        if (f.reset && k?.recovery !== undefined) evaluate(c.pins[f.reset], c.name, f.reset, label(c, f.reset), cap, { setup: k.recovery, hold: k.removal ?? 0, what: ['library recovery time', 'library removal time'] }, kind);
+        evaluate(c.pins[f.d], c.name, f.d, label(c, f.d), cap, { setup: k?.setup ?? SETUP, hold: k?.hold ?? 0, what: ['library setup time', 'library hold time'] }, kind, g.wd(ci, f.d));
+        if (f.reset && k?.recovery !== undefined) evaluate(c.pins[f.reset], c.name, f.reset, label(c, f.reset), cap, { setup: k.recovery, hold: k.removal ?? 0, what: ['library recovery time', 'library removal time'] }, kind, g.wd(ci, f.reset));
       });
       for (const q of nl.ports) {
         if (q.dir !== 'output') continue;
         const d = sdc.outputDelay.get(q.name);
         const cap = d ? sdc.clocks.find(c => c.name === d.clock) ?? (d.clock === undefined ? sdc.clocks[0] : undefined) : undefined;
         if (!d || !cap) continue;
-        evaluate(q.net, q.name, undefined, `${q.name} (out)`, cap, { setup: d.max, hold: -d.min, what: ['output external delay', 'output external delay'] }, `output port clocked by ${cap.name}`);
+        evaluate(q.net, q.name, undefined, `${q.name} (out)`, cap, { setup: d.max, hold: -d.min, what: ['output external delay', 'output external delay'] }, `output port clocked by ${cap.name}`, g.wire.get(`port:${nl.ports.indexOf(q)}`) ?? 0);
       }
     }
   }
@@ -303,7 +316,7 @@ export function sta(nl: Netlist, r: Routing | undefined, sdc: Sdc, opts: { ideal
 }
 
 /** Timing estimate without constraints (the flow summary): one ideal clock on every flip-flop, inputs at time 0. */
-export function analyze(nl: Netlist, r?: Routing, sdc?: Sdc): Timing {
+export function analyze(nl: Netlist, r?: Routing, sdc?: Sdc, px?: Parasitics): Timing {
   const ideal = !sdc || !sdc.clocks.length;
   const c = sdc && !ideal ? sdc : emptySdc();
   const P = 1000;
@@ -311,10 +324,10 @@ export function analyze(nl: Netlist, r?: Routing, sdc?: Sdc): Timing {
     c.clocks = [{ name: 'ideal', period: P, waveform: [0, P / 2] }];
     for (const q of nl.ports) { if (q.dir === 'input') c.inputDelay.set(q.name, { max: 0, min: 0 }); else c.outputDelay.set(q.name, { max: 0, min: 0 }); }
   }
-  const { res } = sta(nl, r, c, { idealAll: ideal });
+  const { res } = sta(nl, r, c, { idealAll: ideal, px });
   const old = (p: PathCheck | undefined, extra: number): TimingPath | null => p ? {
     delay: p.arrival + extra,
-    points: p.points.filter(x => !x.at.startsWith('clock') && x.at !== 'input external delay' && !(x.cell && x.incr === 0 && !/\/(D|RN) \(/.test(x.at))).map(x => ({ at: x.at, time: x.time, cell: x.cell })),
+    points: p.points.filter((x, i, all) => x.out || i === all.length - 1 || x.at.endsWith(' (in)')).map(x => ({ at: x.at, time: x.time, cell: x.cell })),
   } : null;
   if (ideal) {
     const ff = res.setup.find(p => !nl.ports.some(q => q.name === p.endpoint));

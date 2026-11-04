@@ -1145,9 +1145,10 @@ export class Session {
       this.fs.write(`${base}.def`, r.def);
       this.fs.write(`${base}.rpt`, r.report);
       this.fs.write(`${base}.sdf`, r.sdf);
+      this.fs.write(`${base}.spef`, r.spef);
       this.fs.write(`asic/${LIB_NAME}.lef`, r.lef);
     }
-    this.out(`Wrote ${base}.def, ${base}.sdf, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
+    this.out(`Wrote ${base}.def, ${base}.sdf, ${base}.spef, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
     if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. Try a lower -util or more -layers.`, 'err');
     this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
     this.emit('synth');
@@ -1178,7 +1179,7 @@ export class Session {
       sdc = readSdc(text, a.nl);
     }
     if (!sdc?.clocks.length) throw new Error('sta: no clocks; give constraints with -sdc <file> (create_clock -period <ns> [get_ports clk])');
-    const { res } = sta(a.nl, a.r, sdc);
+    const { res } = sta(a.nl, a.r, sdc, { px: a.px });
     for (const w of res.warnings) this.out(`** Warning: (sta) ${w}`, 'warn');
     for (const l of staSummary(res)) this.out(l);
     const paths = [...(which !== 'hold' ? res.setup.slice(0, n) : []), ...(which !== 'setup' ? res.hold.slice(0, n) : [])];

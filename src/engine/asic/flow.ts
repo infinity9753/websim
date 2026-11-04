@@ -9,17 +9,19 @@ import { place, type Placement } from './place';
 import { route, verifyRouting, type Routing } from './route';
 import { analyze, reportPath, staSummary, type Timing } from './sta';
 import { readSdc, type Sdc } from './sdc';
+import { extract, writeSpef, type Parasitics } from './rc';
 import { writeSdf } from './sdf';
 
 export interface AsicOptions { util?: number; layers?: number; /** SDC text: constrained STA instead of the ideal-clock estimate. */ sdc?: string }
 export interface AsicResult {
   nl: Netlist; p: Placement; r: Routing; layout: Layout; timing: Timing;
   shorts: number; opens: string[];
-  def: string; lef: string; sdf: string; gds: Uint8Array; report: string;
+  def: string; lef: string; sdf: string; spef: string; gds: Uint8Array; report: string;
   /** Clean: everything routed, no overflow, shorts or opens. */
   ok: boolean;
   ms: { place: number; route: number };
   sdc?: Sdc;
+  px: Parasitics;
 }
 
 const um = (tracks: number) => (tracks * TRACK) / 1000;
@@ -35,11 +37,12 @@ export function runAsic(json: string, top: string, o: AsicOptions = {}): AsicRes
   const v = verifyRouting(nl, p, r);
   const layout = buildLayout(nl, p, r);
   const sdc = o.sdc !== undefined ? readSdc(o.sdc, nl) : undefined;
-  const timing = analyze(nl, r, sdc);
+  const px = extract(nl, p, r);
+  const timing = analyze(nl, r, sdc, px);
   const ok = r.overflow === 0 && !r.unrouted.length && !v.shorts.length && !v.opens.length;
   const res: AsicResult = {
-    nl, p, r, layout, timing, sdc, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
-    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r, sdc), gds: writeGds(layout), report: '',
+    nl, p, r, layout, timing, sdc, px, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
+    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r, sdc, px), spef: writeSpef(nl, px), gds: writeGds(layout), report: '',
   };
   res.report = report(res);
   return res;
@@ -54,6 +57,11 @@ export function summary(a: AsicResult): string[] {
     `Routing: ${r.layers} layers (M2-M${r.layers + 1}), ${r.iterations} iterations, wirelength ${um(r.wirelength).toFixed(1)} um, ${r.viaCount} vias, overflow ${r.overflow} (${a.ms.route} ms)`,
     `Checks: ${a.shorts} shorts, ${a.opens.length} opens, ${r.unrouted.length} unrouted nets`,
   ];
+  const rc = [...a.px.nets.values()];
+  if (rc.length) {
+    const worst = rc.map(n => ({ n, d: Math.max(0, ...n.terms.map(t => t.elmore)) })).reduce((x, y) => (y.d > x.d ? y : x));
+    lines.push(`Parasitics: wire ${rc.reduce((s, n) => s + n.wireC, 0).toFixed(1)} fF, ${rc.reduce((s, n) => s + n.res.length, 0)} resistors; worst wire delay ${(worst.d * 1000).toFixed(2)} ps (${worst.n.name})`);
+  }
   if (a.sdc?.clocks.length) lines.push(...staSummary(timing.sta).map(l => `Timing (SDC): ${l}`));
   else if (timing.critical) lines.push(`Timing (estimate): critical path ${timing.critical.delay.toFixed(3)} ns, max frequency ${timing.fmax!.toFixed(0)} MHz`);
   else if (timing.output) lines.push(`Timing (estimate): combinational, worst input-to-output ${timing.output.delay.toFixed(3)} ns`);
