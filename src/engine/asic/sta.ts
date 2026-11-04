@@ -18,14 +18,20 @@ export interface Timing {
   loops: number;
 }
 
-export function analyze(nl: Netlist, r?: Routing): Timing {
+/** Delay of each cell (ns): intrinsic plus slope times the load on its output (pins, output ports, routed wire). */
+export function cellDelays(nl: Netlist, r?: Routing): (c: number) => number {
   const len = new Map(r?.nets.map(n => [n.id, n.length]) ?? []);
   const netById = new Map(nl.nets.map(n => [n.id, n]));
   const load = (id: number) => {
     const n = netById.get(id)!;
     return n.pins.filter(t => nl.cells[t.cell].def.output !== t.pin).length * PIN_FF + n.ports.filter(q => nl.ports[q].dir === 'output').length * OUT_FF + (len.get(id) ?? 0) * WIRE_FF;
   };
-  const delayOf = (c: number) => { const cell = nl.cells[c]; const out = cell.pins[cell.def.output!]; return cell.def.delay + cell.def.slope * (out === undefined ? 0 : load(out)); };
+  return (c: number) => { const cell = nl.cells[c]; const out = cell.pins[cell.def.output!]; return cell.def.delay + cell.def.slope * (out === undefined ? 0 : load(out)); };
+}
+
+export function analyze(nl: Netlist, r?: Routing): Timing {
+  const netById = new Map(nl.nets.map(n => [n.id, n]));
+  const delayOf = cellDelays(nl, r);
   // arrival time per net and the path that set it
   const arr = new Map<number, number>(), prev = new Map<number, { net: number | null; cell: number }>();
   const done = new Set<number>(), busy = new Set<number>();

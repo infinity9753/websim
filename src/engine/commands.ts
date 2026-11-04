@@ -17,6 +17,7 @@ import { FPGA_SIM_TARGETS, fpgaSimModels } from './fpgasim';
 import { LIB_NAME, liberty, verilogModels } from './asic/cells';
 import { runAsic, summary, type AsicResult } from './asic/flow';
 import type { Vec } from './logic';
+import { annotate as annotateSdf, type Mtm } from './sdf';
 
 export interface VFS {
   read(name: string): string | undefined;
@@ -77,7 +78,7 @@ export class Session {
   history: string[] = [];
   running = false;
   promptN = 1;
-  lastVsim: { top: string; lib?: string; generics: Map<string, string>; res?: number; cocotb?: string; testcases?: string[] } | null = null;
+  lastVsim: { top: string; lib?: string; generics: Map<string, string>; res?: number; cocotb?: string; testcases?: string[]; sdf?: { file: string; region?: string; mtm: Mtm }[]; noTimingChecks?: boolean } | null = null;
   /** Python (cocotb) tests attached to the loaded design (vsim -cocotb). */
   cocotb: CocotbRun | null = null;
   compiledSources: CompiledSrc[] = [];
@@ -333,9 +334,17 @@ export class Session {
     let top: string | undefined;
     let cocotb: string | undefined;
     let testcases: string[] | undefined;
+    const sdf: { file: string; region?: string; mtm: Mtm }[] = [];
+    const noTimingChecks = args.includes('+notimingchecks');
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '-cocotb') { cocotb = args[++i]; if (!cocotb) throw new Error('vsim: -cocotb expects a Python test module'); continue; }
+      if (a === '-sdfmin' || a === '-sdftyp' || a === '-sdfmax') {
+        const v = args[++i]; if (!v) throw new Error(`vsim: ${a} expects [region=]file`);
+        const eq = v.indexOf('=');
+        sdf.push({ file: eq >= 0 ? v.slice(eq + 1) : v, region: eq >= 0 ? v.slice(0, eq) : undefined, mtm: a === '-sdfmin' ? 0 : a === '-sdfmax' ? 2 : 1 });
+        continue;
+      }
       if (a === '-testcase') { testcases = (args[++i] ?? '').split(',').filter(Boolean); continue; }
       if (a === '-t') { const r = parseTime('1' + args[++i].replace(/^\d+/, ''), 1); res = r ?? undefined; const n = parseInt(args[i], 10); if (!isNaN(n) && r) res = n * r; continue; }
       if (a.startsWith('-g') || a.startsWith('-G')) { const [k, v] = a.slice(2).split('='); generics.set(k, v); continue; }
@@ -351,13 +360,13 @@ export class Session {
     const sameTop = this.lastVsim?.top === top;
     if (this.design) this.quitSim(true);
     if (!sameTop) { this.waves = []; this.lists = []; }
-    return this.load({ top, lib, generics, res, cocotb, testcases });
+    return this.load({ top, lib, generics, res, cocotb, testcases, sdf, noTimingChecks });
   }
 
   private load(o: NonNullable<Session['lastVsim']>): Promise<boolean> | boolean | void {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
     this.writeBuf = '';
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), write: (s: string) => this.simWrite(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), write: (s: string) => this.simWrite(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, noTimingChecks: o.noTimingChecks, coverage: this.coverage });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);
@@ -369,6 +378,16 @@ export class Session {
     }
     for (const l of d.loaded) this.out(`Loading ${l}`);
     for (const w of d.warnings) this.out(`** Warning: ${w}`, 'warn');
+    for (const f of o.sdf ?? []) {
+      const text = this.fs.read(f.file);
+      const region = f.region ? (f.region.startsWith('/') ? f.region : `${d.root.path}/${f.region}`) : d.root.path;
+      if (text === undefined) { this.out(`** Error: (vsim-SDF-3445) Failed to open SDF file "${f.file}".`, 'err'); this.out('Error loading design', 'err'); return false; }
+      try {
+        const r = annotateSdf(d.kernel, text, region.replace(/\./g, '/'), f.mtm);
+        this.out(`Loading SDF file ${f.file} for region ${region} (${['min', 'typ', 'max'][f.mtm]}): ${r.paths} path delays, ${r.checks} timing checks`);
+        for (const w of r.warnings) this.out(`** Warning: ${w}`, 'warn');
+      } catch (e) { this.out(`** Error: ${(e as Error).message}`, 'err'); this.out('Error loading design', 'err'); return false; }
+    }
     this.design = d;
     this.scope = d.root;
     this.installBreakpoints();
@@ -1117,9 +1136,10 @@ export class Session {
     if (this.fs.write) {
       this.fs.write(`${base}.def`, r.def);
       this.fs.write(`${base}.rpt`, r.report);
+      this.fs.write(`${base}.sdf`, r.sdf);
       this.fs.write(`asic/${LIB_NAME}.lef`, r.lef);
     }
-    this.out(`Wrote ${base}.def, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
+    this.out(`Wrote ${base}.def, ${base}.sdf, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
     if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. Try a lower -util or more -layers.`, 'err');
     this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
     this.emit('synth');

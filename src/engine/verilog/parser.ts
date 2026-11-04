@@ -1,5 +1,5 @@
 // Verilog (IEEE 1364 subset + common SystemVerilog) recursive-descent parser.
-import { CompileError, type Strength, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem } from '../ast';
+import { CompileError, type Strength, type Expr, type Item, type Loc, type ParamDecl, type PortDecl, type SensItem, type Stmt, type TypeSpec, type Unit, type FuncDecl, type DeclName, type PropSpec, type SeqElem, type TimingEvent } from '../ast';
 import { isKeyword, lexVerilog, parseTimescale, preprocess, type Macro, type Token } from './lexer';
 import { fromBits } from '../logic';
 
@@ -32,6 +32,9 @@ const BIN_PREC: Record<string, number> = {
   '<<': 8, '>>': 8, '<<<': 8, '>>>': 8,
   '+': 9, '-': 9, '*': 10, '/': 10, '%': 10, '**': 11,
 };
+
+/** Timing checks simulated by WebSim; the other ones ($skew, $nochange, ...) are accepted and ignored. */
+const TCHECKS = new Set(['$setup', '$hold', '$setuphold', '$recovery', '$removal', '$recrem', '$width', '$period']);
 
 class VParser {
   pos = 0;
@@ -727,7 +730,47 @@ class VParser {
     return { kind: 'module', lang: 'verilog', name, file: this.file, line: loc.line, params: [], ports, items: [], timescale: this.timescale, udp: { seq, init, rows }, source: this.src };
   }
 
-  /** specify ... endspecify: specparams and module path delays (timing checks are ignored). */
+  /**
+   * A timing check: $setup(data, ref, limit [, notifier]), $hold(ref, data, limit [, n]), $setuphold(ref, data, setup,
+   * hold [, n, ...]), $recovery / $removal(ref, data, limit [, n]), $recrem(ref, data, rec, rem [, n, ...]),
+   * $width(ref, limit [, threshold [, n]]), $period(ref, limit [, n]). Limits may be min:typ:max (typ is used).
+   */
+  parseTimingCheck(): Item {
+    const loc = this.loc();
+    const kind = this.tok.v;
+    this.pos++;
+    this.expect('(');
+    const event = (): TimingEvent => {
+      let edge: 'posedge' | 'negedge' | undefined;
+      if (this.accept('posedge')) edge = 'posedge';
+      else if (this.accept('negedge')) edge = 'negedge';
+      else if (this.accept('edge')) { if (this.accept('[')) { while (!this.accept(']')) this.pos++; } }
+      const sig = this.primary();
+      let cond: Expr | undefined;
+      // "&&&" is lexed as "&&" "&"
+      if (this.isOp('&&') && this.toks[this.pos + 1]?.v === '&') { this.pos += 2; cond = this.expr(); }
+      return { edge, sig, cond };
+    };
+    const limit = (): Expr => { const e = this.expr(); if (this.accept(':')) { const t = this.expr(); this.expect(':'); this.expr(); return t; } return e; };
+    const rest = (): Expr[] => { const out: Expr[] = []; while (this.accept(',')) { if (this.isOp(',') || this.isOp(')')) { out.push({ k: 'id', name: '' }); continue; } out.push(this.expr()); } return out; };
+    let ref: TimingEvent, data: TimingEvent | undefined;
+    const limits: Expr[] = [];
+    if (kind === '$setup') { data = event(); this.expect(','); ref = event(); this.expect(','); limits.push(limit()); }
+    else if (kind === '$width' || kind === '$period') { ref = event(); this.expect(','); limits.push(limit()); }
+    else {
+      ref = event(); this.expect(','); data = event(); this.expect(','); limits.push(limit());
+      if (kind === '$setuphold' || kind === '$recrem') { this.expect(','); limits.push(limit()); }
+    }
+    const extra = rest();
+    // $width has an optional threshold before the notifier
+    const notifierArg = kind === '$width' ? extra[1] : extra[0];
+    this.expect(')');
+    this.expect(';');
+    const notifier = notifierArg && notifierArg.k === 'id' && notifierArg.name ? notifierArg.name : undefined;
+    return { k: 'tcheck', kind, ref, data, limits, notifier, loc };
+  }
+
+  /** specify ... endspecify: specparams, module path delays and timing checks. */
   parseSpecify(items: Item[]) {
     const skipStmt = () => { let d = 0; while (!(d === 0 && this.isOp(';'))) { if (this.tok.t === 'eof') this.err('Unexpected end of file in specify'); if (this.isOp('(')) d++; else if (this.isOp(')')) d--; this.pos++; } this.pos++; };
     while (!this.accept('endspecify')) {
@@ -743,6 +786,7 @@ class VParser {
         this.expect(';');
         continue;
       }
+      if (this.tok.t === 'sys' && TCHECKS.has(this.tok.v)) { items.push(this.parseTimingCheck()); continue; }
       if (this.tok.t === 'sys' || ['showcancelled', 'noshowcancelled', 'pulsestyle_onevent', 'pulsestyle_ondetect'].includes(this.tok.v)) { skipStmt(); continue; }
       if (this.accept('if')) { this.expect('('); this.expr(); this.expect(')'); }
       else this.accept('ifnone');

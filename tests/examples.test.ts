@@ -46,10 +46,25 @@ describe('bundled examples', () => {
       expect(await s.exec(`vlog ${models}synth/cpu${target === 'generic' ? '' : '_' + target}.v; vsim work.tb_cpu; run -all`)).toBe(true);
       expect(out.filter(l => / OUT |^PASS$|^Halted/.test(l)), target).toEqual(ref);
     }
-    // the library holds the ice40 netlist now: synthesizing it again is refused
+    // post-layout: the asic flow writes an SDF with the load-dependent delays of every cell
+    await s.exec('quit -sim; vlog cpu.v');
+    out.length = 0;
+    expect(await s.exec('asic'), out.join('\n')).toBe(true);
+    const sdf = fs['asic/cpu.sdf'];
+    const a = s.lastAsic!.result!;
+    const timed = a.nl.cells.filter(c => c.def.inputs.length).length;
+    expect((sdf.match(/\(INSTANCE /g) ?? []).length).toBe(timed);
+    expect(sdf).toMatch(/\(IOPATH \(posedge CLK\) Q \([\d.:]+\) \([\d.:]+\)\)/);
+    expect(sdf).toMatch(/\(SETUPHOLD D \(posedge CLK\) \(0\.0500:0\.0500:0\.0500\) \(0\.0200:0\.0200:0\.0200\)\)/);
+    out.length = 0;
+    expect(await s.exec('vlog synth/websim_edu.v synth/cpu_asic.v; vsim -sdftyp /tb_cpu/dut=asic/cpu.sdf work.tb_cpu; run -all')).toBe(true);
+    expect(out.filter(l => /^\*\* Warning/.test(l))).toEqual([]);
+    expect(out.find(l => l.startsWith('Loading SDF file asic/cpu.sdf'))).toMatch(new RegExp(`: ${a.nl.cells.filter(c => c.def.output && c.def.inputs.length).length} path delays, \\d+ timing checks`));
+    expect(out.filter(l => / OUT |^PASS$|^Halted/.test(l))).toEqual(ref);
+    // the library holds the asic netlist now: synthesizing it again is refused
     await s.exec('quit -sim');
     out.length = 0;
     expect(await s.exec('synth -target asic')).toBe(false);
-    expect(out.join('\n')).toMatch(/'cpu' in the library is the gate-level netlist synth\/cpu_ice40\.v; compile the RTL source again first/);
+    expect(out.join('\n')).toMatch(/'cpu' in the library is the gate-level netlist synth\/cpu_asic\.v; compile the RTL source again first/);
   }, 120_000);
 });

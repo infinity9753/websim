@@ -8,12 +8,13 @@ import { readNetlist, type Netlist } from './netlist';
 import { place, type Placement } from './place';
 import { route, verifyRouting, type Routing } from './route';
 import { analyze, type Timing } from './sta';
+import { writeSdf } from './sdf';
 
 export interface AsicOptions { util?: number; layers?: number }
 export interface AsicResult {
   nl: Netlist; p: Placement; r: Routing; layout: Layout; timing: Timing;
   shorts: number; opens: string[];
-  def: string; lef: string; gds: Uint8Array; report: string;
+  def: string; lef: string; sdf: string; gds: Uint8Array; report: string;
   /** Clean: everything routed, no overflow, shorts or opens. */
   ok: boolean;
   ms: { place: number; route: number };
@@ -35,7 +36,7 @@ export function runAsic(json: string, top: string, o: AsicOptions = {}): AsicRes
   const ok = r.overflow === 0 && !r.unrouted.length && !v.shorts.length && !v.opens.length;
   const res: AsicResult = {
     nl, p, r, layout, timing, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
-    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), gds: writeGds(layout), report: '',
+    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r), gds: writeGds(layout), report: '',
   };
   res.report = report(res);
   return res;

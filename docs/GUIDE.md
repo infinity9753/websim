@@ -359,7 +359,7 @@ asic -top cpu -util 0.7 -layers 3
 
 | 명령 | 설명 |
 |---|---|
-| `vsim [-t res] [-gName=Val] [-coverage] [-nodebug] [+nospecify] [lib.]top` | 설계 로드. `top` 은 모듈, 엔티티, `entity(arch)`, 구성(configuration) |
+| `vsim [-t res] [-gName=Val] [-coverage] [-nodebug] [-sdftyp [영역=]파일] [+notimingchecks] [+nospecify] [lib.]top` | 설계 로드. `top` 은 모듈, 엔티티, `entity(arch)`, 구성(configuration). `-sdfmin/-sdftyp/-sdfmax` 는 SDF 파일의 지연(IOPATH)과 타이밍 검사 값(TIMINGCHECK)을 `영역` 인스턴스(예: `/tb/dut`, 생략하면 최상위)에 주입 |
 | `vsim -view <file.vcd>` | VCD 를 읽기 전용으로 열기 |
 | `vsim top -cocotb <module> [-testcase a,b]` | 프로젝트의 Python 모듈에 있는 cocotb 테스트를 설계에 붙여 실행(`run -all`) |
 | `run [<time> [unit]]` / `run -all` / `run -continue` | 시뮬레이션 진행 (단위 생략 시 분해능 단위) |
@@ -403,7 +403,7 @@ asic -top cpu -util 0.7 -layers 3
 |---|---|
 | `synth [-top m] [-target generic\|asic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
-| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드 |
+| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
 
 ### 기타
 
@@ -424,7 +424,8 @@ asic -top cpu -util 0.7 -layers 3
 | 블로킹/논블로킹, 지연(`#`, rise/fall/turn-off), 이벤트 제어, wait, named event | ✓ | |
 | 함수/태스크(재귀, automatic, 기본 인자), 계층 참조 | ✓ | |
 | 게이트 프리미티브, UDP(조합/순차), 구동 강도, tri0/tri1, pullup/pulldown | ✓ | |
-| specify 경로 지연, specparam | △ | 출력 포트에 최대 경로 지연 적용, 타이밍 체크 무시 |
+| specify 경로 지연, specparam | △ | 출력 포트에 최대 경로 지연 적용, SDF IOPATH 로 대체 가능 |
+| 타이밍 검사 `$setup $hold $setuphold $recovery $removal $recrem $width $period` | ○ | 엣지·`&&&` 조건·notifier 지원, 위반은 `** Warning` 으로 보고. `$sdf_annotate`, `+notimingchecks` |
 | `` `define/`ifdef/`include/`timescale `` | ✓ | |
 | 시스템 태스크: $display/$write/$strobe/$monitor/$fopen/$fdisplay/$readmemh/$random/$finish ... | ✓ | |
 | typedef enum, struct packed, package/import | ✓ | |

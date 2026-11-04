@@ -189,6 +189,9 @@ class TimeHeap {
 
 export type RunResult = 'paused' | 'finished' | 'stopped' | 'idle' | 'error' | 'budget';
 
+/** A specify timing check of one instance (ref / data are the port or signal names, limits in fs). */
+export interface TCheck { scope: string; kind: string; ref: string; refEdge?: string; data?: string; dataEdge?: string; limits: number[] }
+
 export interface KernelHost {
   print(msg: string): void;
   /** $write: text without a line end (print is used when absent). */
@@ -272,6 +275,13 @@ export class Kernel {
   /** $dumpfile / $dumpvars requests: written out by the session after each run. */
   dumpFile = 'dump.vcd';
   dumpItems: { path: string; levels: number }[] | null = null;
+
+  // ---------- back-annotation (SDF) ----------
+  /** Module path delays by "<instance path>/<output port>": the elaborated ones exist here, SDF fills overrides. */
+  paths = new Set<string>();
+  pathDelay = new Map<string, [number, number, number]>();
+  /** Timing checks of the design; SDF may change their limits (fs). */
+  tchecks: TCheck[] = [];
 
   constructor(public host: KernelHost) {}
 

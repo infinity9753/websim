@@ -25,9 +25,10 @@
 10. [9단계 — FPGA 넷리스트 게이트 레벨 시뮬레이션 (#52)](#10-9단계--fpga-넷리스트-게이트-레벨-시뮬레이션-52)
 11. [10단계 — 예제와 시각화: 8비트 CPU (#53), 게이트 기호 (#54)](#11-10단계--예제와-시각화-8비트-cpu-53-게이트-기호-54)
 12. [11단계 — 기본 예제 OpenTPU (#55)](#12-11단계--기본-예제-opentpu-55)
-13. [테스트와 CI](#13-테스트와-ci)
-14. [배운 점](#14-배운-점)
-15. [남은 과제](#15-남은-과제)
+13. [12단계 — 타이밍 검사와 SDF 백어노테이션 (#56)](#13-12단계--타이밍-검사와-sdf-백어노테이션-56)
+14. [테스트와 CI](#14-테스트와-ci)
+15. [배운 점](#15-배운-점)
+16. [남은 과제](#16-남은-과제)
 
 ---
 
@@ -406,18 +407,57 @@ OpenROAD/Magic 같은 실제 ASIC 도구와 PDK 는 브라우저에서 돌릴 �
 
 ---
 
-## 13. 테스트와 CI
+## 13. 12단계 — 타이밍 검사와 SDF 백어노테이션 (#56)
 
-- **단위·통합(Vitest, 180개)**: 4값 논리, Verilog/VHDL 파싱과 시뮬레이션, 명령 해석기, 디버깅, VCD, 빠른 경로 차등
+오픈소스 EDA 흐름(OpenROAD/OpenSTA/OpenRCX)을 검토한 뒤 "배치 후 타이밍 시뮬레이션"을 브라우저 안에서 닫기 위해
+#56~#59 를 등록했고, 그 첫 단계입니다.
+
+### 타이밍 검사 (IEEE 1364-2005 §15)
+
+- 파서: specify 안의 `$setup $hold $setuphold $recovery $removal $recrem $width $period`. 이벤트는
+  `[posedge|negedge] 신호 [&&& 조건]` (`&&&` 는 렉서가 `&&` + `&` 로 자르므로 파서에서 이어 붙임), 한계값은 min:typ:max
+  중 typ, 마지막 인자는 notifier.
+- 인자 순서가 검사마다 다른 것이 함정입니다. `$setup(data, ref, limit)` 만 데이터가 먼저이고, 나머지는 `(ref, data, ...)`.
+- 의미: setup/removal 은 기준 이벤트에서 "직전 데이터 변화가 한계 안에 있었나", hold/recovery 는 데이터 이벤트에서
+  "직전 기준 이벤트가 한계 안에 있었나"를 봅니다. `$width` 는 반대 엣지까지, `$period` 는 연속된 기준 엣지 간격.
+- 위반은 `** Warning: f.v(7): $setuphold( posedge CLK:17000 ps, D:16000 ps, 2000 ps );` 와 시각·인스턴스 줄로 보고하고,
+  notifier 는 x→0, 0→1, 1→0 으로 토글합니다. 셀 모델의 `always @(notifier) Q <= 1'bx;` 가 이를 받아 출력을 X 로 만듭니다.
+- 첫 구현에서 위반이 하나도 안 났는데, 이벤트 값을 `final(n, 0)` 으로 0비트로 잘라 엣지를 못 본 탓이었습니다.
+
+### SDF (IEEE 1497)
+
+- `src/engine/sdf.ts`: S-식 파서, `TIMESCALE`, `DIVIDER`, 이스케이프, min:typ:max 선택.
+- 경로 지연은 "인스턴스 경로/출력 포트" 키(`/tb/dut/u1/Y`)로 커널에 등록해 두고, SDF 가 값을 넣으면 출력 경로의
+  지연 함수가 새 값(상승/하강/턴오프, 출력 값으로 선택)을 읽습니다. 한 출력에 IOPATH 가 여럿이면 최대값.
+- TIMINGCHECK 는 같은 스코프의 specify 검사 한계값을 바꿉니다(SETUPHOLD 는 두 값).
+- INTERCONNECT/PORT/INCREMENT 와 와일드카드 인스턴스는 경고로 알립니다.
+- 진입점: `vsim -sdfmin|-sdftyp|-sdfmax [영역=]파일` 과 `$sdf_annotate("f.sdf", dut, , , "MAXIMUM")`.
+- 테스트 작성 중 `$time` 이 모듈 시간 단위(1 ns)로 반올림돼 3.7 ns 가 4 ns 로 보였습니다 — 시뮬레이터가 아니라
+  테스트가 틀린 경우라 `$realtime` 으로 바꿨습니다.
+
+### ASIC 흐름과 연결
+
+- 셀 라이브러리: DFF/DFFR 에 setup 0.05 / hold 0.02 ns, DFFR 에 recovery 0.06 / removal 0.03 ns. Liberty 에
+  `setup_rising/hold_rising/recovery_rising/removal_rising` 제약 아크, 시뮬레이션 모델에 `$setuphold`/`$recrem` 과 notifier.
+- Yosys 스크립트에 `rename -enumerate` 를 넣어 JSON·Verilog 넷리스트·SDF 의 인스턴스 이름(`_123_`)을 일치시켰습니다.
+- `asic` 명령이 `asic/<top>.sdf` 를 씁니다: 셀마다 부하(핀 용량 + 배선 길이) 반영 지연의 IOPATH, 플립플롭의 SETUPHOLD/RECREM.
+- 검증: 8비트 CPU 를 `asic` 으로 배치·배선한 뒤 `vsim -sdftyp /tb_cpu/dut=asic/cpu.sdf` 로 돌려 경고 없이 RTL 과 같은
+  출력·PASS 를 확인합니다.
+
+---
+
+## 14. 테스트와 CI
+
+- **단위·통합(Vitest, 186개)**: 4값 논리, Verilog/VHDL 파싱과 시뮬레이션, 명령 해석기, 디버깅, VCD, 빠른 경로 차등
   테스트, 합성(RTL ↔ 넷리스트 동일성), P&R(비트스트림·타이밍·플로어플랜), cocotb, ASIC(라이브러리·배치 합법성·배선
-  검증·GDS 왕복), FPGA 게이트 레벨(4개 타깃), 예제 전체 실행, 가이드 튜토리얼 실행, 번역 누락.
+  검증·GDS 왕복), FPGA 게이트 레벨(4개 타깃), 타이밍 검사·SDF, 예제 전체 실행, 가이드 튜토리얼 실행, 번역 누락.
 - **E2E(Playwright, 11개)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창.
 - **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E, `main` 은 GitHub Pages 배포.
 
 ---
 
-## 14. 배운 점
+## 15. 배운 점
 
 1. **"통과"를 의심하기**: E2E 가 이전 출력의 문구에 걸려 실제 기능 없이 통과하던 사례가 있었습니다. 결과는 문구가 아니라
    개수·값으로 확인해야 합니다.
@@ -433,7 +473,7 @@ OpenROAD/Magic 같은 실제 ASIC 도구와 PDK 는 브라우저에서 돌릴 �
 
 ---
 
-## 15. 남은 과제
+## 16. 남은 과제
 
 - **실제 ASIC 흐름(#49 의 B안)**: OpenROAD + Magic + 실제 PDK 는 WebAssembly 빌드가 없어 서버 백엔드가 필요. 보류.
 - **UVM**: 제약 기반 랜덤화(해 찾기), covergroup 등 SystemVerilog 기능이 더 필요. 보류.

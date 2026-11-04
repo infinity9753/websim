@@ -2,9 +2,10 @@
 import { CompileError, type ConfigBind, type Expr, type Item, type Loc, type Stmt, type TypeSpec, type Unit, type FuncDecl, type SensItem, type PortDecl, type SeqElem, type Strength } from './ast';
 import * as L from './logic';
 import { Vec, resize, fromInt, allX, allZ, slice, insert, vnum, smallVec } from './logic';
-import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo } from './kernel';
+import { Kernel, Signal, Memory, Driver, Process, FinishEx, StopProcEx, resolveDrivers, packVal, type Tx, type LoopSpec, type Wait, type KernelHost, type ProcInfo, type TCheck } from './kernel';
 import { expandFormat, fmtTime, parseTime, type FmtArg } from './format';
 import { compileTextio, endfileFn, isTextioProc, type TextState } from './textio';
+import { annotate as annotateSdf } from './sdf';
 
 // ---------------------------------------------------------------- types
 
@@ -342,6 +343,8 @@ export interface ElabOptions {
   debug?: boolean;
   /** vsim +nospecify: ignore specify path delays. */
   noSpecify?: boolean;
+  /** vsim +notimingchecks: path delays stay, timing checks are not evaluated. */
+  noTimingChecks?: boolean;
   /** vsim -coverage: count statement executions and branch arms. */
   coverage?: boolean;
 }
@@ -537,7 +540,7 @@ export class Elaborator {
         const pexpr = conn.expr;
         const self = { k: 'id', name: port.name } as Expr;
         if (dir === 'in') this.pending.push(() => this.compileCassign(self, pexpr, undefined, scope, parent, `port ${port.name}`));
-        else if (pathDelay) this.pending.push(() => this.compileCassign(pexpr, self, pathDelay[0], parent, scope, `path ${port.name}`, { fall: pathDelay[1], off: pathDelay[2] }));
+        else if (pathDelay) this.pending.push(() => this.compileCassign(pexpr, self, pathDelay[0], parent, scope, `path ${port.name}`, { fall: pathDelay[1], off: pathDelay[2], pathKey: `${scope.path}/${port.name}` }));
         else this.pending.push(() => this.compileCassign(pexpr, self, undefined, parent, scope, `port ${port.name}`));
       } else if (dir === 'in' && lang === 'verilog' && !init) {
         sig.value = allZ(sig.w); sig.prev = sig.value;
@@ -803,6 +806,7 @@ export class Elaborator {
         }
         case 'process': this.pending.push(() => this.compileProcess(it, scope)); break;
         case 'sva': this.pending.push(() => this.compileSva(it, scope)); break;
+        case 'tcheck': if (!this.opts.noSpecify && !this.opts.noTimingChecks) this.pending.push(() => this.compileTcheck(it, scope)); break;
         case 'cassign': this.pending.push(() => this.compileCassign(it.lhs, it.rhs, it.delay, scope, scope, `assign@${it.loc?.line ?? 0}`, it)); break;
       }
     }
@@ -2813,9 +2817,91 @@ export class Elaborator {
     };
   }
 
+  /**
+   * A specify timing check (IEEE 1364-2005 15): timestamps of the reference and data events, a violation when the
+   * second event comes within the limit of the first. Violations are reported and toggle the notifier.
+   */
+  compileTcheck(it: Extract<Item, { k: 'tcheck' }>, scope: Scope) {
+    const k = this.k, host = this.k.host;
+    const owner = `tcheck#${++this.ownerSeq}`;
+    const c = this.ctx(scope, owner);
+    const name = (e: Expr): string => (e.k === 'id' ? e.name : e.k === 'index' && e.base.k === 'id' ? e.base.name : e.k === 'range' && e.base.k === 'id' ? e.base.name : '?');
+    const tc: TCheck = {
+      scope: scope.path, kind: it.kind, ref: name(it.ref.sig), refEdge: it.ref.edge, data: it.data && name(it.data.sig), dataEdge: it.data?.edge,
+      limits: it.limits.map(l => Math.max(0, this.delayFn(l, c)())),
+    };
+    k.tchecks.push(tc);
+    const notifier = it.notifier ? (this.lookupName(scope, it.notifier) as { k: string; sig?: Signal } | undefined) : undefined;
+    const nsig = notifier?.k === 'sig' ? notifier.sig! : null;
+    const fmt = (t: number) => fmtTime(t, k.resolution);
+    const text = (e: Expr): string => (e.k === 'index' && e.base.k === 'id' && e.index.k === 'num' ? `${e.base.name}[${e.index.v.toBigInt()}]` : name(e));
+    const desc = (ev: NonNullable<typeof it.data>) => `${ev.edge ? ev.edge + ' ' : ''}${text(ev.sig)}`;
+    const violation = (first: [NonNullable<typeof it.data>, number], second: [NonNullable<typeof it.data>, number], limit: number) => {
+      host.print(`** Warning: ${it.loc?.file}(${it.loc?.line}): ${it.kind}( ${desc(first[0])}:${fmt(first[1])}, ${desc(second[0])}:${fmt(second[1])}, ${fmt(limit)} );`);
+      host.print(`   Time: ${fmt(k.now)}  Iteration: ${k.deltaCount}  Instance: ${scope.path}`);
+      if (nsig) {
+        const v = nsig.value;
+        // notifier: x -> 0, 0 -> 1, 1 -> 0, z stays z
+        if (!(v.b & 1n) || (v.a & 1n)) k.set(nsig, v.b & 1n ? fromInt(0, nsig.w) : fromInt(v.a & 1n ? 0 : 1, nsig.w));
+      }
+    };
+    /** Call fn on every event of ev (edge and &&& condition), with "opposite" for the other edge (for $width). */
+    const watch = (ev: NonNullable<typeof it.data>, fn: (opposite: boolean) => void) => {
+      const cc = this.ctx(scope, owner);
+      cc.reads = new Set();
+      const vn = this.ex(ev.sig, cc), val = final(vn, vn.w);
+      const cn = ev.cond ? this.ex(ev.cond, cc) : null, cond = cn ? final(cn, cn.w) : null;
+      const bit = (v: Vec) => (v.b & 1n ? 'x' : v.a & 1n ? '1' : '0');
+      let prev = val();
+      const waker = () => {
+        const v = val();
+        if (v.equals(prev)) return;
+        const a = bit(prev), b = bit(v);
+        prev = v;
+        if (cond && L.truth(cond()) === 0) return;
+        if (!ev.edge) { fn(false); return; }
+        const rise = (a === '0' && b !== '0') || (a === 'x' && b === '1');
+        const fall = (a === '1' && b !== '1') || (a === 'x' && b === '0');
+        if (ev.edge === 'posedge' ? rise : fall) fn(false);
+        else if (ev.edge === 'posedge' ? fall : rise) fn(true);
+      };
+      for (const sg of cc.reads as Set<Signal>) k.listen(sg, waker);
+    };
+    const ref = it.ref, data = it.data;
+    let tRef = -Infinity, tData = -Infinity;
+    const L0 = () => tc.limits[0], L1 = () => tc.limits[1];
+    switch (it.kind) {
+      case '$setup': case '$setuphold': case '$removal': case '$recrem': case '$hold': case '$recovery': {
+        // "before" checks: data (setup) or clock (removal) first, then the reference;
+        // "after" checks: the reference first, then data (hold) or clock (recovery)
+        const before = it.kind === '$setup' || it.kind === '$setuphold' || it.kind === '$removal' || it.kind === '$recrem';
+        const after = it.kind === '$hold' || it.kind === '$setuphold' || it.kind === '$recovery' || it.kind === '$recrem';
+        const lb = it.kind === '$setup' || it.kind === '$setuphold' || it.kind === '$removal' || it.kind === '$recrem' ? L0 : () => 0;
+        const la = it.kind === '$setuphold' || it.kind === '$recrem' ? L1 : it.kind === '$hold' || it.kind === '$recovery' ? L0 : () => 0;
+        watch(data!, (opp) => {
+          if (opp) return;
+          tData = k.now;
+          if (after && k.now - tRef < la()) violation([ref, tRef], [data!, k.now], la());
+        });
+        watch(ref, (opp) => {
+          if (opp) return;
+          tRef = k.now;
+          if (before && k.now - tData < lb()) violation(it.kind === '$setup' ? [data!, tData] : [ref, k.now], it.kind === '$setup' ? [ref, k.now] : [data!, tData], lb());
+        });
+        break;
+      }
+      case '$width':
+        if (ref.edge) watch(ref, (opp) => { if (!opp) tRef = k.now; else if (k.now - tRef < L0()) violation([ref, tRef], [{ ...ref, edge: ref.edge === 'posedge' ? 'negedge' : 'posedge' }, k.now], L0()); });
+        break;
+      case '$period':
+        watch(ref, (opp) => { if (opp) return; if (k.now - tRef < L0()) violation([ref, tRef], [ref, k.now], L0()); tRef = k.now; });
+        break;
+    }
+  }
+
   // ---------------------------------------------------------- processes
 
-  compileCassign(lhs: Expr, rhs: Expr, delay: Expr | undefined, lscope: Scope, rscope: Scope, name: string, opt: { fall?: Expr; off?: Expr; strength?: [Strength, Strength] } = {}) {
+  compileCassign(lhs: Expr, rhs: Expr, delay: Expr | undefined, lscope: Scope, rscope: Scope, name: string, opt: { fall?: Expr; off?: Expr; strength?: [Strength, Strength]; pathKey?: string } = {}) {
     const owner = `assign#${++this.ownerSeq}`;
     const lc = this.ctx(lscope, owner);
     lc.driverMode = true;
@@ -2826,7 +2912,20 @@ export class Elaborator {
     const st = opt.strength && (opt.strength[0] !== 'strong' || opt.strength[1] !== 'strong') ? opt.strength : null;
     const R = st ? () => L.withStrength(R0(), st[0], st[1]) : R0;
     const k = this.k;
-    const d = delay ? this.riseFall(delay, opt.fall, opt.off, rc) : null;
+    let d = delay ? this.riseFall(delay, opt.fall, opt.off, rc) : null;
+    if (d && opt.pathKey) {
+      // a module path delay: SDF back-annotation may replace it (rise, fall, turn-off in fs)
+      const key = opt.pathKey, d0 = d;
+      k.paths.add(key);
+      d = (v: Vec) => {
+        const o = k.pathDelay.get(key);
+        if (!o) return d0(v);
+        const m = L.mask(v.w);
+        if (v.b === m && v.a === 0n) return o[2];
+        if (v.b === 0n) return v.a === 0n ? o[1] : o[0];
+        return Math.min(o[0], o[1], o[2]);
+      };
+    }
     let pending = false;
     let inflight: { dead: boolean } | null = null;
     const fire = () => {
@@ -3901,6 +4000,27 @@ export class Elaborator {
               }
               k.memWrite(mem, i, resize(new Vec(digits.length * bitsPer, a, b), mem.w).withSign(mem.signed));
             }
+          },
+        };
+      }
+      case '$sdf_annotate': {
+        // $sdf_annotate("file" [, instance [, config, log, mtm]]): annotate the instance (default: this scope)
+        const fileN = this.ex(s.args[0] ?? err('$sdf_annotate: expected a file name', s.loc), c), ff = selfEv(fileN);
+        const inst = s.args[1];
+        const sub = !inst ? '' : inst.k === 'id' ? inst.name.replace(/\./g, '/') : err('$sdf_annotate: the instance must be a name', s.loc);
+        const mtmA = s.args[4] ? this.ex(s.args[4], c) : null;
+        return {
+          sync: () => {
+            const fname = fileN.str ?? L.toAscii(ff());
+            const text = host.readFile?.(fname);
+            if (text === undefined) { host.print(`** Error: (vsim-SDF-3445) Failed to open SDF file "${fname}". ${where}`); return; }
+            const m = (mtmA?.str ?? (mtmA ? L.toAscii(selfEv(mtmA)()) : 'TYPICAL')).toUpperCase();
+            const region = sub ? `${c.scope.path}/${sub}` : c.scope.path;
+            try {
+              const r = annotateSdf(k, text, region, m.startsWith('MIN') ? 0 : m.startsWith('MAX') ? 2 : 1);
+              for (const w of r.warnings) host.print(`** Warning: ${w}`);
+              host.print(`SDF: ${fname} annotated ${region}: ${r.paths} path delays, ${r.checks} timing checks`);
+            } catch (e) { host.print(`** Error: ${(e as Error).message}`); }
           },
         };
       }

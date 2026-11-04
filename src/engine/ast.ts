@@ -99,12 +99,17 @@ export interface FuncDecl {
   loc?: Loc;
 }
 
+/** A timing check event: [posedge|negedge] terminal [&&& condition]. */
+export interface TimingEvent { edge?: 'posedge' | 'negedge'; sig: Expr; cond?: Expr }
+
 export type Item =
   | { k: 'decl'; kind: 'net' | 'var' | 'signal' | 'const' | 'variable'; type: TypeSpec; names: DeclName[]; fileMode?: 'read' | 'write' | 'append'; isStatic?: boolean; loc?: Loc }
   | { k: 'class'; name: string; ext?: string; superArgs?: Expr[]; items: Item[]; loc?: Loc }
   | ({ k: 'param' } & ParamDecl)
   | { k: 'cassign'; lhs: Expr; rhs: Expr; delay?: Expr; fall?: Expr; off?: Expr; strength?: [Strength, Strength]; loc?: Loc }
   | { k: 'specpath'; outs: string[]; delays: Expr[]; loc?: Loc }      // specify module path delay
+  /** specify timing check ($setup, $hold, $setuphold, $recovery, $removal, $recrem, $width, $period). */
+  | { k: 'tcheck'; kind: string; ref: TimingEvent; data?: TimingEvent; limits: Expr[]; notifier?: string; loc?: Loc }
   | { k: 'process'; kind: 'always' | 'initial' | 'always_comb' | 'always_ff' | 'always_latch' | 'vproc'; body: Stmt; sens?: Expr[] | 'all'; name?: string; loc?: Loc }
   | { k: 'inst'; module: string; lib?: string; arch?: string; name: string; params: { name?: string; value: Expr }[]; conns: { name?: string; expr: Expr | null; sel?: Expr }[]; isEntity?: boolean; range?: [Expr, Expr]; loc?: Loc }
   | { k: 'defparam'; path: string; value: Expr; loc?: Loc }

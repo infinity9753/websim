@@ -23,6 +23,8 @@ export interface CellDef {
   expr?: string;
   /** Flip-flops: clock, data, optional active-low asynchronous reset. */
   ff?: { clk: string; d: string; reset?: string };
+  /** Flip-flops: setup / hold of D and recovery / removal of the reset against the clock edge, ns. */
+  checks?: { setup: number; hold: number; recovery?: number; removal?: number };
   /** Pin access points: track column and track row inside the cell (row 0 = bottom rail). */
   pins: Record<string, { x: number; y: number }>;
   /** Intrinsic delay and delay per fF of load, ns. */
@@ -55,11 +57,11 @@ export const CELLS: CellDef[] = [
   comb('OAI21', ['A1', 'A2', 'B'], '!((A1|A2)&B)', '~((A1 | A2) & B)', 0.040, 'OR-AND-invert ((A1+A2)·B)\''),
   comb('MUX2', ['A', 'B', 'S'], '((A&!S)|(B&S))', 'S ? B : A', 0.065, '2:1 multiplexer (S=1 selects B)', 2),
   {
-    name: 'DFF', kind: 'ff', width: 12, inputs: ['D', 'CLK'], output: 'Q', ff: { clk: 'CLK', d: 'D' },
+    name: 'DFF', kind: 'ff', width: 12, inputs: ['D', 'CLK'], output: 'Q', ff: { clk: 'CLK', d: 'D' }, checks: { setup: 0.05, hold: 0.02 },
     pins: { D: { x: 2, y: 3 }, CLK: { x: 5, y: 4 }, Q: { x: 10, y: 4 } }, delay: 0.110, slope: 0.004, description: 'rising-edge D flip-flop',
   },
   {
-    name: 'DFFR', kind: 'ff', width: 14, inputs: ['D', 'CLK', 'RN'], output: 'Q', ff: { clk: 'CLK', d: 'D', reset: 'RN' },
+    name: 'DFFR', kind: 'ff', width: 14, inputs: ['D', 'CLK', 'RN'], output: 'Q', ff: { clk: 'CLK', d: 'D', reset: 'RN' }, checks: { setup: 0.05, hold: 0.02, recovery: 0.06, removal: 0.03 },
     pins: { D: { x: 2, y: 3 }, CLK: { x: 5, y: 4 }, RN: { x: 8, y: 3 }, Q: { x: 12, y: 4 } }, delay: 0.120, slope: 0.004, description: 'rising-edge D flip-flop with active-low asynchronous reset',
   },
   { name: 'TIEHI', kind: 'tie', width: 2, inputs: [], output: 'Y', fn: '1', expr: "1'b1", pins: { Y: { x: 1, y: 4 } }, delay: 0, slope: 0, description: 'constant 1' },
@@ -107,6 +109,17 @@ export function liberty(): string {
     `        fall_transition(scalar) { values("${num(d * 0.45)}"); }`,
     '      }',
   ];
+  const constraint = (pin: string, type: string, v: number) => [
+    '      timing() {', `        related_pin : "${pin}";`, `        timing_type : ${type};`,
+    `        rise_constraint(scalar) { values("${num(v)}"); }`, `        fall_constraint(scalar) { values("${num(v)}"); }`, '      }',
+  ];
+  const checks = (c: CellDef, p: string) => {
+    const k = c.checks, f = c.ff;
+    if (!k || !f) return [];
+    if (p === f.d) return [...constraint(f.clk, 'setup_rising', k.setup), ...constraint(f.clk, 'hold_rising', k.hold)];
+    if (p === f.reset && k.recovery !== undefined) return [...constraint(f.clk, 'recovery_rising', k.recovery), ...constraint(f.clk, 'removal_rising', k.removal ?? 0)];
+    return [];
+  };
   for (const c of CELLS) {
     o.push(`  cell(${c.name}) {`, `    area : ${um2(c).toFixed(3)};`);
     if (c.kind === 'tie' || c.kind === 'fill') o.push('    dont_use : true;');
@@ -115,7 +128,7 @@ export function liberty(): string {
       if (c.ff.reset) o.push(`      clear : "!${c.ff.reset}";`);
       o.push('    }');
     }
-    for (const p of c.inputs) o.push(`    pin(${p}) {`, '      direction : input;', `      capacitance : ${PIN_CAP};`, ...(p === c.ff?.clk ? ['      clock : true;'] : []), '    }');
+    for (const p of c.inputs) o.push(`    pin(${p}) {`, '      direction : input;', `      capacitance : ${PIN_CAP};`, ...(p === c.ff?.clk ? ['      clock : true;'] : []), ...checks(c, p), '    }');
     if (c.output) {
       o.push(`    pin(${c.output}) {`, '      direction : output;', `      function : "${c.ff ? 'IQ' : c.fn}";`);
       if (c.ff) {
@@ -138,12 +151,16 @@ export function verilogModels(): string {
     const ports = [...c.inputs.map(p => `input ${p}`), `output ${c.ff ? 'reg ' : ''}${c.output}`];
     o.push(`// ${c.description}`, `module ${c.name}(${ports.join(', ')});`);
     if (c.ff) {
-      const { clk, d, reset } = c.ff;
+      const { clk, d, reset } = c.ff, k = c.checks!;
+      // a timing violation toggles the notifier, which makes Q unknown
+      o.push('  reg notifier;', `  always @(notifier) ${c.output} <= 1'bx;`);
       o.push(reset
         ? `  always @(posedge ${clk} or negedge ${reset}) if (!${reset}) ${c.output} <= 1'b0; else ${c.output} <= ${d};`
         : `  always @(posedge ${clk}) ${c.output} <= ${d};`);
       o.push('  specify', `    (posedge ${clk} => (${c.output} +: ${d})) = (${num(c.delay)}, ${num(c.delay * 0.9)});`);
       if (reset) o.push(`    (negedge ${reset} => (${c.output} +: 1'b0)) = (${num(c.delay * 0.8)}, ${num(c.delay * 0.8)});`);
+      o.push(`    $setuphold(posedge ${clk}${reset ? ` &&& ${reset}` : ''}, ${d}, ${num(k.setup)}, ${num(k.hold)}, notifier);`);
+      if (reset) o.push(`    $recrem(posedge ${reset}, posedge ${clk}, ${num(k.recovery!)}, ${num(k.removal!)}, notifier);`);
       o.push('  endspecify');
     } else {
       o.push(`  assign ${c.output} = ${c.expr};`);
@@ -173,6 +190,8 @@ export function asicScript(top: string, read: string, out: string): string {
     'insbuf -buf BUF A Y',
     'opt_clean -purge',
     'check -assert',
+    // _N_ names for the internal cells and nets, the same in the JSON, the Verilog netlist and the SDF
+    'rename -enumerate',
     `tee -o ${out}.stat stat -liberty edu.lib`,
     `write_json ${out}.json`,
     `write_verilog -noattr -noexpr -nohex -nodec ${out}.v`,
