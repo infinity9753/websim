@@ -539,6 +539,8 @@ OpenRCX 가 하는 일을 교육용으로 줄여 구현했습니다(`src/engine/
 - **E2E(Playwright)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창(SDC 기반 STA, OpenLane zip 다운로드).
 - **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E → 문서 스크린샷(아티팩트), `main` 은 GitHub Pages 배포.
+- **세션 시작 훅**(#65): `.claude/hooks/session-start.sh` 가 클라우드 세션 시작 때 `npm install` 과 `PW_CHROMIUM`(미리 설치된
+  Chromium) 설정을 해서, 새 세션에서 바로 단위 테스트·빌드·E2E 를 돌릴 수 있습니다.
 - **성능 회귀 감시**(#64): CI 의 `bench` 작업이 커널 벤치마크를 돌립니다. 러너마다 속도가 달라서, 같은 기계에서 잰
   고정 JS 작업(BigInt·Map·배열) 시간을 곱해 정규화한 점수를 `bench/baseline.json` 과 비교합니다. 공유 환경에서는 같은 기계에서도
   편차가 2배까지 나서, 기준의 절반 아래일 때만 실패하는 큰 회귀용 안전장치로 두었습니다. 배포는 막지 않습니다.
