@@ -1,0 +1,44 @@
+name: OpenTPU example
+
+# Regenerate src/ui/examples/opentpu.v from OpenTPU's PyRTL sources (#63) and report whether it changed.
+# Run by hand (Actions > OpenTPU example > Run workflow); the outputs are kept as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      rev:
+        description: OpenTPU commit, branch or tag
+        default: ca5d381c93752a504e8de1fa10c9d51649853c70
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Export OpenTPU with PyRTL 0.10.2
+        env:
+          OPENTPU_REV: ${{ inputs.rev }}
+        run: scripts/opentpu_regen.sh "$RUNNER_TEMP/opentpu" | tee "$RUNNER_TEMP/regen.log"
+      - name: Summary
+        run: |
+          {
+            echo '### OpenTPU export'
+            echo '```'
+            tail -n 45 "$RUNNER_TEMP/regen.log"
+            echo '```'
+            echo '### Reference results (simplemult on the PyRTL simulator)'
+            echo '```'
+            cat "$RUNNER_TEMP/opentpu/reference.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opentpu-export
+          path: |
+            ${{ runner.temp }}/opentpu/opentpu.v
+            ${{ runner.temp }}/opentpu/reference.txt

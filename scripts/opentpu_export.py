@@ -10,6 +10,7 @@ runtpu.py), prints the reference results the testbench checks, and writes the de
     python3 assembler.py simplemult.a
     PYTHONPATH=. python3 <websim>/scripts/opentpu_export.py > reference.txt
     # then add the provenance / license header and rename "module toplevel" to "module opentpu"
+# (scripts/opentpu_regen.sh does all of this; the "OpenTPU example" workflow runs it on GitHub Actions)
 """
 import numpy as np
 import pyrtl

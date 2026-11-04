@@ -539,6 +539,9 @@ OpenRCX 가 하는 일을 교육용으로 줄여 구현했습니다(`src/engine/
 - **E2E(Playwright)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창(SDC 기반 STA, OpenLane zip 다운로드).
 - **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E → 문서 스크린샷(아티팩트), `main` 은 GitHub Pages 배포.
+- **OpenTPU 재생성**(#63): `scripts/opentpu_regen.sh` 가 clone(커밋 고정), PyRTL 0.10.2 가상환경, `config.py`·`matrix.py` 수정,
+  어셈블, 내보내기, 머리말 붙이기까지 합니다. 돌려 보니 저장소의 `opentpu.v` 와 바이트 단위로 같아 재현성이 확인됐습니다.
+  GitHub Actions 의 수동 워크플로 "OpenTPU example" 이 이를 실행하고 결과와 기준값을 아티팩트·요약으로 남깁니다.
 - **의존성 갱신**(#62): `.github/dependabot.yml` — npm 은 매주(YoWASP 툴체인·에디터·개발 도구를 묶어서), GitHub Actions 는 매달
   갱신 PR 을 만들고 CI 전체가 검증합니다. 저장소에 넣은 msgspec wheel 이 Pyodide ABI 에 묶여 있어 Pyodide 메이저 갱신은 제외.
 - **문서 일관성**(#61): `tests/docs.test.ts` 가 명령 해석기의 모든 명령이 `help`, SPEC, GUIDE 에 있는지 확인합니다.
