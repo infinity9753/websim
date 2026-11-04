@@ -191,6 +191,8 @@ export type RunResult = 'paused' | 'finished' | 'stopped' | 'idle' | 'error' | '
 
 export interface KernelHost {
   print(msg: string): void;
+  /** $write: text without a line end (print is used when absent). */
+  write?(text: string): void;
   readFile?(name: string): string | undefined;
   writeFile?(name: string, text: string): void;
 }

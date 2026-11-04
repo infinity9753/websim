@@ -356,7 +356,8 @@ export class Session {
 
   private load(o: NonNullable<Session['lastVsim']>): Promise<boolean> | boolean | void {
     this.out(`vsim ${o.lib ? o.lib + '.' : ''}${o.top}`, 'out');
-    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
+    this.writeBuf = '';
+    const el = new Elaborator(this.libs, { print: (s) => this.simPrint(s), write: (s: string) => this.simWrite(s), readFile: (n) => this.fs.read(n), writeFile: (n, t) => this.fs.write?.(n, t) }, { generics: o.generics, resolutionPs: o.res, debug: this.debug, noSpecify: this.noSpecify, coverage: this.coverage });
     let d: Design;
     try {
       d = el.elaborate(o.top, o.lib);
@@ -392,7 +393,21 @@ export class Session {
     return false;
   }
 
-  private simPrint(s: string) {
+  /** Text of $write calls not yet ended by a newline. */
+  private writeBuf = '';
+
+  /** $write: output appears line by line, when a newline arrives (or the run ends). */
+  private simWrite(s: string) {
+    const lines = (this.writeBuf + s).split('\n');
+    this.writeBuf = lines.pop()!;
+    for (const l of lines) this.simPrint(l, true);
+  }
+
+  private flushWrite() { if (this.writeBuf) { const b = this.writeBuf; this.writeBuf = ''; this.simPrint(b, true); } }
+
+  private simPrint(s: string, fromWrite = false) {
+    // a $display after $write text continues that line
+    if (!fromWrite && this.writeBuf) { s = this.writeBuf + s; this.writeBuf = ''; }
     if (s.startsWith('** Error') || s.startsWith('** Failure') || s.startsWith('** Fatal')) this.out(s, 'err');
     else if (s.startsWith('** Warning')) this.out(s, 'warn');
     else if (s.startsWith('** ')) this.out(s, 'note');
@@ -494,6 +509,7 @@ export class Session {
         k.finished = true;
         break;
     }
+    this.flushWrite();
     if (k.dumpItems) this.writeDump();
     this.emit('time');
     const q = this.whenQueue; this.whenQueue = []; this.whenContinue = false;

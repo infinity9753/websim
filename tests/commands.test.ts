@@ -206,4 +206,22 @@ endmodule`,
     await s.exec('coverage clear');
     expect(s.coverageLines()!.find(f => f.file === 'c.v')!.lines.every(([, n]) => n === 0)).toBe(true);
   });
+
+  it('$write text stays on one transcript line until a newline, a $display or the end of the run', async () => {
+    const fs: Record<string, string> = {
+      'w.v': `module w; integer i;
+  initial begin
+    $write("a:"); for (i = 0; i < 3; i = i + 1) $write(" %2d", i); $display(" end");
+    $write("x\ny"); $write("z\n");
+    $write("tail");
+  end
+endmodule`,
+    };
+    const out: string[] = [];
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs) }, m => out.push(m));
+    await s.exec('vlog w.v; vsim w; run -all');
+    const i = out.indexOf('a:  0  1  2 end');
+    expect(i, out.join('\n')).toBeGreaterThan(-1);
+    expect(out.slice(i + 1, i + 4)).toEqual(['x', 'yz', 'tail']);
+  });
 });

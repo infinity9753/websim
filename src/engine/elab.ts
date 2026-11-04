@@ -3799,7 +3799,7 @@ export class Elaborator {
         const { fn } = this.displayFn(s.args, c, radix);
         const nl = name.startsWith('$display');
         if (nl) return { sync: () => host.print(fn()) };
-        return { sync: () => (host as any).write ? (host as any).write(fn()) : host.print(fn()) };
+        return { sync: () => host.write ? host.write(fn()) : host.print(fn()) };
       }
       case '$fdisplay': case '$fwrite': case '$fstrobe': case '$fmonitor': case '$fdisplayh': case '$fwriteh': case '$fdisplayb': case '$fwriteb': {
         const fdf = selfEv(this.ex(s.args[0]!, c));
