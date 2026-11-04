@@ -183,6 +183,7 @@ export class Session {
       case 'asic': return this.asic(rest);
       case 'sta': return this.staCmd(rest);
       case 'openlane': return this.openlaneCmd(rest);
+      case 'signoff': return this.signoffCmd(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -219,6 +220,7 @@ export class Session {
       '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
       '  sta [-sdc f] [-paths n] [-setup|-hold]  static timing analysis of the layout: slack, path reports',
       '  openlane [-top m] [-period ns] [-sdc f]  export an OpenLane 2 / LibreLane project (sky130) as a zip',
+      '  signoff [-top m] [-tb t] [-sdc f]  RTL sim, ASIC flow, post-layout SDF sim, compare: PASS / FAIL',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -1203,6 +1205,87 @@ export class Session {
     }
     if (tops.length === 1) return tops[0];
     throw new Error(`${cmd}: specify the module with -top <module>` + (tops.length ? ` (candidates: ${tops.join(', ')})` : ''));
+  }
+
+  /**
+   * signoff [-top m] [-tb t] [-sdc f] [-util u] [-layers n] [-mtm min|typ|max] [-time t]
+   * RTL simulation, the ASIC flow, post-layout simulation of the netlist with the SDF, and a comparison of the
+   * testbench output; PASS when the layout is clean, timing is met and the outputs are identical.
+   */
+  async signoffCmd(args: string[]) {
+    let top: string | undefined, tb: string | undefined, time: string | undefined, mtm = 'typ';
+    const asicArgs: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === '-top') top = args[++i];
+      else if (a === '-tb') tb = args[++i];
+      else if (a === '-sdc' || a === '-util' || a === '-layers') asicArgs.push(a, args[++i]);
+      else if (a === '-mtm') { mtm = args[++i]; if (!['min', 'typ', 'max'].includes(mtm)) throw new Error('signoff: -mtm expects min, typ or max'); }
+      else if (a === '-time') time = args[++i];
+      else throw new Error(`signoff: unknown option ${a}`);
+    }
+    top ??= this.designTop('signoff');
+    // the testbench: a top level of work that instantiates the design
+    const instOf = (unit: string) => (this.libs.findDesign(unit)?.unit.items ?? []).find((it): it is Extract<typeof it, { k: 'inst' }> => it.k === 'inst' && it.module === top);
+    tb ??= this.libs.topLevels('work').find(n => n !== top && instOf(n));
+    if (!tb) throw new Error(`signoff: no testbench instantiates ${top}; compile one or give -tb <module>`);
+    const inst = instOf(tb)?.name;
+    if (!inst) throw new Error(`signoff: ${tb} does not instantiate ${top}`);
+    const rtlFiles = designFiles(this.libs, top);
+    const runArgs = time ? [time] : ['-all'];
+    const isCheck = (m: string) => /\$(setup|hold|setuphold|recovery|removal|recrem|width|period)\(/.test(m);
+    /** Simulate the testbench and collect its own output lines. */
+    const simulate = async (vsimArgs: string[]) => {
+      const lines: { m: string; k?: MsgKind }[] = [];
+      const print = this.print;
+      this.print = (m, k) => { lines.push({ m, k }); print(m, k); };
+      let ok = true;
+      try {
+        if (this.design) this.quitSim(true);
+        if ((await this.vsim(vsimArgs)) === false) ok = false;
+        else await this.run(runArgs);
+      } finally { this.print = print; if (this.design) this.quitSim(true); }
+      const out = lines.filter(l => (l.k ?? 'out') === 'out' && !/^(vsim |Loading |End time:|\s+Time: )/.test(l.m)).map(l => l.m);
+      return { ok, out, checks: lines.filter(l => isCheck(l.m)).length, errors: lines.filter(l => l.k === 'err').length };
+    };
+    this.out(`-- Signoff of ${top} with testbench ${tb}: RTL simulation`);
+    const rtl = await simulate([tb]);
+    if (!rtl.ok || rtl.errors) throw new Error('signoff: the RTL simulation failed');
+    this.out(`-- Signoff of ${top}: ASIC flow`);
+    const asicOk = await this.asic(['-top', top, ...asicArgs]);
+    const a = this.lastAsic?.result;
+    let gls: Awaited<ReturnType<typeof simulate>> | null = null;
+    try {
+      if (a) {
+        this.out(`-- Signoff of ${top}: post-layout simulation with asic/${top}.sdf (${mtm})`);
+        if (!this.compile('verilog', [`synth/${LIB_NAME}.v`, `synth/${top}_asic.v`], true)) throw new Error('signoff: the netlist does not compile');
+        gls = await simulate([`-sdf${mtm}`, `/${tb}/${inst}=asic/${top}.sdf`, tb]);
+      }
+    } finally {
+      // the library holds the RTL again
+      this.compile('verilog', rtlFiles, true);
+    }
+    const st = a?.timing.sta;
+    const sdcd = !!a?.sdc?.clocks.length;
+    const timingOk = !a ? false : sdcd ? st!.wns >= 0 && st!.whs >= 0 : true;
+    const diffs: string[] = [];
+    if (gls) for (let i = 0; i < Math.max(rtl.out.length, gls.out.length) && diffs.length < 5; i++) if (rtl.out[i] !== gls.out[i]) diffs.push(`  line ${i + 1}: RTL "${rtl.out[i] ?? ''}" / post-layout "${gls.out[i] ?? ''}"`);
+    const same = !!gls && gls.ok && !gls.errors && diffs.length === 0;
+    const pass = asicOk && timingOk && same && gls!.checks === 0;
+    const ok = (b: boolean) => (b ? 'ok' : 'FAIL');
+    const rep = [
+      `Signoff of ${top} (testbench ${tb}, instance /${tb}/${inst})`,
+      `  RTL simulation:          ${rtl.out.length} output lines`,
+      `  Layout:                  ${a ? `${a.nl.cells.length} cells, ${a.shorts} shorts, ${a.opens.length} opens, overflow ${a.r.overflow}` : 'not produced'}  [${ok(!!asicOk)}]`,
+      `  Timing:                  ${!a ? '-' : sdcd ? `setup WNS ${st!.wns.toFixed(3)} ns, hold WHS ${st!.whs.toFixed(3)} ns (SDC)` : `no SDC: estimate ${a.timing.fmax?.toFixed(0) ?? '-'} MHz (give -sdc for a constrained check)`}  [${ok(timingOk)}]`,
+      `  Post-layout simulation:  ${gls ? `${gls.out.length} output lines, ${gls.checks} timing-check violations` : 'not run'}  [${ok(!!gls && gls.ok && gls.checks === 0)}]`,
+      `  RTL vs post-layout:      ${same ? 'identical' : 'different'}  [${ok(same)}]`,
+      ...diffs,
+      `Signoff: ${pass ? 'PASS' : 'FAIL'}`,
+    ];
+    for (const l of rep) this.out(l, l.startsWith('Signoff: FAIL') ? 'err' : 'out');
+    if (this.fs.write) { this.fs.write(`asic/${top}_signoff.rpt`, rep.join('\n') + '\n'); this.out(`Wrote asic/${top}_signoff.rpt`); }
+    return pass;
   }
 
   /** The last openlane export: a zip to download. */

@@ -367,6 +367,9 @@ sta -paths 3
 - 지원 SDC: `create_clock`, `set_input_delay`, `set_output_delay`, `set_load`, `set_input_transition`, `set_clock_uncertainty`,
   `set_false_path`, `set_max_delay`, `set_min_delay`, 그리고 `get_ports`/`get_cells`/`get_pins`/`get_clocks`/`all_inputs`/`all_outputs`.
 
+이 전체 과정(RTL 시뮬레이션, ASIC 흐름, 배치 후 시뮬레이션, 출력 비교)은 `signoff -sdc cpu.sdc` 한 줄로도 돌릴 수 있습니다.
+결과는 PASS/FAIL 과 함께 `asic/cpu_signoff.rpt` 에 남습니다.
+
 같은 흐름이 쓴 `asic/<top>.sdf` 로 배치 후 지연을 넣어 게이트 레벨 시뮬레이션을 하면, 셀 모델의 `$setuphold` 검사가 위반을
 `** Warning` 으로 알려 줍니다.
 
@@ -448,6 +451,7 @@ run -all
 | `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
 | `sta [-sdc 파일] [-paths n] [-setup\|-hold]` | 마지막 `asic` 레이아웃의 정적 타이밍 분석. SDC 제약(클럭, 입출력 지연, 부하, 전환 시간, 불확실성, false path / max·min delay)으로 셋업·홀드 여유(WNS/TNS, WHS/THS)와 최악 경로 보고서를 출력하고 `asic/<top>_sta.rpt` 에 모든 끝점의 여유를 씀. 위반이 있으면 실패 |
 | `openlane [-top m] [-period ns] [-sdc 파일] [-util %]` | 설계를 OpenLane 2 / LibreLane(sky130) 프로젝트로 내보내기: `openlane/<top>/`(config.json, src/, SDC, README) 와 zip. 메뉴 **컴파일 ▸ OpenLane 로 내보내기 (sky130)** 는 zip 을 내려받음 |
+| `signoff [-top m] [-tb t] [-sdc 파일]` | 한 번에 사인오프: RTL 시뮬레이션 → `asic` → SDF 를 넣은 배치 후 시뮬레이션 → 테스트벤치 출력 비교. 레이아웃 정상, 타이밍 충족, 타이밍 검사 위반 없음, 출력 동일이면 PASS. `asic/<top>_signoff.rpt` |
 
 ### 기타
 
