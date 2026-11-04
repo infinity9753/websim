@@ -13,17 +13,28 @@ async function fresh(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('/');
-  // the first visit loads the 8-bit CPU example and runs its do-file
+  // the first visit loads the OpenTPU example and runs its do-file
   await expect(page.locator('.tr-out')).toContainText('Loaded example');
   await expect(page.locator('.tr-out')).toContainText('$finish', { timeout: 30_000 });
   return errors;
+}
+
+/** Switch to the 8-bit CPU example: small enough for synthesis, place and route and the ASIC flow. */
+async function cpuExample(page: Page) {
+  await cmd(page, 'quit -sim');
+  await cmd(page, 'vdel -lib work -all');
+  await page.getByText('File', { exact: true }).first().click();
+  await page.locator('.menu-item', { hasText: 'Load Example' }).first().click();
+  await page.locator('.menu-item', { hasText: '8-bit CPU' }).last().click();
+  await expect(page.locator('.tr-out')).toContainText('Halted at', { timeout: 30_000 });
+  await cmd(page, 'quit -sim');
 }
 
 test('first visit loads and runs the example', async ({ page }) => {
   const errors = await fresh(page);
   const project = page.locator('.pane-tab', { hasText: 'Project' });
   await project.click();
-  for (const f of ['cpu.v', 'tb_cpu.v', 'run_cpu.do']) await expect(page.locator('.pane-left .pane-page.active')).toContainText(f);
+  for (const f of ['opentpu.v', 'tb_opentpu.v', 'run_opentpu.do', 'OpenTPU_LICENSE.md']) await expect(page.locator('.pane-left .pane-page.active')).toContainText(f);
   await page.locator('.pane-tab', { hasText: 'Wave' }).click();
   await expect(page.locator('.wave-names .wave-row').first()).toBeVisible();
   expect(await page.locator('.wave-names .wave-row').count()).toBeGreaterThan(3);
@@ -51,8 +62,8 @@ test('Start Simulation dialog loads the selected unit', async ({ page }) => {
   await cmd(page, 'quit -sim');
   await page.locator('button[title="Start simulation…"]').click();
   const dlg = page.locator('.modal');
-  await expect(dlg).toContainText('tb_cpu');
-  await dlg.locator('tr', { hasText: 'tb_cpu' }).first().click();
+  await expect(dlg).toContainText('tb_opentpu');
+  await dlg.locator('tr', { hasText: 'tb_opentpu' }).first().click();
   await dlg.locator('.btn.primary').click();
   await expect(page.locator('.tr-in .prompt')).toHaveText('VSIM 1>');
   await expect(page.locator('.pane-mid .pane-page.active')).toContainText('clk');
@@ -74,13 +85,13 @@ test('wave cursor shows values and the time', async ({ page }) => {
 
 test('list, dataflow and coverage views', async ({ page }) => {
   await fresh(page);
-  await cmd(page, 'vsim -coverage work.tb_cpu');
-  await cmd(page, 'add list -radix unsigned /tb_cpu/out');
+  await cmd(page, 'vsim -coverage work.tb_opentpu');
+  await cmd(page, 'add list -radix hex /tb_opentpu/hostmem_raddr');
   await cmd(page, 'run 100 ns');
   await expect(page.locator('.list-grid tbody tr').first()).toBeVisible();
-  await page.locator('.pane-mid .pane-page.active tr').filter({ has: page.locator('td', { hasText: /^rdata$/ }) }).first().click({ button: 'right' });
+  await page.locator('.pane-mid .pane-page.active tr').filter({ has: page.locator('td', { hasText: /^hostmem_rdata$/ }) }).first().click({ button: 'right' });
   await page.locator('.ctx-menu .menu-item', { hasText: 'Show in Dataflow' }).click();
-  await expect(page.locator('.df-title')).toHaveText('/tb_cpu/rdata');
+  await expect(page.locator('.df-title')).toHaveText('/tb_opentpu/hostmem_rdata');
   await expect(page.locator('.df-proc').first()).toBeVisible();
   await cmd(page, 'coverage report');
   await expect(page.locator('.tr-out')).toContainText('Toggle bits');
@@ -99,6 +110,7 @@ test('switches the UI to Korean and back', async ({ page }) => {
 test('synthesizes the example with Yosys and simulates the netlist', async ({ page }) => {
   test.setTimeout(120_000);
   await fresh(page);
+  await cpuExample(page);
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('Synthesize (Yosys)…').click();
@@ -115,8 +127,8 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await expect(page.locator('.tr-out')).toContainText('Compiling file synth/cpu.v');
   await cmd(page, 'vsim work.tb_cpu');
   await cmd(page, 'run -all');
-  // the example's own run, then the generic netlist: both pass the testbench's checks
-  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(2);
+  // OpenTPU's and the CPU's own runs, then the generic netlist: all pass their testbench's checks
+  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(3);
   // the library now holds the netlist: synthesizing it again is refused until the RTL is compiled
   await cmd(page, 'quit -sim');
   await cmd(page, 'synth -target ice40');
@@ -134,12 +146,13 @@ test('synthesizes the example with Yosys and simulates the netlist', async ({ pa
   await cmd(page, 'vsim work.tb_cpu');
   await expect(page.locator('.tr-out')).toContainText('Loading work.SB_LUT4');
   await cmd(page, 'run -all');
-  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(3);
+  await expect(page.locator('.tr-out .tr-line', { hasText: /(^|\s)PASS$/ })).toHaveCount(4);
 });
 
 test('places and routes the example on iCE40 and draws the floorplan', async ({ page }) => {
   test.setTimeout(240_000);
   await fresh(page);
+  await cpuExample(page);
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('Place & Route (nextpnr)…').click();
@@ -186,6 +199,7 @@ test('runs the Python (cocotb) tests of an example in the browser', async ({ pag
 test('places and routes for ECP5 and Gowin (constraints template, gowin_pack on Pyodide) and downloads the bitstreams', async ({ page }) => {
   test.setTimeout(300_000);
   const errors = await fresh(page);
+  await cpuExample(page);
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('Place & Route (nextpnr)…').click();
@@ -223,6 +237,7 @@ test('places and routes for ECP5 and Gowin (constraints template, gowin_pack on 
 test('runs the educational ASIC flow and explores the layout', async ({ page }) => {
   test.setTimeout(120_000);
   const errors = await fresh(page);
+  await cpuExample(page);
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('ASIC Flow (layout, GDSII)…').click();

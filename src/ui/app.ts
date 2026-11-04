@@ -13,7 +13,7 @@ import { SynthesisView } from './synthesis';
 import { PnrView } from './pnr';
 import { LayoutView } from './chip';
 import { ProjectPanel, LibraryPanel, StructurePanel, ObjectsPanel, ProcessesPanel, MemoryPanel, LocalsPanel } from './panels';
-import { EXAMPLES } from './samples';
+import { EXAMPLES, exampleFiles } from './samples';
 import { fmtTime } from '../engine/format';
 import { t, getLang, setLang } from './i18n';
 
@@ -650,9 +650,10 @@ export class App {
   async loadExample(id: string, run: boolean) {
     const ex = EXAMPLES.find(e => e.id === id);
     if (!ex) return;
-    for (const [n, t] of Object.entries(ex.files)) { this.fs.write(n, t); this.editors.reload(n); }
+    const files = await exampleFiles(ex);
+    for (const [n, t] of Object.entries(files)) { this.fs.write(n, t); this.editors.reload(n); }
     this.transcript.print(t('Loaded example "{0}". Running {1} …', ex.title, ex.doFile), 'note');
-    const first = Object.keys(ex.files).find(f => langOf(f) !== 'do');
+    const first = Object.keys(files).find(f => langOf(f) === 'verilog' || langOf(f) === 'vhdl');
     if (first) this.editors.open(first);
     this.right.activate('wave');
     if (run) await this.cmd(`do ${ex.doFile}`);
@@ -666,7 +667,7 @@ export class App {
     this.fs.clear();
     this.session.resetLibraries();
     this.transcript.clear();
-    await this.loadExample('cpu', true);
+    await this.loadExample('opentpu', true);
   }
 
   togglePane(which: 'left' | 'mid') {
@@ -774,7 +775,7 @@ export class App {
     if (!this.state.seen) {
       this.state.seen = true;
       this.persist();
-      if (this.fs.empty) { await this.loadExample('cpu', true); return; }
+      if (this.fs.empty) { await this.loadExample('opentpu', true); return; }
     }
     if (this.state.compiled.length) {
       this.session.rebuild(this.state.compiled);

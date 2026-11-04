@@ -38,7 +38,25 @@ WebSim 은 브라우저에서 동작하는 Verilog / SystemVerilog / VHDL 이벤
 | 아래: 트랜스크립트 | 명령 입력 창과 시뮬레이터 출력. `file(line)` 형태의 위치는 클릭하면 해당 줄로 이동합니다. ↑/↓ 명령 기록, Tab 자동 완성. |
 | 상태 표시줄 | 실행 상태, 현재 시간, 델타, 현재 영역, 파형 히스토리 크기, 프로젝트와 라이브러리. |
 
-처음 방문하면 **8비트 CPU 예제**가 로드되고 `run_cpu.do` 가 실행됩니다. 다른 예제는 **파일 ▸ 예제 불러오기** 에서 고를 수 있습니다.
+처음 방문하면 **OpenTPU 예제**가 로드되고 `run_opentpu.do` 가 실행됩니다. 다른 예제(8비트 CPU, VHDL 카운터, FSM, cocotb 등)는 **파일 ▸ 예제 불러오기** 에서 고를 수 있습니다.
+
+### 예제: OpenTPU (TPU 방식 행렬 곱 가속기)
+
+[OpenTPU](https://github.com/UCSBarchlab/OpenTPU) 는 UC Santa Barbara ArchLab 이 구글 TPU 논문을 바탕으로 다시 구현한 오픈소스 신경망 추론 가속기입니다(BSD-3, `OpenTPU_LICENSE.md`). 원본은 Python HDL 인 PyRTL 로 작성되어 있어, `opentpu.v` 는 그 설계를 PyRTL 로 **Verilog 로 내보낸 것**입니다(약 1만 줄, 8×8 행렬 장치, 브라우저용으로 메모리 크기만 줄임 — 파일 머리말 참고).
+
+| 구성 | 역할 |
+|---|---|
+| 행렬 곱 장치(MMU) | 8×8 시스톨릭 배열의 int8 곱셈·누산기, 가중치 FIFO(이중 버퍼) |
+| 통합 버퍼(UB, `mem_1`) | 입력·출력 벡터(8바이트) 저장 |
+| 누산기(`mem_2`~`mem_9`) | 열마다 32비트 누산 결과 |
+| 활성화 장치 | ReLU / 시그모이드(`mem_10`~`mem_17` 은 시그모이드 표) 후 8비트로 양자화 |
+| 명령 메모리(`mem_0`) | 112비트 명령: `{opcode, flags, length, address(8B), UB address(3B)}` |
+
+명령: `RHM`(호스트 메모리 → UB), `RW`(가중치 DRAM → 가중치 FIFO), `MMC`(UB × 가중치 → 누산기), `ACT`(누산기 → 활성화 → UB), `WHM`(UB → 호스트 메모리), `NOP`, `HLT`.
+
+`tb_opentpu.v` 는 OpenTPU 의 `runtpu.py` 처럼 호스트 메모리와 가중치 DRAM 역할을 하면서 원본의 `simplemult` 프로그램(벡터 8개 읽기 → 가중치 타일 적재 → 행렬 곱 → ReLU → 결과 쓰기)을 실행합니다. 결과는 OpenTPU 자체 하드웨어 시뮬레이터와 기능 시뮬레이터가 낸 값과 비교해 `PASS`/`FAIL` 을 출력하며, 둘 다 429 사이클에 `HLT` 합니다. 파형 창에서 `pc`, `instr`, `dispatch_rhm/mm/act/whm`(명령 발행), 호스트 메모리 읽기·쓰기, `weights_dram_*`, `mm_busy`, `act_out` 을 따라가 보세요.
+
+규모가 커서 합성·FPGA 배치 배선·ASIC 흐름을 해 보려면 아래의 8비트 CPU 예제가 적당합니다.
 
 ### 예제: 8비트 CPU
 

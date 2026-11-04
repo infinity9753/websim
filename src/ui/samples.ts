@@ -1,6 +1,18 @@
 // Bundled example designs.
 
-export interface Example { id: string; title: string; files: Record<string, string>; top: string; doFile: string }
+import tbOpentpuV from './examples/tb_opentpu.v?raw';
+import opentpuLicense from './examples/OpenTPU_LICENSE.md?raw';
+
+export interface Example {
+  id: string; title: string; files: Record<string, string>; top: string; doFile: string;
+  /** Large files, loaded on demand (kept out of the main bundle). */
+  more?: () => Promise<Record<string, string>>;
+}
+
+/** All files of an example, the on-demand ones first. */
+export async function exampleFiles(ex: Example): Promise<Record<string, string>> {
+  return { ...(ex.more ? await ex.more() : {}), ...ex.files };
+}
 
 const counterV = `\`timescale 1ns/1ps
 // 4-bit synchronous counter with enable and synchronous reset
@@ -454,7 +466,33 @@ run -all
 wave zoom full
 `;
 
+const runOpentpu = `# OpenTPU (UCSB ArchLab), 8x8: a TPU-style matrix multiply accelerator running the "simplemult" program
+vlib work
+vlog opentpu.v tb_opentpu.v
+vsim work.tb_opentpu
+add wave /tb_opentpu/clk /tb_opentpu/rst
+add wave -radix unsigned /tb_opentpu/dut/pc
+add wave -radix hex /tb_opentpu/dut/instr
+add wave /tb_opentpu/dut/dispatch_rhm /tb_opentpu/dut/dispatch_mm /tb_opentpu/dut/dispatch_act /tb_opentpu/dut/dispatch_whm
+add wave /tb_opentpu/hostmem_re
+add wave -radix hex /tb_opentpu/hostmem_raddr /tb_opentpu/hostmem_rdata
+add wave /tb_opentpu/weights_dram_read /tb_opentpu/weights_dram_valid
+add wave /tb_opentpu/dut/mm_busy /tb_opentpu/dut/mm_done /tb_opentpu/dut/ub_act_we
+add wave -radix hex /tb_opentpu/dut/act_out
+add wave /tb_opentpu/hostmem_we
+add wave -radix hex /tb_opentpu/hostmem_waddr /tb_opentpu/hostmem_wdata
+add wave /tb_opentpu/halt
+run -all
+wave zoom full
+`;
+
 export const EXAMPLES: Example[] = [
+  {
+    id: 'opentpu', title: 'OpenTPU 8x8 (TPU-style matrix multiply accelerator)',
+    files: { 'tb_opentpu.v': tbOpentpuV, 'run_opentpu.do': runOpentpu, 'OpenTPU_LICENSE.md': opentpuLicense },
+    more: () => import('./examples/opentpu.v?raw').then(m => ({ 'opentpu.v': m.default as string })),
+    top: 'tb_opentpu', doFile: 'run_opentpu.do',
+  },
   { id: 'cpu', title: '8-bit CPU + testbench (Verilog)', files: { 'cpu.v': cpuV, 'tb_cpu.v': tbCpuV, 'run_cpu.do': runCpu }, top: 'tb_cpu', doFile: 'run_cpu.do' },
   { id: 'updown', title: 'VHDL up/down counter + testbench', files: { 'updown.vhd': counterVhd, 'tb_updown.vhd': tbVhd, 'run_updown.do': runVhd }, top: 'tb_updown', doFile: 'run_updown.do' },
   { id: 'traffic', title: 'SystemVerilog FSM (traffic light)', files: { 'traffic.sv': fsmSv, 'run_traffic.do': runFsm }, top: 'tb_traffic', doFile: 'run_traffic.do' },

@@ -19,6 +19,7 @@ assets from any commercial simulator and is not affiliated with any vendor.
 
 ## Third-party components
 
+- The default example `src/ui/examples/opentpu.v` is [OpenTPU](https://github.com/UCSBarchlab/OpenTPU) (Copyright (c) 2017, Regents of the University of California; BSD-3-Clause, see `src/ui/examples/OpenTPU_LICENSE.md`), exported to Verilog with [PyRTL](https://github.com/UCSBarchlab/PyRTL) 0.10.2. The testbench `tb_opentpu.v` is WebSim's.
 - Gate-level simulation of FPGA netlists uses the primitive models that ship with Yosys (`share/<family>/cells_sim.v`, ISC), read from the installed `@yowasp/yosys` package at build time.
 - Logic synthesis uses [Yosys](https://github.com/YosysHQ/yosys) through the [YoWASP](https://yowasp.org/) WebAssembly package `@yowasp/yosys` (ISC license). It is downloaded by the browser (about 77 MB) only when `synth` is first used.
 - Python (cocotb-compatible) testbenches run on [Pyodide](https://pyodide.org/) (MPL-2.0), downloaded (about 13 MB) only when `vsim -cocotb` is first used. The cocotb API layer (`src/engine/cocotb/`) is WebSim's own implementation of cocotb's public API; it does not include cocotb code.
@@ -35,14 +36,16 @@ npm run test:e2e # UI end-to-end tests (Playwright; run "npx playwright install 
 npm run build    # static site in dist/ (deployable anywhere, e.g. GitHub Pages)
 ```
 
-On first launch WebSim loads the 8-bit CPU example (an accumulator machine running a Fibonacci program) and runs it.
-Try the other examples under **File ▸ Load Example**, or type in the transcript:
+On first launch WebSim loads the OpenTPU example — UCSB ArchLab's open-source TPU (an 8x8 systolic matrix
+multiply unit with unified buffer, accumulators and activation unit), exported from PyRTL to Verilog — and runs a
+matrix multiply program on it. Try the other examples (an 8-bit CPU, VHDL, SystemVerilog, cocotb, mixed language)
+under **File ▸ Load Example**, or type in the transcript:
 
 ```tcl
 vlib work
-vlog cpu.v tb_cpu.v
-vsim work.tb_cpu
-add wave -r /*
+vlog opentpu.v tb_opentpu.v
+vsim work.tb_opentpu
+add wave -r /tb_opentpu/*
 run -all
 ```
 
