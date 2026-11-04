@@ -49,7 +49,10 @@ describe('bundled examples', () => {
     // post-layout: the asic flow writes an SDF with the load-dependent delays of every cell
     await s.exec('quit -sim; vlog cpu.v');
     out.length = 0;
-    expect(await s.exec('asic'), out.join('\n')).toBe(true);
+    expect(await s.exec('asic -sdc cpu.sdc'), out.join('\n')).toBe(true);
+    expect(out.filter(l => /\*\* Warning/.test(l))).toEqual([]);
+    expect(out.join('\n')).toMatch(/Timing \(SDC\): Setup: WNS 0\.000 ns, TNS 0\.000 ns, 0 of \d+ endpoints violated/);
+    expect(out.join('\n')).toMatch(/Timing \(SDC\): Hold: +WHS 0\.000 ns/);
     const sdf = fs['asic/cpu.sdf'];
     const a = s.lastAsic!.result!;
     const timed = a.nl.cells.filter(c => c.def.inputs.length).length;

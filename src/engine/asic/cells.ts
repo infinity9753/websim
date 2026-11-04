@@ -74,7 +74,33 @@ export const CELLS: CellDef[] = [
 export const CELL = new Map(CELLS.map(c => [c.name, c]));
 
 /** Input pin capacitance, pF. */
-const PIN_CAP = 0.002;
+export const PIN_CAP = 0.002;
+
+// NLDM tables (#57): delay and output transition by input transition (ns) and output load (pF), from an invented
+// smooth model; the STA interpolates in these tables like a Liberty-based tool. Fall values are 0.9 x rise.
+export const SLEW_IDX = [0.01, 0.04, 0.1, 0.25, 0.6];
+export const LOAD_IDX = [0.001, 0.004, 0.01, 0.025, 0.06];
+export interface Nldm { rise: number[][]; fall: number[][]; riseTr: number[][]; fallTr: number[][] }
+const nldmCache = new Map<string, Nldm>();
+export function nldm(c: CellDef): Nldm {
+  let t = nldmCache.get(c.name);
+  if (t) return t;
+  const grid = (f: (slew: number, ff: number) => number) => SLEW_IDX.map(s => LOAD_IDX.map(l => Number(f(s, l * 1000).toFixed(4))));
+  const rise = grid((s, ff) => c.delay + c.slope * ff * (1 + 0.5 * s) + 0.2 * s);
+  const riseTr = grid((s, ff) => 0.5 * c.delay + 2 * c.slope * ff + 0.15 * s);
+  const x9 = (g: number[][]) => g.map(r => r.map(v => Number((v * 0.9).toFixed(4))));
+  t = { rise, fall: x9(rise), riseTr, fallTr: x9(riseTr) };
+  nldmCache.set(c.name, t);
+  return t;
+}
+
+/** Bilinear interpolation in a table over SLEW_IDX x LOAD_IDX, extrapolating linearly outside. */
+export function lookup(t: number[][], slew: number, load: number): number {
+  const seg = (idx: number[], v: number) => { let i = 0; while (i < idx.length - 2 && v > idx[i + 1]) i++; return [i, (v - idx[i]) / (idx[i + 1] - idx[i])] as const; };
+  const [i, fx] = seg(SLEW_IDX, slew), [j, fy] = seg(LOAD_IDX, load);
+  const a = t[i][j] + (t[i][j + 1] - t[i][j]) * fy, b = t[i + 1][j] + (t[i + 1][j + 1] - t[i + 1][j]) * fy;
+  return a + (b - a) * fx;
+}
 const um2 = (c: CellDef) => ((c.width * TRACK) * ROW_H) / 1e6;
 const num = (v: number) => v.toFixed(4);
 
@@ -97,18 +123,25 @@ export function liberty(): string {
     '  default_input_pin_cap : 0.002;',
     '  default_output_pin_cap : 0;',
     '  default_fanout_load : 1;',
+    '  lu_table_template(delay_5x5) {',
+    '    variable_1 : input_net_transition;',
+    '    variable_2 : total_output_net_capacitance;',
+    `    index_1 ("${SLEW_IDX.join(', ')}");`,
+    `    index_2 ("${LOAD_IDX.join(', ')}");`,
+    '  }',
   ];
-  const timing = (pin: string, d: number, sense?: string, type?: string) => [
-    '      timing() {',
-    `        related_pin : "${pin}";`,
-    ...(sense ? [`        timing_sense : ${sense};`] : []),
-    ...(type ? [`        timing_type : ${type};`] : []),
-    `        cell_rise(scalar) { values("${num(d)}"); }`,
-    `        cell_fall(scalar) { values("${num(d * 0.9)}"); }`,
-    `        rise_transition(scalar) { values("${num(d * 0.5)}"); }`,
-    `        fall_transition(scalar) { values("${num(d * 0.45)}"); }`,
-    '      }',
-  ];
+  const table = (name: string, g: number[][]) => [`        ${name}(delay_5x5) {`, `          values (${g.map(r => `"${r.map(num).join(', ')}"`).join(', \\\n                  ')});`, '        }'];
+  const timing = (c: CellDef, pin: string, scale: number, sense?: string, type?: string) => {
+    const t = nldm(c), k = (g: number[][]) => g.map(r => r.map(v => v * scale));
+    return [
+      '      timing() {',
+      `        related_pin : "${pin}";`,
+      ...(sense ? [`        timing_sense : ${sense};`] : []),
+      ...(type ? [`        timing_type : ${type};`] : []),
+      ...table('cell_rise', k(t.rise)), ...table('cell_fall', k(t.fall)), ...table('rise_transition', t.riseTr), ...table('fall_transition', t.fallTr),
+      '      }',
+    ];
+  };
   const constraint = (pin: string, type: string, v: number) => [
     '      timing() {', `        related_pin : "${pin}";`, `        timing_type : ${type};`,
     `        rise_constraint(scalar) { values("${num(v)}"); }`, `        fall_constraint(scalar) { values("${num(v)}"); }`, '      }',
@@ -132,9 +165,9 @@ export function liberty(): string {
     if (c.output) {
       o.push(`    pin(${c.output}) {`, '      direction : output;', `      function : "${c.ff ? 'IQ' : c.fn}";`);
       if (c.ff) {
-        o.push(...timing(c.ff.clk, c.delay, undefined, 'rising_edge'));
-        if (c.ff.reset) o.push(...timing(c.ff.reset, c.delay * 0.8, 'positive_unate', 'clear'));
-      } else for (const p of c.inputs) o.push(...timing(p, c.delay, /^!/.test(c.fn ?? '') ? 'negative_unate' : c.name.startsWith('X') || c.name === 'MUX2' ? 'non_unate' : 'positive_unate'));
+        o.push(...timing(c, c.ff.clk, 1, undefined, 'rising_edge'));
+        if (c.ff.reset) o.push(...timing(c, c.ff.reset, 0.8, 'positive_unate', 'clear'));
+      } else for (const p of c.inputs) o.push(...timing(c, p, 1, /^!/.test(c.fn ?? '') ? 'negative_unate' : c.name.startsWith('X') || c.name === 'MUX2' ? 'non_unate' : 'positive_unate'));
       o.push('    }');
     }
     o.push('  }');

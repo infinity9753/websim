@@ -16,6 +16,7 @@ export class LayoutView {
   private info: HTMLElement;
   private layerBox: HTMLElement;
   private util: HTMLInputElement;
+  private sdc: HTMLInputElement;
   private layers: HTMLSelectElement;
   private search: HTMLInputElement;
   private data: LayoutData | null = null;
@@ -31,6 +32,7 @@ export class LayoutView {
   constructor(private session: Session) {
     this.util = h('input', { class: 'tb-field', type: 'number', min: '0.1', max: '0.95', step: '0.05', value: '0.6', title: t('Target core utilization'), style: { width: '60px' } });
     this.layers = h('select', { class: 'tb-field', 'aria-label': t('Routing layers'), title: t('Routing layers') }, [2, 3, 4].map(n => h('option', { value: String(n), selected: n === 3 }, `M2–M${n + 1}`)));
+    this.sdc = h('input', { class: 'tb-field', placeholder: t('SDC file'), 'aria-label': t('SDC file'), title: t('Timing constraints (SDC file in the project, optional)'), style: { width: '110px' } });
     this.search = h('input', { class: 'tb-field', placeholder: t('net name'), 'aria-label': t('Highlight net'), style: { width: '120px' }, onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') this.findNet(this.search.value.trim()); } });
     this.canvas = h('canvas', { class: 'chip-canvas', 'aria-label': t('Layout') });
     this.status = h('div', { class: 'synth-status kind' });
@@ -41,6 +43,7 @@ export class LayoutView {
       h('div', { class: 'subbar' },
         h('label', { class: 'synth-opt' }, t('Utilization'), ' ', this.util),
         h('label', { class: 'synth-opt' }, t('Layers'), ' ', this.layers),
+        this.sdc,
         h('button', { class: 'tb-btn', title: t('Synthesize, place and route (ASIC)'), 'aria-label': t('Synthesize, place and route (ASIC)'), onclick: () => void this.run() }, icon('compileall')),
         h('span', { class: 'grow' }),
         this.search,
@@ -75,7 +78,8 @@ export class LayoutView {
 
   private async run() {
     this.status.textContent = t('Running synthesis, placement and routing…');
-    await this.session.exec(`asic -util ${Number(this.util.value) || 0.6} -layers ${this.layers.value}`);
+    const sdc = this.sdc.value.trim();
+    await this.session.exec(`asic -util ${Number(this.util.value) || 0.6} -layers ${this.layers.value}${sdc ? ` -sdc ${sdc}` : ''}`);
   }
 
   private open(ext: string) { const a = this.session.lastAsic; if (a) this.onOpenFile?.(a.base + ext); }

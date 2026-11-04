@@ -105,6 +105,16 @@ module cpu (
 endmodule
 `;
 
+const cpuSdc = `# Timing constraints of the CPU for the ASIC flow (asic -sdc cpu.sdc; sta -paths 3)
+create_clock -name clk -period 4 [get_ports clk]
+set_clock_uncertainty 0.1
+# the memory answers within half a cycle; outputs are sampled 0.5 ns before the next edge
+set_input_delay -clock clk 2 [get_ports {rdata rst}]
+set_output_delay -clock clk 0.5 [all_outputs]
+set_load 0.01 [all_outputs]
+set_input_transition 0.05 [all_inputs]
+`;
+
 const tbCpuV = `\`timescale 1ns/1ps
 // Testbench: 16-byte memory with a program that prints the Fibonacci numbers until they overflow 8 bits.
 module tb_cpu;
@@ -493,7 +503,7 @@ export const EXAMPLES: Example[] = [
     more: () => import('./examples/opentpu.v?raw').then(m => ({ 'opentpu.v': m.default as string })),
     top: 'tb_opentpu', doFile: 'run_opentpu.do',
   },
-  { id: 'cpu', title: '8-bit CPU + testbench (Verilog)', files: { 'cpu.v': cpuV, 'tb_cpu.v': tbCpuV, 'run_cpu.do': runCpu }, top: 'tb_cpu', doFile: 'run_cpu.do' },
+  { id: 'cpu', title: '8-bit CPU + testbench (Verilog)', files: { 'cpu.v': cpuV, 'tb_cpu.v': tbCpuV, 'cpu.sdc': cpuSdc, 'run_cpu.do': runCpu }, top: 'tb_cpu', doFile: 'run_cpu.do' },
   { id: 'updown', title: 'VHDL up/down counter + testbench', files: { 'updown.vhd': counterVhd, 'tb_updown.vhd': tbVhd, 'run_updown.do': runVhd }, top: 'tb_updown', doFile: 'run_updown.do' },
   { id: 'traffic', title: 'SystemVerilog FSM (traffic light)', files: { 'traffic.sv': fsmSv, 'run_traffic.do': runFsm }, top: 'tb_traffic', doFile: 'run_traffic.do' },
   { id: 'cocotb', title: 'Python (cocotb) tests of the Verilog counter', files: { 'counter.v': counterV, 'test_counter.py': cocotbPy, 'run_cocotb.do': runCocotb }, top: 'counter', doFile: 'run_cocotb.do' },

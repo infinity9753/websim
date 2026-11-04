@@ -16,6 +16,8 @@ import { CocotbRun } from './cocotb';
 import { FPGA_SIM_TARGETS, fpgaSimModels } from './fpgasim';
 import { LIB_NAME, liberty, verilogModels } from './asic/cells';
 import { runAsic, summary, type AsicResult } from './asic/flow';
+import { readSdc } from './asic/sdc';
+import { sta, staSummary, reportPath } from './asic/sta';
 import type { Vec } from './logic';
 import { annotate as annotateSdf, type Mtm } from './sdf';
 
@@ -177,6 +179,7 @@ export class Session {
       case 'synth': return this.synth(rest);
       case 'pnr': return this.pnr(rest);
       case 'asic': return this.asic(rest);
+      case 'sta': return this.staCmd(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -210,7 +213,8 @@ export class Session {
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
       '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
-      '  asic [-top m] [-util 0.6] [-layers 3]  educational ASIC flow: cells, placement, routing, DEF / GDSII',
+      '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
+      '  sta [-sdc f] [-paths n] [-setup|-hold]  static timing analysis of the layout: slack, path reports',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -1100,15 +1104,16 @@ export class Session {
   lastAsic: { run: number; top: string; base: string; ok: boolean; summary: string[]; result?: AsicResult } | null = null;
 
   /**
-   * asic [-top m] [-util 0.6] [-layers 2..4] [files]
+   * asic [-top m] [-util 0.6] [-layers 2..4] [-sdc file] [files]
    * Educational ASIC flow: synth -target asic, floorplan and placement, routing, checks, timing estimate, DEF / LEF / GDSII.
    */
   async asic(args: string[]) {
-    let util: number | undefined, layers: number | undefined;
+    let util: number | undefined, layers: number | undefined, sdcFile: string | undefined;
     const synthArgs: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '-util') util = Number(args[++i]);
+      else if (a === '-sdc') sdcFile = args[++i];
       else if (a === '-layers') layers = Number(args[++i]);
       else if (a === '-top') synthArgs.push(a, args[++i]);
       else if (a.startsWith('-')) throw new Error(`asic: unknown option ${a}`);
@@ -1116,6 +1121,8 @@ export class Session {
     }
     if (util !== undefined && !(util >= 0.1 && util <= 0.95)) throw new Error('asic: -util expects a target utilization between 0.1 and 0.95');
     if (layers !== undefined && ![2, 3, 4].includes(layers)) throw new Error('asic: -layers expects 2, 3 or 4 routing layers (M2 up to M5)');
+    const sdc = sdcFile === undefined ? undefined : this.fs.read(sdcFile);
+    if (sdcFile !== undefined && sdc === undefined) throw new Error(`asic: cannot read SDC file ${sdcFile}`);
     if (!(await this.synth([...synthArgs, '-target', 'asic']))) return false;
     const s = this.lastSynth!;
     const json = this.fs.read(`${s.base}.json`);
@@ -1124,13 +1131,14 @@ export class Session {
     const base = `asic/${s.top}`;
     let r: AsicResult;
     try {
-      r = runAsic(json, s.top, { util, layers });
+      r = runAsic(json, s.top, { util, layers, sdc });
     } catch (e) {
       this.out(`** Error: (asic) ${(e as Error).message}`, 'err');
       this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: false, summary: [] };
       this.emit('synth');
       return false;
     }
+    for (const w of r.sdc?.warnings ?? []) this.out(`** Warning: (sdc) ${sdcFile}: ${w}`, 'warn');
     const sum = summary(r);
     for (const l of sum) this.out(l, !r.ok && /^(Routing|Checks)/.test(l) ? 'warn' : 'out');
     if (this.fs.write) {
@@ -1144,6 +1152,50 @@ export class Session {
     this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
     this.emit('synth');
     return r.ok;
+  }
+
+  /**
+   * sta [-sdc file] [-paths n] [-hold|-setup] [-file f]
+   * Static timing analysis of the last asic layout against SDC constraints, with path reports.
+   */
+  staCmd(args: string[]) {
+    const a = this.lastAsic?.result;
+    if (!a) throw new Error('sta: run the asic flow first (asic [-sdc file])');
+    let file: string | undefined, out: string | undefined, n = 1, which: 'both' | 'setup' | 'hold' = 'both';
+    for (let i = 0; i < args.length; i++) {
+      const x = args[i];
+      if (x === '-sdc') file = args[++i];
+      else if (x === '-paths') { n = Number(args[++i]); if (!(n >= 1)) throw new Error('sta: -paths expects a positive count'); }
+      else if (x === '-hold') which = 'hold';
+      else if (x === '-setup') which = 'setup';
+      else if (x === '-file') out = args[++i];
+      else throw new Error(`sta: unknown option ${x}`);
+    }
+    let sdc = a.sdc;
+    if (file !== undefined) {
+      const text = this.fs.read(file);
+      if (text === undefined) throw new Error(`sta: cannot read SDC file ${file}`);
+      sdc = readSdc(text, a.nl);
+    }
+    if (!sdc?.clocks.length) throw new Error('sta: no clocks; give constraints with -sdc <file> (create_clock -period <ns> [get_ports clk])');
+    const { res } = sta(a.nl, a.r, sdc);
+    for (const w of res.warnings) this.out(`** Warning: (sta) ${w}`, 'warn');
+    for (const l of staSummary(res)) this.out(l);
+    const paths = [...(which !== 'hold' ? res.setup.slice(0, n) : []), ...(which !== 'setup' ? res.hold.slice(0, n) : [])];
+    for (const p of paths) for (const l of ['', ...reportPath(p).split('\n')]) this.out(l, p.slack < -1e-9 && /slack \(VIOLATED\)/.test(l) ? 'warn' : 'out');
+    const target = out ?? `asic/${a.nl.top}_sta.rpt`;
+    if (this.fs.write) {
+      const viol = (l: typeof res.setup) => l.filter(p => p.slack < -1e-9);
+      const rep = [
+        `Static timing analysis: ${a.nl.top}${file ? ` (${file})` : ''}`, '', ...staSummary(res),
+        '', 'Setup slack per endpoint:', ...res.setup.map(p => `  ${p.slack.toFixed(3).padStart(9)}  ${p.endpoint}  <- ${p.startpoint}`),
+        '', 'Hold slack per endpoint:', ...res.hold.map(p => `  ${p.slack.toFixed(3).padStart(9)}  ${p.endpoint}  <- ${p.startpoint}`),
+        ...[...viol(res.setup), ...viol(res.hold), ...(viol(res.setup).length ? [] : res.setup.slice(0, 1)), ...(viol(res.hold).length ? [] : res.hold.slice(0, 1))].slice(0, 50).flatMap(p => ['', reportPath(p)]),
+      ];
+      this.fs.write(target, rep.join('\n') + '\n');
+      this.out(`Wrote ${target}`);
+    }
+    return res.wns >= 0 && res.whs >= 0;
   }
 
   /** coverage report [-details] [-file f] | coverage clear */

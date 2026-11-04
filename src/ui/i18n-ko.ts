@@ -398,6 +398,8 @@ export const KO: Record<string, string> = {
   'ASIC Flow (layout, GDSII)…': 'ASIC 흐름 (레이아웃, GDSII)…',
   'Target core utilization': '목표 코어 사용률',
   'Routing layers': '배선 층',
+  'SDC file': 'SDC 파일',
+  'Timing constraints (SDC file in the project, optional)': '타이밍 제약 (프로젝트의 SDC 파일, 선택)',
   'net name': '넷 이름',
   'Highlight net': '넷 강조',
   'Utilization': '사용률',

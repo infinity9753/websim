@@ -7,10 +7,11 @@ import { buildLayout, type Layout } from './layout';
 import { readNetlist, type Netlist } from './netlist';
 import { place, type Placement } from './place';
 import { route, verifyRouting, type Routing } from './route';
-import { analyze, type Timing } from './sta';
+import { analyze, reportPath, staSummary, type Timing } from './sta';
+import { readSdc, type Sdc } from './sdc';
 import { writeSdf } from './sdf';
 
-export interface AsicOptions { util?: number; layers?: number }
+export interface AsicOptions { util?: number; layers?: number; /** SDC text: constrained STA instead of the ideal-clock estimate. */ sdc?: string }
 export interface AsicResult {
   nl: Netlist; p: Placement; r: Routing; layout: Layout; timing: Timing;
   shorts: number; opens: string[];
@@ -18,6 +19,7 @@ export interface AsicResult {
   /** Clean: everything routed, no overflow, shorts or opens. */
   ok: boolean;
   ms: { place: number; route: number };
+  sdc?: Sdc;
 }
 
 const um = (tracks: number) => (tracks * TRACK) / 1000;
@@ -32,11 +34,12 @@ export function runAsic(json: string, top: string, o: AsicOptions = {}): AsicRes
   const tRoute = Date.now() - t;
   const v = verifyRouting(nl, p, r);
   const layout = buildLayout(nl, p, r);
-  const timing = analyze(nl, r);
+  const sdc = o.sdc !== undefined ? readSdc(o.sdc, nl) : undefined;
+  const timing = analyze(nl, r, sdc);
   const ok = r.overflow === 0 && !r.unrouted.length && !v.shorts.length && !v.opens.length;
   const res: AsicResult = {
-    nl, p, r, layout, timing, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
-    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r), gds: writeGds(layout), report: '',
+    nl, p, r, layout, timing, sdc, shorts: v.shorts.length, opens: v.opens, ok, ms: { place: tPlace, route: tRoute },
+    def: writeDef(nl, p, r, layout), lef: writeLef(r.layers + 1), sdf: writeSdf(nl, r, sdc), gds: writeGds(layout), report: '',
   };
   res.report = report(res);
   return res;
@@ -51,7 +54,8 @@ export function summary(a: AsicResult): string[] {
     `Routing: ${r.layers} layers (M2-M${r.layers + 1}), ${r.iterations} iterations, wirelength ${um(r.wirelength).toFixed(1)} um, ${r.viaCount} vias, overflow ${r.overflow} (${a.ms.route} ms)`,
     `Checks: ${a.shorts} shorts, ${a.opens.length} opens, ${r.unrouted.length} unrouted nets`,
   ];
-  if (timing.critical) lines.push(`Timing (estimate): critical path ${timing.critical.delay.toFixed(3)} ns, max frequency ${timing.fmax!.toFixed(0)} MHz`);
+  if (a.sdc?.clocks.length) lines.push(...staSummary(timing.sta).map(l => `Timing (SDC): ${l}`));
+  else if (timing.critical) lines.push(`Timing (estimate): critical path ${timing.critical.delay.toFixed(3)} ns, max frequency ${timing.fmax!.toFixed(0)} MHz`);
   else if (timing.output) lines.push(`Timing (estimate): combinational, worst input-to-output ${timing.output.delay.toFixed(3)} ns`);
   return lines;
 }
@@ -80,8 +84,15 @@ function report(a: AsicResult): string {
     if (!t) return;
     o.push('', `${title}: ${t.delay.toFixed(3)} ns`, ...t.points.map(pt => `  ${pt.time.toFixed(3).padStart(8)}  ${pt.at}`));
   };
-  path('Critical path (register / input to register)', a.timing.critical);
-  path('Worst path to an output', a.timing.output);
+  if (a.sdc?.clocks.length) {
+    const st = a.timing.sta;
+    o.push('', 'Static timing analysis (SDC):', ...staSummary(st).map(l => `  ${l}`));
+    if (st.warnings.length) o.push('', 'SDC warnings:', ...st.warnings.map(w => `  ${w}`));
+    for (const p of [st.setup[0], st.hold[0]]) if (p) o.push('', reportPath(p));
+  } else {
+    path('Critical path (register / input to register)', a.timing.critical);
+    path('Worst path to an output', a.timing.output);
+  }
   if (a.timing.loops) o.push('', `Combinational loops broken for timing: ${a.timing.loops}`);
   if (a.opens.length) o.push('', 'Open nets:', ...a.opens.map(n => `  ${n}`));
   return o.join('\n') + '\n';

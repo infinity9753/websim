@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Session } from '../src/engine/commands';
+import { EXAMPLES } from '../src/ui/samples';
 
 // The tutorial code in docs/GUIDE.md must keep working.
 const guide = (import.meta as unknown as { glob: (p: string, o: object) => Record<string, string> }).glob('../docs/GUIDE.md', { query: '?raw', import: 'default', eager: true });
@@ -28,4 +29,18 @@ describe('user guide tutorials (#44)', () => {
     expect(out.join("\n")).not.toMatch(/\*\* Error/);
     expect(out.some(l => /led = '[01]'/.test(l))).toBe(true);
   });
+
+  it('STA and post-layout timing simulation of the CPU example run as written', async () => {
+    const fs: Record<string, string> = { ...EXAMPLES.find(e => e.id === 'cpu')!.files };
+    const out: string[] = [];
+    const s = new Session({ read: n => fs[n], list: () => Object.keys(fs), write: (n, t) => { fs[n] = t; } }, m => out.push(m));
+    const sta = blocks('tcl').find(b => b.includes('asic -sdc cpu.sdc'))!;
+    const gls = blocks('tcl').find(b => b.includes('-sdftyp'))!;
+    expect(await s.exec(sta.trim().split('\n').join('; ')), out.join('\n')).toBe(true);
+    expect(out.filter(l => l.startsWith('Startpoint:')).length).toBe(6);
+    out.length = 0;
+    expect(await s.exec(gls.trim().split('\n').join('; '))).toBe(true);
+    expect(out).toContain('PASS');
+    expect(out.filter(l => l.startsWith('** Warning'))).toEqual([]);
+  }, 120_000);
 });

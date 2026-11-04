@@ -319,13 +319,14 @@ FPGA 대신 표준 셀 칩을 만드는 과정(합성 → 배치 → 배선 → 
    - **플로어플랜**: 사용률에 맞춘 정사각형 코어, 8트랙 높이의 행(행마다 상하 반전해 전원 레일 공유), IO 핀은 연결된 셀 쪽 가장자리에 배치
    - **배치**: 이차(quadratic) 전역 배치 + 확산(spreading), 행 단위 합법화(Abacus), 배선 길이(HPWL) 기반 세부 배치, 빈칸은 필러 셀
    - **배선**: M2/M4 가로, M3/M5 세로 트랙 격자에서 A* 미로 배선과 혼잡도 협상(PathFinder) 재배선, 셀 핀은 via1 로 연결, 전원은 M1 레일과 M3 스트랩
-   - **검사와 타이밍**: 형상 기준 단락/개방 검사, 셀 지연 + 핀·배선 부하로 임계 경로와 최대 주파수 추정
+   - **검사와 타이밍**: 형상 기준 단락/개방 검사, 셀 지연 표(NLDM) + 핀·배선 부하로 임계 경로와 최대 주파수 추정(SDC 파일을 주면 제약 기반 정적 타이밍 분석)
 4. 레이아웃 창에서
    - 휠로 확대/축소, 드래그로 이동, 확대하면 셀 내부(웰, 확산, 폴리, 콘택트, M1)와 셀 이름이 보입니다.
+   - **SDC 파일** 칸에 프로젝트의 제약 파일(예: `cpu.sdc`)을 적으면 `asic -sdc` 로 실행합니다.
    - 왼쪽에서 층별로 켜고 끕니다. 도형을 클릭하거나 넷 이름을 입력하면 그 넷이 강조되고 층별 길이와 비아 수가 표시됩니다.
    - **임계 경로** 는 타이밍 임계 경로의 셀을 빨간 테두리로 표시합니다.
    - **GDSII** 로 `<top>.gds` 를 내려받아 KLayout 등 다른 레이아웃 뷰어에서 열 수 있고, **DEF**/**보고서** 는 편집기에서 엽니다.
-5. 결과 파일: `asic/<top>.def`(배치·배선), `asic/<top>.rpt`(면적, 셀 수, 층별 배선 길이, IO 위치, 임계 경로), `asic/websim_edu.lef`(층과 셀 추상 뷰). 합성 넷리스트와 셀 시뮬레이션 모델(`synth/websim_edu.v`)로 게이트 레벨 시뮬레이션도 할 수 있습니다.
+5. 결과 파일: `asic/<top>.def`(배치·배선), `asic/<top>.sdf`(셀 지연과 타이밍 검사 값), `asic/<top>.rpt`(면적, 셀 수, 층별 배선 길이, IO 위치, 임계 경로), `asic/websim_edu.lef`(층과 셀 추상 뷰). 합성 넷리스트와 셀 시뮬레이션 모델(`synth/websim_edu.v`)로 게이트 레벨 시뮬레이션도 할 수 있습니다.
 
 ```tcl
 vlog cpu.v
@@ -333,6 +334,33 @@ asic -top cpu -util 0.7 -layers 3
 ```
 
 단락·개방·미배선이 남으면 `asic` 은 오류를 반환합니다. 이때는 사용률을 낮추거나(`-util 0.5`) 배선 층을 늘리세요(`-layers 4`). 래치처럼 라이브러리에 없는 기억 소자는 합성 단계에서 거부됩니다.
+
+#### 정적 타이밍 분석(STA)과 배치 후 타이밍 시뮬레이션
+
+8비트 CPU 예제에는 제약 파일 `cpu.sdc` 가 들어 있습니다(클럭 4 ns, 입력·출력 지연, 부하, 전환 시간). `asic -sdc` 로 흐름을
+돌리면 요약에 셋업·홀드 여유가 나오고, `sta` 로 경로 보고서를 봅니다.
+
+```tcl
+vlog cpu.v
+asic -sdc cpu.sdc
+sta -paths 3
+```
+
+- 지연은 셀 라이브러리의 2차원 표(입력 전환 시간 × 출력 부하)에서 보간해 구하고, 부하는 핀 용량·배선 길이·출력 포트 부하의 합입니다.
+  셋업은 큰 지연, 홀드는 작은 지연으로 검사합니다. 클럭은 이상적(클럭 트리 지연 없음)입니다.
+- 보고서는 시작점 → 끝점의 핀마다 증분 지연, 누적 시각, 전환 시간, 부하와 필요 시각, 여유(MET / VIOLATED)를 보여 줍니다.
+  모든 끝점의 여유는 `asic/<top>_sta.rpt` 에 씁니다. 위반이 있으면 `sta` 가 실패합니다.
+- 지원 SDC: `create_clock`, `set_input_delay`, `set_output_delay`, `set_load`, `set_input_transition`, `set_clock_uncertainty`,
+  `set_false_path`, `set_max_delay`, `set_min_delay`, 그리고 `get_ports`/`get_cells`/`get_pins`/`get_clocks`/`all_inputs`/`all_outputs`.
+
+같은 흐름이 쓴 `asic/<top>.sdf` 로 배치 후 지연을 넣어 게이트 레벨 시뮬레이션을 하면, 셀 모델의 `$setuphold` 검사가 위반을
+`** Warning` 으로 알려 줍니다.
+
+```tcl
+vlog synth/websim_edu.v synth/cpu_asic.v tb_cpu.v
+vsim -sdftyp /tb_cpu/dut=asic/cpu.sdf work.tb_cpu
+run -all
+```
 
 ## 7. 프로젝트, 폴더, 검색
 
@@ -403,7 +431,8 @@ asic -top cpu -util 0.7 -layers 3
 |---|---|
 | `synth [-top m] [-target generic\|asic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
-| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
+| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
+| `sta [-sdc 파일] [-paths n] [-setup\|-hold]` | 마지막 `asic` 레이아웃의 정적 타이밍 분석. SDC 제약(클럭, 입출력 지연, 부하, 전환 시간, 불확실성, false path / max·min delay)으로 셋업·홀드 여유(WNS/TNS, WHS/THS)와 최악 경로 보고서를 출력하고 `asic/<top>_sta.rpt` 에 모든 끝점의 여유를 씀. 위반이 있으면 실패 |
 
 ### 기타
 
