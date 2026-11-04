@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { Session } from '../src/engine/commands';
 
 // Every transcript command must be in the help text, the specification and the user guide (#61).
-const src = readFileSync('src/engine/commands.ts', 'utf8');
+const raw = (import.meta as unknown as { glob: (p: string[], o: object) => Record<string, string> }).glob(['../src/engine/commands.ts', '../docs/SPEC.md', '../docs/GUIDE.md'], { query: '?raw', import: 'default', eager: true });
+const file = (name: string) => Object.entries(raw).find(([k]) => k.endsWith(name))![1];
+const src = file('commands.ts');
 const body = src.slice(src.indexOf('private async run1('), src.indexOf('emitClear?: () => void;'));
 // accepted for compatibility with existing scripts, but they do nothing: not documented one by one
 const compat = new Set(['transcript', 'onfinish', 'onbreak', 'onerror', 'set', 'configure', 'update', 'quietly', 'treeupdate', 'waverestorecursors', 'waverestorezoom', 'view']);
 // aliases of a documented command
 const alias = new Set(['exit', 'exa', 'cls', 'source']);
 const commands = [...new Set([...body.matchAll(/case '([\w.]+)'/g)].map(m => m[1].toLowerCase()))].filter(c => !compat.has(c) && !alias.has(c)).sort();
-const spec = readFileSync('docs/SPEC.md', 'utf8'), guide = readFileSync('docs/GUIDE.md', 'utf8');
+const spec = file('SPEC.md'), guide = file('GUIDE.md');
 const mentions = (doc: string, c: string) => new RegExp('`' + c + '(\\b[^`]*)?`').test(doc);
 
 describe('documentation consistency (#61)', () => {

@@ -19,7 +19,7 @@ npm run typecheck  # tsc (also part of npm run build)
 npm run build      # production build in dist/
 npm run test:e2e   # Playwright UI tests (e2e/) against "vite preview"; needs Chromium:
                    #   npx playwright install chromium   or   PW_CHROMIUM=/path/to/chromium
-npm run bench      # simulation kernel benchmark (bench/lfsr.ts)
+npm run bench      # simulation kernel benchmark (bench/lfsr.ts); CI: npm run bench -- 600000 --check bench/baseline.json
 npm run screenshots # regenerate docs/images/*.png (Playwright walk through the app, same Chromium setup as E2E)
 ```
 

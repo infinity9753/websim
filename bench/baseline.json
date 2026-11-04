@@ -1,0 +1,7 @@
+{
+  "cycles": 600000,
+  "scores": {
+    "debug=false": 14000,
+    "debug=true": 14000
+  }
+}
