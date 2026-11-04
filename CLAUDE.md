@@ -23,8 +23,8 @@ npm run bench      # simulation kernel benchmark (bench/lfsr.ts)
 npm run screenshots # regenerate docs/images/*.png (Playwright walk through the app, same Chromium setup as E2E)
 ```
 
-CI (`.github/workflows/deploy.yml`) runs unit tests, build and E2E on every push and PR, and deploys
-`main` to GitHub Pages.
+CI (`.github/workflows/deploy.yml`) runs unit tests, build, E2E and the screenshots on every push and PR, and
+deploys `main` to GitHub Pages. Dependabot (`.github/dependabot.yml`) opens weekly update PRs.
 
 ## Layout
 

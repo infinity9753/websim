@@ -1,0 +1,26 @@
+# Dependency updates (#62). Every update PR runs the full CI: unit tests (including synthesis vs RTL,
+# gate-level simulation with the Yosys cell models, place and route, cocotb on Pyodide), the build and E2E.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      # Yosys and nextpnr come as one toolchain: the cell models are read from the Yosys package at build time
+      yowasp:
+        patterns: ['@yowasp/*']
+      editor:
+        patterns: ['@codemirror/*', 'codemirror']
+      tooling:
+        dependency-type: development
+    ignore:
+      # the vendored msgspec wheel (vendor/) is built for one Pyodide ABI: Pyodide major updates are done by hand
+      - dependency-name: pyodide
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      actions:
+        patterns: ['*']

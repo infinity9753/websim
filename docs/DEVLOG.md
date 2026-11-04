@@ -539,6 +539,8 @@ OpenRCX 가 하는 일을 교육용으로 줄여 구현했습니다(`src/engine/
 - **E2E(Playwright)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창(SDC 기반 STA, OpenLane zip 다운로드).
 - **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E → 문서 스크린샷(아티팩트), `main` 은 GitHub Pages 배포.
+- **의존성 갱신**(#62): `.github/dependabot.yml` — npm 은 매주(YoWASP 툴체인·에디터·개발 도구를 묶어서), GitHub Actions 는 매달
+  갱신 PR 을 만들고 CI 전체가 검증합니다. 저장소에 넣은 msgspec wheel 이 Pyodide ABI 에 묶여 있어 Pyodide 메이저 갱신은 제외.
 - **문서 일관성**(#61): `tests/docs.test.ts` 가 명령 해석기의 모든 명령이 `help`, SPEC, GUIDE 에 있는지 확인합니다.
   처음 돌렸을 때 `bd`, `find`, `log`, `mem`, `simstats` 등 11개 명령의 누락과, SPEC 의 "`when`/`bp` 미구현" 같은 낡은 줄이 나왔습니다.
 - **스크린샷**(#60): `npm run screenshots` 가 앱을 사용자처럼 따라가며(예제 실행, CPU 파형, 합성, iCE40 P&R, ASIC 레이아웃, STA 보고서)
