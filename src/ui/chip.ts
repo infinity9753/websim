@@ -4,7 +4,8 @@ import { h, icon, download } from './dom';
 import { t } from './i18n';
 import type { RemoteSession as Session } from './remote';
 import { LAYERS, LAYER, type LayoutData, type Rect } from '../engine/asic/layout';
-import { ROW_H } from '../engine/asic/cells';
+import { ROW_H, TRACK } from '../engine/asic/cells';
+import { trackRC, viaR } from '../engine/asic/process';
 import { crossSection, schematicX, schematicZ, BANDS, SCHEMATIC_TOP, STACK, STACK_BOTTOM, STACK_TOP, type XSection, type XSeg } from '../engine/asic/xsect';
 
 const MIN_DETAIL = 0.035;   // px per nm from which cell internals are drawn
@@ -349,6 +350,8 @@ export class LayoutView {
       g.net ? `${t('Net')}: ${g.net}` : g.inst ? `${t('Cell')}: ${g.inst} (${g.type})` : '',
       `${t('Width along the cut')}: ${((g.s1 - g.s0) / 1000).toFixed(3)} µm`,
       `${t('Height')}: ${STACK[g.layer].z0} … ${STACK[g.layer].z1} nm`,
+      ...(/^M\d$/.test(g.layer) ? [`${t('Resistance')}: ${(trackRC(+g.layer[1]).r / (TRACK / 1000)).toFixed(2)} Ω/µm, ${t('capacitance')}: ${(trackRC(+g.layer[1]).c / (TRACK / 1000) * 1000).toFixed(0)} aF/µm`] : []),
+      ...(/^VIA\d$/.test(g.layer) ? [`${t('Resistance')}: ${viaR(+g.layer[3]).toFixed(2)} Ω`] : []),
     ].filter(Boolean).join('\n') : '';
   }
 

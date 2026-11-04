@@ -2,6 +2,7 @@
 import { CELLS, LIB_NAME, ROW_H, ROW_TRACKS, TRACK } from './cells';
 import { cellLayout, metal, tc, VIA_CUT, VIA_PAD, WIRE_W, type Layout } from './layout';
 import type { Netlist } from './netlist';
+import { STACK, sheetR, viaR, wireCap } from './process';
 import type { Placement } from './place';
 import { horizontal, powerGrid, type Routing } from './route';
 
@@ -11,8 +12,12 @@ const um = (nm: number) => +(nm / 1000).toFixed(3);
 export function writeLef(layers = 5): string {
   const o = ['VERSION 5.8 ;', 'BUSBITCHARS "[]" ;', 'DIVIDERCHAR "/" ;', `# ${LIB_NAME}: invented educational technology and cells (WebSim)`, '', 'UNITS', '  DATABASE MICRONS 1000 ;', 'END UNITS', 'MANUFACTURINGGRID 0.005 ;', ''];
   for (let k = 1; k <= layers; k++) {
-    o.push(`LAYER ${metal(k)}`, '  TYPE ROUTING ;', `  DIRECTION ${k === 1 || horizontal(k) ? 'HORIZONTAL' : 'VERTICAL'} ;`, `  PITCH ${um(TRACK)} ;`, `  WIDTH ${um(WIRE_W)} ;`, `  SPACING ${um(TRACK - WIRE_W)} ;`, `END ${metal(k)}`, '');
-    if (k < layers) o.push(`LAYER VIA${k}`, '  TYPE CUT ;', `  WIDTH ${um(VIA_CUT)} ;`, `END VIA${k}`, '');
+    // electrical properties from the process table (#76): pF / um^2 for the area, pF / um per edge for the fringe
+    const cap = wireCap(k), m = STACK[metal(k)], e = (v: number) => v.toExponential(4);
+    o.push(`LAYER ${metal(k)}`, '  TYPE ROUTING ;', `  DIRECTION ${k === 1 || horizontal(k) ? 'HORIZONTAL' : 'VERTICAL'} ;`, `  PITCH ${um(TRACK)} ;`, `  WIDTH ${um(WIRE_W)} ;`, `  SPACING ${um(TRACK - WIRE_W)} ;`,
+      `  HEIGHT ${um(m.z0)} ;`, `  THICKNESS ${um(m.z1 - m.z0)} ;`, `  RESISTANCE RPERSQ ${+sheetR(k).toFixed(4)} ;`,
+      `  CAPACITANCE CPERSQDIST ${e(cap.area / (WIRE_W / 1000) / 1000)} ;`, `  EDGECAPACITANCE ${e(cap.fringe / 2 / 1000)} ;`, `END ${metal(k)}`, '');
+    if (k < layers) o.push(`LAYER VIA${k}`, '  TYPE CUT ;', `  WIDTH ${um(VIA_CUT)} ;`, `  RESISTANCE ${+viaR(k).toFixed(3)} ;`, `END VIA${k}`, '');
   }
   for (let k = 1; k < layers; k++) {
     const h = um(VIA_PAD / 2), c = um(VIA_CUT / 2);

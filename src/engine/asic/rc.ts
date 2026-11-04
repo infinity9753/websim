@@ -1,30 +1,15 @@
-// Parasitic extraction for the ASIC flow (#58): an RC tree per routed net from the wire and via geometry (invented
-// layer constants: sheet resistance, area and fringe capacitance to ground, via resistance; no coupling), Elmore delays
+// Parasitic extraction for the ASIC flow (#58): an RC tree per routed net from the wire and via geometry (resistance
+// and capacitance to ground from the process table in process.ts; no coupling), Elmore delays
 // from the driver to every sink, and SPEF (IEEE 1481) output.
-import { TRACK, pinCap } from './cells';
+import { pinCap } from './cells';
+import { trackRC, viaR } from './process';
 import type { Netlist } from './netlist';
 import type { Placement } from './place';
 import { pinXY } from './place';
 import type { Routing } from './route';
 
-/** Per routing layer (index = metal number): sheet resistance (ohm/sq), area cap (aF/um^2), fringe cap per edge (aF/um). */
-export const LAYER_RC: Record<number, { rs: number; area: number; fringe: number }> = {
-  2: { rs: 0.4, area: 40, fringe: 40 },
-  3: { rs: 0.4, area: 40, fringe: 40 },
-  4: { rs: 0.15, area: 25, fringe: 35 },
-  5: { rs: 0.15, area: 25, fringe: 35 },
-};
-/** Via resistance by lower layer (via1 = M1-M2), ohm. */
-export const VIA_R: Record<number, number> = { 1: 6, 2: 4, 3: 4, 4: 2 };
-/** Drawn wire width, nm. */
-export const WIRE_W = TRACK / 2;
-
-/** One track of wire on a layer: resistance (ohm) and capacitance (fF). */
-export function trackRC(layer: number): { r: number; c: number } {
-  const k = LAYER_RC[layer] ?? LAYER_RC[2];
-  const len = TRACK / 1000, w = WIRE_W / 1000;
-  return { r: k.rs * (len / w), c: (k.area * len * w + 2 * k.fringe * len) / 1000 };
-}
+// layer constants come from the process table (#76)
+export { trackRC, viaR } from './process';
 
 export interface RcNode { name: string; c: number }
 export interface RcNet {
@@ -97,7 +82,7 @@ export function extract(nl: Netlist, p: Placement, r: Routing): Parasitics {
         nodes[a].c += c / 2; nodes[b].c += c / 2; wireC += c;
       }
     }
-    for (const v of rn.vias) link(node(`${v.layer},${v.x},${v.y}`), node(`${v.layer + 1},${v.x},${v.y}`), VIA_R[v.layer] ?? 4);
+    for (const v of rn.vias) link(node(`${v.layer},${v.x},${v.y}`), node(`${v.layer + 1},${v.x},${v.y}`), viaR(v.layer));
     // the driver: a cell output (SPEF direction O) or an input port (an input of the design drives the net)
     const drv = terms.find(t => !t.port && t.dir === 'O') ?? terms.find(t => t.port && t.dir === 'I');
     const root = drv?.node ?? 0;

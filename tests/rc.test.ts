@@ -1,16 +1,39 @@
 import { describe, it, expect } from 'vitest';
 import { Session } from '../src/engine/commands';
 import { PIN_CAP } from '../src/engine/asic/cells';
-import { elmore, trackRC, wireSlew } from '../src/engine/asic/rc';
+import { elmore, trackRC, viaR, wireSlew } from '../src/engine/asic/rc';
+import { MATERIAL, STACK, sheetR, wireCap } from '../src/engine/asic/process';
+import { VIA_CUT, WIRE_W } from '../src/engine/asic/layout';
+import { TRACK } from '../src/engine/asic/cells';
+import { writeLef } from '../src/engine/asic/def';
 import { analyze } from '../src/engine/asic/sta';
 
 describe('RC extraction (#58)', () => {
-  it('one track of wire: R from the sheet resistance, C from area and fringe', () => {
-    const m2 = trackRC(2), m4 = trackRC(4);
-    expect(m2.r).toBeCloseTo(0.4 * (0.4 / 0.2), 12);                 // 2 squares
-    expect(m2.c).toBeCloseTo((40 * 0.4 * 0.2 + 2 * 40 * 0.4) / 1000, 12); // fF
-    expect(m4.r).toBeLessThan(m2.r);
-    expect(m4.c).toBeLessThan(m2.c);
+  it('one track of wire: R and C follow from the process table (#76)', () => {
+    // M2: 200 nm thick, 160 nm drawn wide, 240 nm above M1, 400 nm per track
+    const t = STACK.M2.z1 - STACK.M2.z0, h = STACK.M2.z0 - STACK.M1.z1, w = WIRE_W, L = TRACK;
+    expect([t, h, w, L]).toEqual([200, 240, 160, 400]);
+    const m2 = trackRC(2);
+    expect(m2.r).toBeCloseTo(MATERIAL.rhoMetal * L / (w * t), 12);                 // rho L / (W T)
+    const eps = 8.854e-3 * MATERIAL.epsR;                                         // fF / um
+    const yt = (w / h) + 0.77 + 1.06 * Math.pow(w / h, 0.25) + 1.06 * Math.sqrt(t / h);   // Yuan-Trick
+    expect(m2.c).toBeCloseTo(eps * yt * (L / 1000), 12);
+    expect(wireCap(2).area).toBeCloseTo(eps * w / h, 12);
+    // thicker upper metals: lower resistance; M1 sits far above the silicon: the least area capacitance
+    expect(trackRC(5).r).toBeLessThan(trackRC(4).r);
+    expect(trackRC(4).r).toBeLessThan(trackRC(2).r);
+    expect(wireCap(1).area).toBeLessThan(wireCap(2).area);
+    expect(sheetR(2)).toBeCloseTo(MATERIAL.rhoMetal / 200, 12);
+    // vias: tungsten through the via height over the cut area, plus the interface
+    expect(viaR(1)).toBeCloseTo(MATERIAL.rhoVia * (STACK.VIA1.z1 - STACK.VIA1.z0) / (VIA_CUT * VIA_CUT) + MATERIAL.viaInterface, 12);
+    expect(viaR(4)).toBeGreaterThan(viaR(1));   // a taller via
+  });
+
+  it('the LEF carries the same electrical numbers', () => {
+    const lef = writeLef(5);
+    expect(lef).toMatch(new RegExp(`LAYER M2[\\s\\S]*?HEIGHT 1 ;\\n  THICKNESS 0\\.2 ;\\n  RESISTANCE RPERSQ ${sheetR(2)} ;`));
+    expect(lef).toContain(`  CAPACITANCE CPERSQDIST ${(wireCap(2).area / 0.16 / 1000).toExponential(4)} ;`);
+    expect(lef).toMatch(new RegExp(`LAYER VIA1\\n  TYPE CUT ;\\n  WIDTH 0\\.12 ;\\n  RESISTANCE ${+viaR(1).toFixed(3)} ;`));
   });
 
   it('Elmore delay of a branching RC tree', () => {

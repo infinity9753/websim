@@ -6,10 +6,11 @@ import { PIN_CAP, lookup, nldm, pinCap, type CellDef } from './cells';
 import type { NCell, Netlist } from './netlist';
 import type { Routing } from './route';
 import { wireSlew, type Parasitics } from './rc';
+import { trackRC } from './process';
 import { emptySdc, type Clock, type Exception, type Sdc } from './sdc';
 
 export const PIN_FF = PIN_CAP * 1000;   // input pin capacitance, fF
-export const WIRE_FF = 0.03;            // fF per track of routed wire
+export const WIRE_FF = trackRC(2).c;   // fF per track of routed wire (before extraction), from the process table
 export const OUT_FF = 10;               // default load on an output port, fF
 export const SETUP = 0.05;              // default flip-flop setup time, ns
 

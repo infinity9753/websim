@@ -4,24 +4,8 @@
 import { ROW_H } from './cells';
 import { instanceRects, type Layout, type Rect } from './layout';
 
-/** Vertical extent of each layer (nm; 0 = silicon surface). The wells and diffusions are below the surface. */
-export const STACK: Record<string, { z0: number; z1: number; material: string }> = {
-  NWELL: { z0: -1200, z1: 0, material: 'n-well' },
-  DIFF: { z0: -150, z1: 0, material: 'diffusion (source / drain)' },
-  POLY: { z0: 5, z1: 185, material: 'polysilicon gate on 5 nm gate oxide' },
-  CONT: { z0: 0, z1: 600, material: 'tungsten contact' },
-  M1: { z0: 600, z1: 760, material: 'metal 1' },
-  VIA1: { z0: 760, z1: 1000, material: 'via 1' },
-  M2: { z0: 1000, z1: 1200, material: 'metal 2' },
-  VIA2: { z0: 1200, z1: 1440, material: 'via 2' },
-  M3: { z0: 1440, z1: 1640, material: 'metal 3' },
-  VIA3: { z0: 1640, z1: 1900, material: 'via 3' },
-  M4: { z0: 1900, z1: 2250, material: 'metal 4' },
-  VIA4: { z0: 2250, z1: 2550, material: 'via 4' },
-  M5: { z0: 2550, z1: 3050, material: 'metal 5' },
-};
-/** Top of the dielectric above the last metal, and the depth of silicon drawn below the surface (nm). */
-export const STACK_TOP = 3400, STACK_BOTTOM = -1600;
+import { STACK } from './process';
+export { STACK, STACK_TOP, STACK_BOTTOM } from './process';
 
 export interface XSeg {
   layer: string;

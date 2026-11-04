@@ -407,6 +407,8 @@ export const KO: Record<string, string> = {
   'Real scale (1:1)': '실제 비율 (1:1)',
   'Cross-section A–B: {0} µm, {1} shapes': '단면 A–B: {0} µm, 도형 {1}개',
   'Width along the cut': '단면 방향 폭',
+  'Resistance': '저항',
+  'capacitance': '용량',
   'Height': '높이',
   'SDC file': 'SDC 파일',
   'Timing constraints (SDC file in the project, optional)': '타이밍 제약 (프로젝트의 SDC 파일, 선택)',
