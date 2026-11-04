@@ -12,6 +12,8 @@ processes panels, a source editor and a waveform viewer.
 
 **📖 [User guide (Korean): tutorials, command reference, language support](docs/GUIDE.md)** — also under **Help ▸ User Guide** in the app.
 
+**📝 [Development log (Korean): how WebSim was built, decisions, problems and measurements](docs/DEVLOG.md)**
+
 WebSim is a **clean-room** implementation. It was written from a functional
 specification ([docs/SPEC.md](docs/SPEC.md)) based on public knowledge of how
 such tools behave and on the IEEE 1364 / 1076 standards. It contains no code or
