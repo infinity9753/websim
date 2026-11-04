@@ -31,7 +31,7 @@
     "@yowasp/nextpnr-ecp5": "^0.11.96-dev.805",
     "@yowasp/nextpnr-himbaechel-gowin": "^0.11.96-dev.805",
     "@yowasp/nextpnr-ice40": "^0.11.96-dev.805",
-    "@yowasp/yosys": "^0.70.62-dev.1236",
+    "@yowasp/yosys": "^0.70.1258",
     "codemirror": "^6.0.2",
     "pyodide": "^314.0.7"
   },
