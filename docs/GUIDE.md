@@ -334,7 +334,7 @@ vlog cpu.v
 asic -top cpu -util 0.7 -layers 3
 ```
 
-단락·개방·미배선이 남으면 `asic` 은 오류를 반환합니다. 이때는 사용률을 낮추거나(`-util 0.5`) 배선 층을 늘리세요(`-layers 4`). 래치처럼 라이브러리에 없는 기억 소자는 합성 단계에서 거부됩니다.
+단락·개방·미배선이 남으면 `asic` 은 오류를 반환합니다. 이때는 사용률을 낮추거나(`-util 0.5`) 배선 층을 늘리세요(`-layers 4`). `-auto` 를 붙이면 이 조정을 자동으로 시도합니다. 래치처럼 라이브러리에 없는 기억 소자는 합성 단계에서 거부됩니다.
 
 #### 실제 공정으로: OpenLane 내보내기
 
@@ -448,7 +448,7 @@ run -all
 |---|---|
 | `synth [-top m] [-target generic\|asic\|ice40\|ecp5\|gowin\|xilinx] [-flatten] [files...]` | Yosys 로 합성. 파일을 생략하면 `-top` 모듈과 그 하위 모듈의 소스 파일을 라이브러리에서 찾습니다. 결과는 `synth/` 폴더 |
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
-| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
+| `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [-auto] [files...]` | `-auto`: 레이아웃이 깨끗하지 않으면 층을 4개로, 그다음 사용률을 0.1씩 낮추며(0.3까지) 자동 재시도. 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
 | `sta [-sdc 파일] [-paths n] [-setup\|-hold]` | 마지막 `asic` 레이아웃의 정적 타이밍 분석. SDC 제약(클럭, 입출력 지연, 부하, 전환 시간, 불확실성, false path / max·min delay)으로 셋업·홀드 여유(WNS/TNS, WHS/THS)와 최악 경로 보고서를 출력하고 `asic/<top>_sta.rpt` 에 모든 끝점의 여유를 씀. 위반이 있으면 실패 |
 | `openlane [-top m] [-period ns] [-sdc 파일] [-util %]` | 설계를 OpenLane 2 / LibreLane(sky130) 프로젝트로 내보내기: `openlane/<top>/`(config.json, src/, SDC, README) 와 zip. 메뉴 **컴파일 ▸ OpenLane 로 내보내기 (sky130)** 는 zip 을 내려받음 |
 | `signoff [-top m] [-tb t] [-sdc 파일]` | 한 번에 사인오프: RTL 시뮬레이션 → `asic` → SDF 를 넣은 배치 후 시뮬레이션 → 테스트벤치 출력 비교. 레이아웃 정상, 타이밍 충족, 타이밍 검사 위반 없음, 출력 동일이면 PASS. `asic/<top>_signoff.rpt` |

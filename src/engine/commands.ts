@@ -217,7 +217,7 @@ export class Session {
       '  coverage report [-details] [-file f]  coverage summary (or missed items)',
       '  coverage clear                     reset coverage counts',
       '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
-      '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
+      '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f] [-auto]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
       '  sta [-sdc f] [-paths n] [-setup|-hold]  static timing analysis of the layout: slack, path reports',
       '  openlane [-top m] [-period ns] [-sdc f]  export an OpenLane 2 / LibreLane project (sky130) as a zip',
       '  signoff [-top m] [-tb t] [-sdc f]  RTL sim, ASIC flow, post-layout SDF sim, compare: PASS / FAIL',
@@ -1096,15 +1096,16 @@ export class Session {
   lastAsic: { run: number; top: string; base: string; ok: boolean; summary: string[]; result?: AsicResult } | null = null;
 
   /**
-   * asic [-top m] [-util 0.6] [-layers 2..4] [-sdc file] [files]
+   * asic [-top m] [-util 0.6] [-layers 2..4] [-sdc file] [-auto] [files]
    * Educational ASIC flow: synth -target asic, floorplan and placement, routing, checks, timing estimate, DEF / LEF / GDSII.
    */
   async asic(args: string[]) {
-    let util: number | undefined, layers: number | undefined, sdcFile: string | undefined;
+    let util: number | undefined, layers: number | undefined, sdcFile: string | undefined, auto = false;
     const synthArgs: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '-util') util = Number(args[++i]);
+      else if (a === '-auto') auto = true;
       else if (a === '-sdc') sdcFile = args[++i];
       else if (a === '-layers') layers = Number(args[++i]);
       else if (a === '-top') synthArgs.push(a, args[++i]);
@@ -1121,9 +1122,25 @@ export class Session {
     if (!json) throw new Error(`asic: ${s.base}.json was not written`);
     this.out(`-- Floorplan, placement and routing of ${s.top} (${LIB_NAME} cells)`);
     const base = `asic/${s.top}`;
-    let r: AsicResult;
+    // -auto: when the layout is not clean, more routing layers first, then lower utilization (synthesis runs once)
+    const u0 = util ?? 0.6, l0 = layers ?? 3;
+    const tries: [number, number][] = [[u0, l0]];
+    if (auto) {
+      if (l0 < 4) tries.push([u0, 4]);
+      for (let u = Math.round((u0 - 0.1) * 100) / 100; u >= 0.3 - 1e-9; u = Math.round((u - 0.1) * 100) / 100) tries.push([u, 4]);
+    }
+    let r!: AsicResult;
     try {
-      r = runAsic(json, s.top, { util, layers, sdc });
+      for (const [i, [u, l]] of tries.entries()) {
+        if (i) this.out(`-- asic -auto: attempt ${i + 1}/${tries.length} with utilization ${u} and ${l} routing layers`);
+        try { r = runAsic(json, s.top, { util: u, layers: l, sdc }); } catch (e) {
+          if (!auto || i === tries.length - 1) throw e;
+          this.out(`-- asic -auto: ${(e as Error).message}`, 'warn');
+          continue;
+        }
+        if (r.ok) { if (i) this.out(`-- asic -auto: clean layout with -util ${u} -layers ${l}`); break; }
+        if (auto && i < tries.length - 1) this.out(`-- asic -auto: not clean (${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow})`, 'warn');
+      }
     } catch (e) {
       this.out(`** Error: (asic) ${(e as Error).message}`, 'err');
       this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: false, summary: [] };
@@ -1141,7 +1158,7 @@ export class Session {
       this.fs.write(`asic/${LIB_NAME}.lef`, r.lef);
     }
     this.out(`Wrote ${base}.def, ${base}.sdf, ${base}.spef, ${base}.rpt, asic/${LIB_NAME}.lef; GDSII ${s.top}.gds ${r.gds.length} bytes (Layout window ▸ GDSII)`);
-    if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. Try a lower -util or more -layers.`, 'err');
+    if (!r.ok) this.out(`** Error: (asic) the layout is not clean: ${r.shorts} shorts, ${r.opens.length} opens, overflow ${r.r.overflow}. ${auto ? 'No attempt of -auto was clean.' : 'Try a lower -util or more -layers, or -auto.'}`, 'err');
     this.lastAsic = { run: (this.lastAsic?.run ?? 0) + 1, top: s.top, base, ok: r.ok, summary: sum, result: r };
     this.emit('synth');
     return r.ok;
