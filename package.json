@@ -19,9 +19,9 @@
     "@playwright/test": "^1.64.1",
     "playwright": "^1.64.1",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3",
-    "vite": "^6.4.4",
-    "vitest": "^3.2.7"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@codemirror/language": "^6.13.1",
