@@ -336,6 +336,18 @@ asic -top cpu -util 0.7 -layers 3
 
 단락·개방·미배선이 남으면 `asic` 은 오류를 반환합니다. 이때는 사용률을 낮추거나(`-util 0.5`) 배선 층을 늘리세요(`-layers 4`). 래치처럼 라이브러리에 없는 기억 소자는 합성 단계에서 거부됩니다.
 
+#### 실제 공정으로: OpenLane 내보내기
+
+WebSim 의 ASIC 흐름은 가상의 셀 라이브러리를 쓰는 교육용입니다. 같은 설계를 실제 오픈소스 칩 제작 흐름(OpenLane 2 /
+LibreLane, SkyWater sky130 PDK)에서 돌리려면 **컴파일 ▸ OpenLane 로 내보내기 (sky130)** 를 누르거나 `openlane` 을 입력합니다.
+`config.json`, RTL 소스, SDC, 실행 방법을 적은 README 가 `openlane/<top>/` 에 생기고 zip 으로 내려받아집니다. 클럭 포트는
+SDC 의 `create_clock`, 없으면 `posedge` 에 가장 많이 쓰인 입력에서 찾고, 주기는 SDC 의 값 또는 10 ns 입니다.
+
+```sh
+# 내려받은 zip 을 푼 뒤 (LibreLane 또는 OpenLane 2 가 설치된 환경에서)
+librelane cpu/config.json
+```
+
 #### 정적 타이밍 분석(STA)과 배치 후 타이밍 시뮬레이션
 
 8비트 CPU 예제에는 제약 파일 `cpu.sdc` 가 들어 있습니다(클럭 4 ns, 입력·출력 지연, 부하, 전환 시간). `asic -sdc` 로 흐름을
@@ -435,6 +447,7 @@ run -all
 | `pnr [-top m] [-device up5k\|lfe5u-25f\|gw1n-9c\|...] [-package p] [-pcf\|-lpf\|-cst file] [-freq MHz] [-seed n]` | 디바이스 계열(iCE40, ECP5, Gowin)로 합성한 뒤 nextpnr 로 배치 배선하고 비트스트림을 만듭니다. 결과는 `pnr/` 폴더 |
 | `asic [-top m] [-util 0.6] [-layers 2\|3\|4] [-sdc 파일] [files...]` | 교육용 ASIC 흐름: 표준 셀 합성, 배치, 배선, 검사, 타이밍 추정, DEF/LEF/SDF/GDSII. 결과는 `asic/` 폴더, GDSII 는 레이아웃 창에서 다운로드. `asic/<top>.sdf` 로 배치 후 타이밍 시뮬레이션: `vlog synth/websim_edu.v synth/<top>_asic.v tb.v; vsim -sdftyp /tb/dut=asic/<top>.sdf tb` |
 | `sta [-sdc 파일] [-paths n] [-setup\|-hold]` | 마지막 `asic` 레이아웃의 정적 타이밍 분석. SDC 제약(클럭, 입출력 지연, 부하, 전환 시간, 불확실성, false path / max·min delay)으로 셋업·홀드 여유(WNS/TNS, WHS/THS)와 최악 경로 보고서를 출력하고 `asic/<top>_sta.rpt` 에 모든 끝점의 여유를 씀. 위반이 있으면 실패 |
+| `openlane [-top m] [-period ns] [-sdc 파일] [-util %]` | 설계를 OpenLane 2 / LibreLane(sky130) 프로젝트로 내보내기: `openlane/<top>/`(config.json, src/, SDC, README) 와 zip. 메뉴 **컴파일 ▸ OpenLane 로 내보내기 (sky130)** 는 zip 을 내려받음 |
 
 ### 기타
 

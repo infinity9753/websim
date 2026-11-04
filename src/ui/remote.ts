@@ -135,6 +135,7 @@ export class RemoteSession {
   pnrBitstream() { return this.call<Uint8Array | null>('pnrBitstream'); }
   asicLayout() { return this.call<LayoutData | null>('asicLayout'); }
   asicGds() { return this.call<Uint8Array | null>('asicGds'); }
+  exportZip() { return this.call<{ name: string; data: Uint8Array } | null>('exportZip'); }
   coverageLines() { return this.call<{ file: string; lines: [number, number][]; branches: [number, string[]][] }[] | null>('coverageLines'); }
   toggleBreakpoint(file: string, line: number) { void this.call('toggleBreakpoint', file, line); }
   loadBreakpoints(list: { file: string; line: number; cond?: string }[]) { void this.call('loadBreakpoints', list); }

@@ -241,10 +241,13 @@ test('runs the educational ASIC flow and explores the layout', async ({ page }) 
   await cmd(page, 'quit -sim');
   await page.getByText('Compile', { exact: true }).first().click();
   await page.getByText('ASIC Flow (layout, GDSII)…').click();
+  // with the example's constraints: static timing analysis instead of the estimate
+  await page.locator('.chip input[aria-label="SDC file"]').fill('cpu.sdc');
   await page.locator('.chip button[title="Synthesize, place and route (ASIC)"]').click();
   const status = page.locator('.chip .synth-status');
   await expect(status).toContainText('Checks: 0 shorts, 0 opens, 0 unrouted nets', { timeout: 90_000 });
-  await expect(status).toContainText('max frequency');
+  await expect(status).toContainText('Timing (SDC): Setup: WNS 0.000 ns');
+  await expect(status).toContainText('achievable');
   // something is drawn on the canvas
   const lit = await page.locator('.chip-canvas').evaluate((c: HTMLCanvasElement) => {
     const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
@@ -266,5 +269,11 @@ test('runs the educational ASIC flow and explores the layout', async ({ page }) 
   expect((await dl).suggestedFilename()).toBe('cpu.gds');
   await page.locator('.chip').getByText('Report', { exact: true }).click();
   await expect(page.locator('.cm-content:visible')).toContainText('ASIC flow report: cpu');
+  // export the design for OpenLane / sky130: a zip download and the project folder
+  const zdl = page.waitForEvent('download');
+  await page.getByText('Compile', { exact: true }).first().click();
+  await page.getByText('Export to OpenLane (sky130)').click();
+  expect((await zdl).suggestedFilename()).toBe('cpu_openlane.zip');
+  await expect(page.locator('.tr-out')).toContainText('OpenLane project for cpu: clock clk');
   expect(errors).toEqual([]);
 });

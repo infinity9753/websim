@@ -396,6 +396,7 @@ export const KO: Record<string, string> = {
   'Draw logic gates with their standard symbols instead of boxes': '논리 게이트를 상자 대신 표준 기호로 그리기',
   'Layout': '레이아웃',
   'ASIC Flow (layout, GDSII)…': 'ASIC 흐름 (레이아웃, GDSII)…',
+  'Export to OpenLane (sky130)': 'OpenLane 로 내보내기 (sky130)',
   'Target core utilization': '목표 코어 사용률',
   'Routing layers': '배선 층',
   'SDC file': 'SDC 파일',

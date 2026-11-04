@@ -155,6 +155,7 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   pnrBitstream: () => session.lastPnr?.bin ?? null,
   asicLayout: () => { const r = session.lastAsic?.result; return r ? layoutData(r.layout, r.timing.critical) : null; },
   asicGds: () => session.lastAsic?.result?.gds ?? null,
+  exportZip: () => session.lastExport,
   listMemories: () => session.listMemories(),
   memWords: (path: string, from: number, count: number) => { const r = session.memWords(path, from, count); return r && { ...r, words: r.words.map(pv) }; },
   memDeposit: (path: string, addr: number, value: string) => session.memDeposit(path, addr, value),

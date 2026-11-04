@@ -223,6 +223,7 @@ export class App {
         { label: t('Synthesize (Yosys)…'), action: () => this.right.activate('synthesis') },
         { label: t('Place & Route (nextpnr)…'), action: () => this.right.activate('pnr') },
         { label: t('ASIC Flow (layout, GDSII)…'), action: () => this.right.activate('layout') },
+        { label: t('Export to OpenLane (sky130)'), action: () => void this.exportOpenLane() },
         '-',
         { label: t('Clear Library "work"'), action: () => void this.cmd('vdel -lib work -all') },
       ]],
@@ -489,7 +490,14 @@ export class App {
 
   // ------------------------------------------------------------ actions
   async cmd(c: string) {
-    await this.transcript.run(c);
+    return this.transcript.run(c);
+  }
+
+  /** openlane: the project folder appears in the project tree, the zip is downloaded. */
+  async exportOpenLane() {
+    if (!(await this.cmd('openlane'))) return;
+    const z = await this.session.exportZip();
+    if (z) download(z.name, z.data);
   }
 
   compileCurrent() {

@@ -58,8 +58,9 @@ export class Transcript {
   text(): string { return [...this.out.children].map(c => c.textContent).join('\n'); }
 
   async run(cmd: string) {
-    await this.session.exec(cmd);
+    const r = await this.session.exec(cmd);
     this.updatePrompt();
+    return r;
   }
 
   private async onKey(e: KeyboardEvent) {

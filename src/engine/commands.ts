@@ -17,6 +17,8 @@ import { FPGA_SIM_TARGETS, fpgaSimModels } from './fpgasim';
 import { LIB_NAME, liberty, verilogModels } from './asic/cells';
 import { runAsic, summary, type AsicResult } from './asic/flow';
 import { readSdc } from './asic/sdc';
+import { guessClock, openlaneProject } from './openlane';
+import { zip } from './zip';
 import { sta, staSummary, reportPath } from './asic/sta';
 import type { Vec } from './logic';
 import { annotate as annotateSdf, type Mtm } from './sdf';
@@ -180,6 +182,7 @@ export class Session {
       case 'pnr': return this.pnr(rest);
       case 'asic': return this.asic(rest);
       case 'sta': return this.staCmd(rest);
+      case 'openlane': return this.openlaneCmd(rest);
       case 'write': return this.writeCmd(rest);
       case 'mem': return this.memCmd(rest);
     }
@@ -215,6 +218,7 @@ export class Session {
       '  pnr [-top m] [-device up5k|lfe5u-25f|gw1n-9c|...] [-pcf|-lpf|-cst f] [-freq MHz]  FPGA place & route + bitstream',
       '  asic [-top m] [-util 0.6] [-layers 3] [-sdc f]  educational ASIC flow: cells, placement, routing, DEF / SDF / GDSII',
       '  sta [-sdc f] [-paths n] [-setup|-hold]  static timing analysis of the layout: slack, path reports',
+      '  openlane [-top m] [-period ns] [-sdc f]  export an OpenLane 2 / LibreLane project (sky130) as a zip',
       '  synth [-top m] [-target generic|ice40|ecp5|gowin|xilinx] [-flatten] [files]  synthesize with Yosys',
       '  add list [-radix r] <paths>        show signals in the List window',
       '  delete list <paths>|*              remove signals from the List window',
@@ -1039,21 +1043,7 @@ export class Session {
       else if (a.startsWith('-')) throw new Error(`synth: unknown option ${a}`);
       else files.push(a);
     }
-    if (!top) {
-      // the design top: a work top level that is not a testbench, or the unit the last testbench instantiates
-      const isTb = (n: string) => /(^|_)(tb|test|bench)|(tb|test|bench)($|_)/i.test(n);
-      // cell models and netlists written under synth/ are never the design top
-      const all = this.libs.topLevels('work').filter(n => !/^synth\//.test(this.libs.findDesign(n)?.unit.file ?? ''));
-      let tops = all.filter(n => !isTb(n));
-      if (!tops.length) {
-        // only testbenches at the top: take what they instantiate
-        const under = new Set<string>();
-        for (const tb of all) for (const it of this.libs.findDesign(tb)?.unit.items ?? []) if (it.k === 'inst') under.add(it.module);
-        tops = [...under];
-      }
-      if (tops.length === 1) top = tops[0];
-      else throw new Error('synth: specify the module to synthesize with -top <module>' + (tops.length ? ` (candidates: ${tops.join(', ')})` : ''));
-    }
+    if (!top) top = this.designTop('synth');
     if (!files.length) {
       if (!this.libs.findDesign(top)) throw new Error(`synth: module '${top}' is not compiled into a library; compile it first or list the files.`);
       files.push(...designFiles(this.libs, top));
@@ -1197,6 +1187,65 @@ export class Session {
       this.out(`Wrote ${target}`);
     }
     return res.wns >= 0 && res.whs >= 0;
+  }
+
+  /** The design top: a work top level that is not a testbench, or the unit the testbenches instantiate. */
+  private designTop(cmd: string): string {
+    const isTb = (n: string) => /(^|_)(tb|test|bench)|(tb|test|bench)($|_)/i.test(n);
+    // cell models and netlists written under synth/ are never the design top
+    const all = this.libs.topLevels('work').filter(n => !/^synth\//.test(this.libs.findDesign(n)?.unit.file ?? ''));
+    let tops = all.filter(n => !isTb(n));
+    if (!tops.length) {
+      // only testbenches at the top: take what they instantiate
+      const under = new Set<string>();
+      for (const tb of all) for (const it of this.libs.findDesign(tb)?.unit.items ?? []) if (it.k === 'inst') under.add(it.module);
+      tops = [...under];
+    }
+    if (tops.length === 1) return tops[0];
+    throw new Error(`${cmd}: specify the module with -top <module>` + (tops.length ? ` (candidates: ${tops.join(', ')})` : ''));
+  }
+
+  /** The last openlane export: a zip to download. */
+  lastExport: { name: string; data: Uint8Array } | null = null;
+
+  /**
+   * openlane [-top m] [-period ns] [-sdc file] [-util pct]
+   * Export the design as an OpenLane 2 / LibreLane project (sky130): openlane/<top>/ in the project and a zip.
+   */
+  openlaneCmd(args: string[]) {
+    let top: string | undefined, period: number | undefined, sdcFile: string | undefined, util = 40;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === '-top') top = args[++i];
+      else if (a === '-period') { period = Number(args[++i]); if (!(period > 0)) throw new Error('openlane: -period expects a clock period in ns'); }
+      else if (a === '-sdc') sdcFile = args[++i];
+      else if (a === '-util') { util = Number(args[++i]); if (!(util >= 1 && util <= 95)) throw new Error('openlane: -util expects a core utilization in percent (1-95)'); }
+      else throw new Error(`openlane: unknown option ${a}`);
+    }
+    top ??= this.designTop('openlane');
+    const found = this.libs.findDesign(top);
+    if (!found) throw new Error(`openlane: module '${top}' is not compiled into a library; compile it first.`);
+    const files: Record<string, string> = {};
+    for (const f of designFiles(this.libs, top)) {
+      const t = this.fs.read(f);
+      if (t === undefined) throw new Error(`openlane: cannot read "${f}"`);
+      files[f] = t;
+    }
+    const names = Object.keys(files).map(f => f.replace(/^.*\//, ''));
+    const dup = names.find((n, i) => names.indexOf(n) !== i);
+    if (dup) throw new Error(`openlane: two sources are named ${dup}; rename one (the project keeps the sources in one src/ folder)`);
+    const inputs = (found.unit as Unit).ports.filter(p => p.dir === 'input').map(p => p.name);
+    const sdc = sdcFile === undefined ? undefined : this.fs.read(sdcFile);
+    if (sdcFile !== undefined && sdc === undefined) throw new Error(`openlane: cannot read SDC file ${sdcFile}`);
+    const sdcClock = sdc && /create_clock\b[^\n]*?-period\s+([\d.]+)[^\n]*?(?:\[get_ports\s+\{?(\w+)\}?\])?/.exec(sdc);
+    const clockPort = sdcClock?.[2] ?? guessClock(files, inputs);
+    period ??= sdcClock ? Number(sdcClock[1]) : 10;
+    const proj = openlaneProject({ top, files, clockPort, period, sdc, util, inputs });
+    if (this.fs.write) for (const [f, t] of Object.entries(proj)) this.fs.write(`openlane/${f}`, t);
+    this.lastExport = { name: `${top}_openlane.zip`, data: zip(proj) };
+    this.out(`OpenLane project for ${top}: clock ${clockPort ?? '(none, virtual)'}, period ${period} ns, utilization ${util}%, ${Object.keys(files).length} source file(s)`);
+    this.out(`Wrote openlane/${top}/ (config.json, src/, ${top}.sdc, README.md) and ${this.lastExport.name} (${this.lastExport.data.length} bytes)`);
+    return true;
   }
 
   /** coverage report [-details] [-file f] | coverage clear */
