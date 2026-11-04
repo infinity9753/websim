@@ -16,8 +16,8 @@ jobs:
   regenerate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Export OpenTPU with PyRTL 0.10.2
@@ -36,7 +36,7 @@ jobs:
             cat "$RUNNER_TEMP/opentpu/reference.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opentpu-export
           path: |
