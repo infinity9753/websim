@@ -20,6 +20,7 @@ npm run build      # production build in dist/
 npm run test:e2e   # Playwright UI tests (e2e/) against "vite preview"; needs Chromium:
                    #   npx playwright install chromium   or   PW_CHROMIUM=/path/to/chromium
 npm run bench      # simulation kernel benchmark (bench/lfsr.ts)
+npm run screenshots # regenerate docs/images/*.png (Playwright walk through the app, same Chromium setup as E2E)
 ```
 
 CI (`.github/workflows/deploy.yml`) runs unit tests, build and E2E on every push and PR, and deploys
@@ -44,6 +45,7 @@ CI (`.github/workflows/deploy.yml`) runs unit tests, build and E2E on every push
 | `src/ui/i18n.ts`, `i18n-ko.ts` | UI translations; keys are the English strings |
 | `tests/` | Vitest; `tests/helpers.ts` has `simulate(files, top)` returning transcript lines |
 | `e2e/` | Playwright UI tests |
+| `screenshots/` | `npm run screenshots`: documentation images in `docs/images/` |
 | `docs/SPEC.md`, `docs/GUIDE.md` | Functional specification (English) and user guide (Korean) |
 
 ## Conventions

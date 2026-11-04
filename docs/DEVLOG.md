@@ -538,7 +538,9 @@ OpenRCX 가 하는 일을 교육용으로 줄여 구현했습니다(`src/engine/
   검증·GDS 왕복), FPGA 게이트 레벨(4개 타깃), 타이밍 검사·SDF, STA(SDC·NLDM·예외), RC 추출·Elmore·SPEF, OpenLane 내보내기·zip, 예제 전체 실행, 가이드 튜토리얼 실행, 번역 누락.
 - **E2E(Playwright, 11개)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창(SDC 기반 STA, OpenLane zip 다운로드).
-- **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E, `main` 은 GitHub Pages 배포.
+- **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E → 문서 스크린샷(아티팩트), `main` 은 GitHub Pages 배포.
+- **스크린샷**(#60): `npm run screenshots` 가 앱을 사용자처럼 따라가며(예제 실행, CPU 파형, 합성, iCE40 P&R, ASIC 레이아웃, STA 보고서)
+  `docs/images/` 를 다시 만듭니다. 단계마다 결과를 기다리므로 흐름이 깨지면 이미지 대신 실패가 납니다.
 
 ---
 

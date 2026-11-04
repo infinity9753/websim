@@ -31,6 +31,14 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: End-to-end UI tests
         run: npx playwright test
+      - name: Documentation screenshots
+        run: npx playwright test -c playwright.screens.config.ts
+      - name: Keep the screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: docs/images/
+          retention-days: 14
       - name: Keep the Playwright traces of failed tests
         if: failure()
         uses: actions/upload-artifact@v4

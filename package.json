@@ -9,7 +9,8 @@
     "test": "vitest run",
     "typecheck": "tsc",
     "bench": "esbuild bench/lfsr.ts --bundle --platform=node --format=esm --outfile=dist-bench/lfsr.mjs --log-level=warning && node dist-bench/lfsr.mjs",
-    "test:e2e": "vite build && playwright test"
+    "test:e2e": "vite build && playwright test",
+    "screenshots": "vite build && playwright test -c playwright.screens.config.ts"
   },
   "keywords": [],
   "author": "",
