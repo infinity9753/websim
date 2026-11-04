@@ -6,7 +6,7 @@
 
 - 기간: 2026-10-17 ~ 2026-11-04
 - 커밋 76개, 이슈 55개(모두 종료)
-- 코드: TypeScript 약 18,600줄(`src/`), 테스트 약 3,600줄(`tests/`, `e2e/`), 단위 테스트 180개 + 브라우저(E2E) 테스트 11개
+- 규모(시점에 따라 바뀌므로 확인은 `npx vitest run`, `npx playwright test --list`, `wc -l`): TypeScript 약 2만 줄(`src/`), 단위 테스트 약 250개, 브라우저(E2E) 테스트 11개 (#56~#61 시점)
 - 배포: GitHub Actions 에서 테스트 → 빌드 → E2E → GitHub Pages
 
 ---
@@ -533,12 +533,14 @@ OpenRCX 가 하는 일을 교육용으로 줄여 구현했습니다(`src/engine/
 
 ## 17. 테스트와 CI
 
-- **단위·통합(Vitest, 207개)**: 4값 논리, Verilog/VHDL 파싱과 시뮬레이션, 명령 해석기, 디버깅, VCD, 빠른 경로 차등
+- **단위·통합(Vitest)**: 4값 논리, Verilog/VHDL 파싱과 시뮬레이션, 명령 해석기, 디버깅, VCD, 빠른 경로 차등
   테스트, 합성(RTL ↔ 넷리스트 동일성), P&R(비트스트림·타이밍·플로어플랜), cocotb, ASIC(라이브러리·배치 합법성·배선
   검증·GDS 왕복), FPGA 게이트 레벨(4개 타깃), 타이밍 검사·SDF, STA(SDC·NLDM·예외), RC 추출·Elmore·SPEF, OpenLane 내보내기·zip, 예제 전체 실행, 가이드 튜토리얼 실행, 번역 누락.
-- **E2E(Playwright, 11개)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
+- **E2E(Playwright)**: 첫 방문, 오류 링크, 시뮬레이션 시작 대화상자, 파형 커서, List/Dataflow/커버리지, 한국어 전환,
   합성과 넷리스트 시뮬레이션, iCE40 P&R, cocotb, ECP5·Gowin(비트스트림 다운로드), ASIC 레이아웃 창(SDC 기반 STA, OpenLane zip 다운로드).
 - **CI**(`.github/workflows/deploy.yml`): push·PR 마다 단위 테스트 → 빌드 → E2E → 문서 스크린샷(아티팩트), `main` 은 GitHub Pages 배포.
+- **문서 일관성**(#61): `tests/docs.test.ts` 가 명령 해석기의 모든 명령이 `help`, SPEC, GUIDE 에 있는지 확인합니다.
+  처음 돌렸을 때 `bd`, `find`, `log`, `mem`, `simstats` 등 11개 명령의 누락과, SPEC 의 "`when`/`bp` 미구현" 같은 낡은 줄이 나왔습니다.
 - **스크린샷**(#60): `npm run screenshots` 가 앱을 사용자처럼 따라가며(예제 실행, CPU 파형, 합성, iCE40 P&R, ASIC 레이아웃, STA 보고서)
   `docs/images/` 를 다시 만듭니다. 단계마다 결과를 기다리므로 흐름이 깨지면 이미지 대신 실패가 납니다.
 

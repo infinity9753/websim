@@ -194,7 +194,7 @@ export class Session {
   help() {
     this.out([
       'Commands:',
-      '  vlib <lib>                         create a library',
+      '  vlib <lib>                         create a library;  vmap <lib> <path>;  vdel [-lib L] [-all] [unit]',
       '  vlog [-work lib] <files...>        compile Verilog / SystemVerilog',
       '  vcom [-work lib] <files...>        compile VHDL',
       '  vsim [-t res] [-gN=V] [lib.]top    load a design',
@@ -208,7 +208,7 @@ export class Session {
       '  noforce <sig>                      release a force',
       '  examine [-radix r] <sigs>          print values',
       '  env [<scope>]                      show/change current scope',
-      '  find signals <pattern>             list signals',
+      '  find signals <pattern>             list signals;  show [<scope>];  describe <name>',
       '  do <file>                          run a script',
       '  vcd export [-all] [file.vcd]       write wave (or all) signals as VCD',
       '  vcd load <file.vcd>                open a VCD as a read-only waveform view',
@@ -231,7 +231,7 @@ export class Session {
       '  step [-over]                       execute one statement (step into / over)',
       '  when [-label n] {cond} {cmds}      run commands (e.g. stop) when cond becomes true; nowhen <label>',
       '  radix <binary|hex|unsigned|decimal|octal|ascii>',
-      '  ls, pwd, echo, history, clear, help',
+      '  ls, pwd, now, echo, history, clear, help',
     ].join('\n'));
   }
 

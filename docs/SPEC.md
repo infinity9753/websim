@@ -84,7 +84,15 @@ A *project* groups source files, their compile order, and the default library.
 | `do <file>` | Execute a script of commands (one per line, `#` comments). |
 | `radix <r>` | Default radix. |
 | `wave zoom full` | Zoom wave to whole simulation. |
-| `when`/`bp` | Not implemented in v1. |
+| `bp [<file> <line> [{cond}]]` / `bd <id>\|<file> <line>\|all` | Set or list source breakpoints (optional condition) / delete them. |
+| `step [-over]` | Execute one statement (into or over calls). |
+| `when [-label n] {cond} {cmds}` / `nowhen <label>` | Run commands (e.g. `stop`) when the condition becomes true / remove the watch. |
+| `find signals <pattern>` / `show [<scope>]` / `describe <name>` | Find objects / list a scope's contents / print an object's type and declaration. |
+| `now` | Print the current simulation time. |
+| `log [-r] <paths>\|-all` / `nolog ...` / `log -cap <n>` | Choose which signals record value history (waves, List) / cap the changes kept per signal. |
+| `simstats` | History size and memory estimate. |
+| `mem list` / `mem display [-startaddress a] [-endaddress b] <mem>` / `mem save -outfile f [-format hex\|bin] <mem>` / `mem load -infile f <mem>` | Memories of the loaded design: list, print, save, load. |
+| `transcript`, `onbreak`, `onerror`, `onfinish`, `set`, `configure`, `update`, `quietly`, `view`, `TreeUpdate`, `WaveRestoreCursors`, `WaveRestoreZoom` | Accepted and ignored, so scripts written for other simulators run. |
 
 Messages:
 - Simulator notes: `# ** Note: $finish    : tb.v(30)` then `#    Time: 120 ns  Iteration: 0  Instance: /tb`.
